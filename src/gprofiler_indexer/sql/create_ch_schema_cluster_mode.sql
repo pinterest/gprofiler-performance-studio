@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS flamedb.metrics_local ON CLUSTER '{cluster}'
     HostNameHash             UInt32 MATERIALIZED xxHash32(HostName),
     CPUAverageUsedPercent    Float64,
     MemoryAverageUsedPercent Float64,
-    Path                     String
+    HTMLPath                 String
     ) engine = ReplicatedMergeTree('/clickhouse/{installation}/{cluster}/tables/{shard}/{database}/{table}',
                                    '{replica}') PARTITION BY toYYYYMMDD(Timestamp)
     ORDER BY (ServiceId, InstanceType, HostNameHash, Timestamp);
