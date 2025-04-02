@@ -20,13 +20,14 @@ import (
 	"bytes"
 	"compress/gzip"
 	"fmt"
+	"io"
+	"strings"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	log "github.com/sirupsen/logrus"
-	"io"
-	"strings"
 )
 
 func GetFileFromS3(sess *session.Session, bucketName string, filename string) ([]byte, error) {
@@ -64,4 +65,39 @@ func GetFileFromS3(sess *session.Session, bucketName string, filename string) ([
 		return data, err
 	}
 	return buff.Bytes(), nil
+}
+
+func PutFileToS3(sess *session.Session, bucketName string, filename string, data []byte, gzipCompress bool) error {
+	var body io.Reader
+	var contentEncoding *string
+
+	if gzipCompress {
+		var buf bytes.Buffer
+		gzipWriter := gzip.NewWriter(&buf)
+		if _, err := gzipWriter.Write(data); err != nil {
+			return fmt.Errorf("failed to gzip data: %w", err)
+		}
+		if err := gzipWriter.Close(); err != nil {
+			return fmt.Errorf("failed to close gzip writer: %w", err)
+		}
+		body = &buf
+		contentEncoding = aws.String("gzip")
+	} else {
+		body = bytes.NewReader(data)
+	}
+
+	uploader := s3manager.NewUploader(sess)
+	_, err := uploader.Upload(&s3manager.UploadInput{
+		Bucket:          aws.String(bucketName),
+		Key:             aws.String(filename),
+		Body:            body,
+		ContentEncoding: contentEncoding,
+	})
+	if err != nil {
+		log.Errorf("failed to upload file %s to bucket %s: %v", filename, bucketName, err)
+		return err
+	}
+
+	log.Debugf("successfully uploaded %s to bucket %s", filename, bucketName)
+	return nil
 }
