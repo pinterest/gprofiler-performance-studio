@@ -36,7 +36,7 @@ jobs:
     # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
       - name: Get frontend source code HASH
         run: |
@@ -44,7 +44,7 @@ jobs:
           echo "FRONTEND_SRC_HASH=$HASH" >> $GITHUB_ENV
 
       - name: Use frontend build cache
-        uses: actions/cache@v2
+        uses: actions/cache@v4
         id: frontend-build-cache
         with:
           path: "src/gprofiler/frontend/build"
@@ -57,7 +57,7 @@ jobs:
           node-version: "16.15.1"
 
       - name: Use Yarn cache
-        uses: actions/cache@v2
+        uses: actions/cache@v4
         id: yarn-cache
         with:
           path: "**/node_modules"
