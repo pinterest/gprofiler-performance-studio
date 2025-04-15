@@ -67,24 +67,12 @@ func GetFileFromS3(sess *session.Session, bucketName string, filename string) ([
 	return buff.Bytes(), nil
 }
 
-func PutFileToS3(sess *session.Session, bucketName string, filename string, data []byte, gzipCompress bool) error {
+func PutFileToS3(sess *session.Session, bucketName string, filename string, data []byte) error {
 	var body io.Reader
 	var contentEncoding *string
 
-	if gzipCompress {
-		var buf bytes.Buffer
-		gzipWriter := gzip.NewWriter(&buf)
-		if _, err := gzipWriter.Write(data); err != nil {
-			return fmt.Errorf("failed to gzip data: %w", err)
-		}
-		if err := gzipWriter.Close(); err != nil {
-			return fmt.Errorf("failed to close gzip writer: %w", err)
-		}
-		body = &buf
-		contentEncoding = aws.String("gzip")
-	} else {
-		body = bytes.NewReader(data)
-	}
+	contentEncoding = aws.String("gzip")
+	body = bytes.NewReader(data)
 
 	uploader := s3manager.NewUploader(sess)
 	_, err := uploader.Upload(&s3manager.UploadInput{

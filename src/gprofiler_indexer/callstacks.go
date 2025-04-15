@@ -283,7 +283,7 @@ func (pw *ProfilesWriter) ParseStackFrameFile(sess *session.Session, task SQSMes
 		if err != nil {
 			log.Errorf("failed to decode base64 HTML blob for file %s: %v", task.Filename, err)
 		} else {
-			err = PutFileToS3(sess, s3bucket, htmlBlobPath, decodedBlob, true)
+			err = PutFileToS3(sess, s3bucket, htmlBlobPath, decodedBlob)
 			if err != nil {
 				log.Errorf("failed to upload HTML blob for file %s: %v", task.Filename, err)
 			}
