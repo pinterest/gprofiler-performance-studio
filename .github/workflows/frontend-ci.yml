@@ -52,9 +52,9 @@ jobs:
 
       - name: Setup node
         if: steps.frontend-build-cache.outputs.cache-hit != 'true'
-        uses: actions/setup-node@v2
+        uses: actions/setup-node@v4
         with:
-          node-version: "16.15.1"
+          node-version: "20.19"
 
       - name: Use Yarn cache
         uses: actions/cache@v4
