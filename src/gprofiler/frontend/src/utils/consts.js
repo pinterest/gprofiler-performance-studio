@@ -58,7 +58,7 @@ export const EXTERNAL_URLS = {
     github: {
         key: 'github',
         label: 'github',
-        to: 'https://github.com/Granulate/gprofiler',
+        to: 'https://github.com/intel/gprofiler',
     },
     flameGraphLearn: {
         key: 'flameGraphLearn',

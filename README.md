@@ -17,7 +17,7 @@ The profiler is compatible with Intel Granulate’s continuous optimization serv
 Continuous Profiler is SOC2-certified and held to Intel's high security standards, ensuring reliability and trust in its deployment.
 
 
-This project offers a backend and user interface for the [Continuous Profiler agent](https://github.com/Granulate/gprofiler),
+This project offers a backend and user interface for the [Continuous Profiler agent](https://github.com/intel/gprofiler),
 featuring advanced flamegraph analysis tools.
 
 
