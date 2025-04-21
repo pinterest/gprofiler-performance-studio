@@ -17,7 +17,7 @@ The profiler is compatible with Intel Granulate’s continuous optimization serv
 Continuous Profiler is SOC2-certified and held to Intel's high security standards, ensuring reliability and trust in its deployment.
 
 
-This project offers a backend and user interface for the [Continuous Profiler agent](https://github.com/Granulate/gprofiler),
+This project offers a backend and user interface for the [Continuous Profiler agent](https://github.com/intel/gprofiler),
 featuring advanced flamegraph analysis tools.
 
 
@@ -160,7 +160,7 @@ For example,
 that will run a docker installation agent with self-signed certificate
 (that will communicate from docker network to host network):
 ```shell
-docker run --name granulate-gprofiler --restart=always -d --pid=host --userns=host --privileged granulate/gprofiler:latest -cu --token="<token from api or ui>" --service-name="my-super-service" --server-host "https://host.docker.internal" --glogger-server "https://host.docker.internal" --no-verify
+docker run --name granulate-gprofiler --restart=always -d --pid=host --userns=host --privileged intel/gprofiler:latest -cu --token="<token from api or ui>" --service-name="my-super-service" --server-host "https://host.docker.internal" --glogger-server "https://host.docker.internal" --no-verify
 ```
 
 ### Diagnostics
