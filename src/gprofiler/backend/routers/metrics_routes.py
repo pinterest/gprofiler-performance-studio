@@ -19,6 +19,8 @@ from datetime import datetime, timedelta
 from logging import getLogger
 from typing import List, Optional
 
+from botocore.exceptions import ClientError
+
 from backend.models.filters_models import FilterTypes
 from backend.models.flamegraph_models import FGParamsBaseModel
 from backend.models.metrics_models import (
@@ -29,12 +31,14 @@ from backend.models.metrics_models import (
     MetricNodesAndCores,
     MetricNodesCoresSummary,
     MetricSummary,
-    SampleCount,
+    SampleCount, PerfspectHTML,
 )
 from backend.utils.filters_utils import get_rql_first_eq_key, get_rql_only_for_one_key
 from backend.utils.request_utils import flamegraph_base_request_params, get_metrics_response, get_query_response
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import Response
+
+from gprofiler_dev import S3ProfileDal
 from gprofiler_dev.postgres.db_manager import DBManager
 
 logger = getLogger(__name__)
@@ -212,3 +216,21 @@ def calculate_trend_in_cpu(
     )
 
     return response
+
+
+@router.get("/perfspect/last_html", response_model=PerfspectHTML)
+def get_perfspect_last_html(
+    fg_params: FGParamsBaseModel = Depends(flamegraph_base_request_params),
+):
+    host_name_value = get_rql_first_eq_key(fg_params.filter, FilterTypes.HOSTNAME_KEY)
+    if not host_name_value:
+        raise HTTPException(400, detail="Must filter by hostname to get the perfspect last html")
+    s3_path =  get_metrics_response(fg_params, lookup_for="lasthtml")
+    if not s3_path:
+        raise HTTPException(404, detail="The perfspect HTML path not found in CH")
+    s3_dal = S3ProfileDal(logger)
+    try:
+        html_content = s3_dal.get_object(s3_path, is_gzip=True)
+    except ClientError:
+        raise HTTPException(status_code=404, detail="The perfspect HTML file not found in S3")
+    return PerfspectHTML(content=html_content)
