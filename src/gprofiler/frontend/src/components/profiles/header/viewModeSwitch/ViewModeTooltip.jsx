@@ -43,6 +43,11 @@ const viewModes = {
         infoURL: EXTERNAL_URLS.serviceViewLearn.to,
         icon: ICONS_NAMES.ServiceView,
     },
+     [PROFILES_VIEWS.html]: {
+        label: 'Last HTML view',
+        description: 'The latest HTML of your gProfiler service and hostname',
+        icon: ICONS_NAMES.LastHtmlView,
+    },
 };
 
 const TooltipContent = ({ viewMode }) => {
@@ -53,9 +58,9 @@ const TooltipContent = ({ viewMode }) => {
 
             <Typography variant='body4_lato'>{description}</Typography>
 
-            <Button href={infoURL} fullWidth>
+            { !!infoURL && <Button href={infoURL} fullWidth>
                 Learn more
-            </Button>
+            </Button> }
         </Flexbox>
     );
 };

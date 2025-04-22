@@ -32,6 +32,7 @@ export const DATA_URLS = {
     GET_METRICS: `${API_PREFIX}/metrics/summary`,
     GET_METRICS_CPU_AND_MEMORY_TREND: `${API_PREFIX}/metrics/cpu_trend`,
     GET_NODES_AND_CORES: `${API_PREFIX}/metrics/nodes_cores/summary`,
+    GET_LAST_HTML: `${API_PREFIX}/metrics/perfspect/last_html`,
     GET_INSTANCE_TYPE: `${API_PREFIX}/metrics/instance_type_count`,
     GET_GRAPH_METRICS: `${API_PREFIX}/metrics/graph`,
     GET_FUCNTION_CPU_GRAPH: `${API_PREFIX}/metrics/function_cpu`,

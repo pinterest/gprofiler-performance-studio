@@ -35,6 +35,7 @@ const VIEW_TO_ICON_NAME = {
     [PROFILES_VIEWS.flamegraph]: ICONS_NAMES.FlameGraphView,
     [PROFILES_VIEWS.table]: ICONS_NAMES.TableView,
     [PROFILES_VIEWS.service]: ICONS_NAMES.ServiceView,
+    [PROFILES_VIEWS.html]: ICONS_NAMES.LastHtmlView,
 };
 
 const ToolTipWrappingThing = ({ viewMode, onChooseView }) => {

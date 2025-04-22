@@ -48,10 +48,13 @@ import FlamegraphView from './views/flamegraph/FlamegraphView';
 import { parseFlamegraphData } from './views/flamegraph/parsingUtils';
 import ServiceView from './views/service/ServiceView';
 import TableView from './views/table/TableView';
+import useGetFgMetrics from '@/api/hooks/useGetFgMetrics';
+import HtmlView from '@/components/profiles/views/htmlView/HtmlView';
 
 const ProfilesViews = () => {
     const { fgOriginData, lastWeekOriginData, zoomedFgData, setZoomedFgData, framesSelected, setIsFGEmpty, isFGEmpty } =
         useContext(FgContext);
+    const { lastHtmlData } = useGetFgMetrics({});
 
     const { viewMode, selectedService, timeSelection } = useContext(SelectorsContext);
     const { setHoverData } = useContext(FgHoverContext);
@@ -243,6 +246,8 @@ const ProfilesViews = () => {
         <ServiceView />
     ) : viewMode === PROFILES_VIEWS.table ? (
         <TableView timeSelection={timeSelection} rows={tableViewData} filteredData={filteredData} />
+    ) : viewMode === PROFILES_VIEWS.html && lastHtmlData ? (
+        <HtmlView lastHtml={lastHtmlData} />
     ) : !isFGEmpty ? (
         <FlamegraphView
             flameGraphData={flameGraphData}

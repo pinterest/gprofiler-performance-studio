@@ -89,10 +89,12 @@ const ProfilesTopPanel = () => {
                             </Flexbox>
                         </Flexbox>
                     </Box>
-                    <Flexbox sx={{ px: 5, width: '100%' }} spacing={3}>
-                        <MineSweeper />
-                        <ProfilesMetricsPanel />
-                    </Flexbox>
+                    {viewMode !== PROFILES_VIEWS.html &&
+                        <Flexbox sx={{px: 5, width: '100%'}} spacing={3}>
+                            <MineSweeper />
+                            <ProfilesMetricsPanel />
+                        </Flexbox>
+                      }
                 </>
             )}
         </Flexbox>
