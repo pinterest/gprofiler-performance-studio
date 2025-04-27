@@ -246,7 +246,7 @@ const ProfilesViews = () => {
         <ServiceView />
     ) : viewMode === PROFILES_VIEWS.table ? (
         <TableView timeSelection={timeSelection} rows={tableViewData} filteredData={filteredData} />
-    ) : viewMode === PROFILES_VIEWS.html && lastHtmlData ? (
+    ) : viewMode === PROFILES_VIEWS.html ? (
         <HtmlView lastHtml={lastHtmlData} />
     ) : !isFGEmpty ? (
         <FlamegraphView

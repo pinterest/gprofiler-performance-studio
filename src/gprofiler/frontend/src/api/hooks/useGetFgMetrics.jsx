@@ -26,6 +26,8 @@ import { PROFILES_VIEWS } from '../../utils/consts';
 import { DATA_URLS } from '../urls';
 import useFetchWithRequest from '../useFetchWithRequest';
 import { getStartEndDateTimeFromSelection } from '../utils';
+import { isFilterTypeExist } from '@/components/filters/utils';
+import { FILTER_TYPES } from '@/utils/filtersUtils';
 
 const areParamsDefined = (selectedService, timeSelection) => {
     return !_.isUndefined(selectedService) && !_.isUndefined(timeSelection);
@@ -67,6 +69,7 @@ const useGetFgMetrics = ({ customTimeSelection, customService, disableCoreNodesR
         }
     );
 
+        const isHostNameFilterActive = isFilterTypeExist(FILTER_TYPES.HostName.value, activeFilterTag)
         const { loading: lastHtmlLoading } = useFetchWithRequest(
         {
             url: DATA_URLS.GET_LAST_HTML + '?' + stringify(metricsParams),
@@ -78,7 +81,7 @@ const useGetFgMetrics = ({ customTimeSelection, customService, disableCoreNodesR
                 customTimeSelection ? customTimeSelection : timeSelection,
                 activeFilterTag,
             ],
-            ready: areParamsDefined(customService || selectedService, customTimeSelection || timeSelection),
+            ready: areParamsDefined(customService || selectedService, customTimeSelection || timeSelection) && isHostNameFilterActive,
             onSuccess: (result) => {
                 setLastHtmlData(result?.content);
             },
