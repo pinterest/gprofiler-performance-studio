@@ -31,7 +31,7 @@ from backend.models.metrics_models import (
     MetricNodesAndCores,
     MetricNodesCoresSummary,
     MetricSummary,
-    SampleCount, PerfspectHTML,
+    SampleCount, HTMLMetadata,
 )
 from backend.utils.filters_utils import get_rql_first_eq_key, get_rql_only_for_one_key
 from backend.utils.request_utils import flamegraph_base_request_params, get_metrics_response, get_query_response
@@ -218,19 +218,19 @@ def calculate_trend_in_cpu(
     return response
 
 
-@router.get("/perfspect/last_html", response_model=PerfspectHTML)
-def get_perfspect_last_html(
+@router.get("/html_metadata", response_model=HTMLMetadata)
+def get_html_metadata(
     fg_params: FGParamsBaseModel = Depends(flamegraph_base_request_params),
 ):
     host_name_value = get_rql_first_eq_key(fg_params.filter, FilterTypes.HOSTNAME_KEY)
     if not host_name_value:
-        raise HTTPException(400, detail="Must filter by hostname to get the perfspect last html")
+        raise HTTPException(400, detail="Must filter by hostname to get the html metadata")
     s3_path =  get_metrics_response(fg_params, lookup_for="lasthtml")
     if not s3_path:
-        raise HTTPException(404, detail="The perfspect HTML path not found in CH")
+        raise HTTPException(404, detail="The html metadata path not found in CH")
     s3_dal = S3ProfileDal(logger)
     try:
         html_content = s3_dal.get_object(s3_path, is_gzip=True)
     except ClientError:
-        raise HTTPException(status_code=404, detail="The perfspect HTML file not found in S3")
-    return PerfspectHTML(content=html_content)
+        raise HTTPException(status_code=404, detail="The html metadata file not found in S3")
+    return HTMLMetadata(content=html_content)

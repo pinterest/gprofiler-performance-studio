@@ -84,5 +84,5 @@ class MetricK8s(CamelModel):
     cpu: Optional[float] = None
     memory: Optional[float] = None
 
-class PerfspectHTML(CamelModel):
+class HTMLMetadata(CamelModel):
     content: str
