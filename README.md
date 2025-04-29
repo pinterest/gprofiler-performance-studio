@@ -1,6 +1,4 @@
 # About
-Continuous production profiling, made easy (for the cloud version, which is also free, use [Intel Continuous Profiler](https://profiler.granulate.io)).
-
 An open-source, continuous profiler for production – across any environment, at any scale.
 
 Developed by Intel® Granulate™ and contributed to the open source community, Continuous Profiler is a solution that combines multiple profilers into one view as a flame graph. 
