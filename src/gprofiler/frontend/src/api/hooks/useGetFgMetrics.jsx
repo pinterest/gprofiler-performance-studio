@@ -20,14 +20,15 @@ import _ from 'lodash';
 import { stringify } from 'query-string';
 import { useContext, useState } from 'react';
 
+import { isFilterTypeExist } from '@/components/filters/utils';
+import { FILTER_TYPES } from '@/utils/filtersUtils';
+
 import { FilterTagsContext } from '../../states/filters/FiltersTagsContext';
 import { SelectorsContext } from '../../states/selectors';
 import { PROFILES_VIEWS } from '../../utils/consts';
 import { DATA_URLS } from '../urls';
 import useFetchWithRequest from '../useFetchWithRequest';
 import { getStartEndDateTimeFromSelection } from '../utils';
-import { isFilterTypeExist } from '@/components/filters/utils';
-import { FILTER_TYPES } from '@/utils/filtersUtils';
 
 const areParamsDefined = (selectedService, timeSelection) => {
     return !_.isUndefined(selectedService) && !_.isUndefined(timeSelection);

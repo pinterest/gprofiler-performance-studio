@@ -19,6 +19,9 @@
 import _ from 'lodash';
 import { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
+import useGetFgMetrics from '@/api/hooks/useGetFgMetrics';
+import HtmlView from '@/components/profiles/views/htmlView/HtmlView';
+
 import {
     countZoomedSearchMatches,
     FgContext,
@@ -48,8 +51,6 @@ import FlamegraphView from './views/flamegraph/FlamegraphView';
 import { parseFlamegraphData } from './views/flamegraph/parsingUtils';
 import ServiceView from './views/service/ServiceView';
 import TableView from './views/table/TableView';
-import useGetFgMetrics from '@/api/hooks/useGetFgMetrics';
-import HtmlView from '@/components/profiles/views/htmlView/HtmlView';
 
 const ProfilesViews = () => {
     const { fgOriginData, lastWeekOriginData, zoomedFgData, setZoomedFgData, framesSelected, setIsFGEmpty, isFGEmpty } =
