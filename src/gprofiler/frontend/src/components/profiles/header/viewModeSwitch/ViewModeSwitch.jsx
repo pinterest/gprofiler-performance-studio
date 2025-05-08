@@ -79,9 +79,12 @@ const ToolTipWrappingThing = ({ viewMode, onChooseView }) => {
 const ViewModeSwitch = () => {
     const { viewMode, setViewMode, areServicesLoading } = useContext(SelectorsContext);
     const { isFgDisplayed, isFgLoading } = useContext(FgContext);
-    const {activeFilterTag} = useContext(FilterTagsContext);
-    const isHostNameFilterActive = isFilterTypeExist(FILTER_TYPES.HostName.value, activeFilterTag)
-    const profilesViewsToDisplay = _.omitBy(PROFILES_VIEWS, (view) => !isHostNameFilterActive && view === PROFILES_VIEWS.html);
+    const { activeFilterTag } = useContext(FilterTagsContext);
+    const isHostNameFilterActive = isFilterTypeExist(FILTER_TYPES.HostName.value, activeFilterTag);
+    const profilesViewsToDisplay = _.omitBy(
+        PROFILES_VIEWS,
+        (view) => !isHostNameFilterActive && view === PROFILES_VIEWS.html
+    );
 
     const disabled = isFgLoading || areServicesLoading || (!isFgDisplayed && !activeFilterTag);
 

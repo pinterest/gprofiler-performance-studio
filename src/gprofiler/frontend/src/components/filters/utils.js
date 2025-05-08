@@ -18,14 +18,14 @@
 
 import { FILTER_OPERATIONS } from '../../utils/filtersUtils';
 
- export const isFilterTypeExist = (type, filter) => {
-     if (!filter?.filter) return false;
-     const [, rules] = Object.entries(filter.filter)[0];
-     return rules?.some((rule) => {
-         const [ruleType] = Object.entries(rule)[0];
-         return type === ruleType;
-     });
- };
+export const isFilterTypeExist = (type, filter) => {
+    if (!filter?.filter) return false;
+    const [, rules] = Object.entries(filter.filter)[0];
+    return rules?.some((rule) => {
+        const [ruleType] = Object.entries(rule)[0];
+        return type === ruleType;
+    });
+};
 
 export const shouldShowFilterTypeOptions = (filter, { type, operator }) => {
     return operator === FILTER_OPERATIONS.$or.value || !isFilterTypeExist(type, filter);

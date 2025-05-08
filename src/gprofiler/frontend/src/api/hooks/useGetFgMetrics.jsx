@@ -69,8 +69,8 @@ const useGetFgMetrics = ({ customTimeSelection, customService, disableCoreNodesR
         }
     );
 
-        const isHostNameFilterActive = isFilterTypeExist(FILTER_TYPES.HostName.value, activeFilterTag)
-        const { loading: lastHtmlLoading } = useFetchWithRequest(
+    const isHostNameFilterActive = isFilterTypeExist(FILTER_TYPES.HostName.value, activeFilterTag);
+    const { loading: lastHtmlLoading } = useFetchWithRequest(
         {
             url: DATA_URLS.GET_LAST_HTML + '?' + stringify(metricsParams),
         },
@@ -81,7 +81,9 @@ const useGetFgMetrics = ({ customTimeSelection, customService, disableCoreNodesR
                 customTimeSelection ? customTimeSelection : timeSelection,
                 activeFilterTag,
             ],
-            ready: areParamsDefined(customService || selectedService, customTimeSelection || timeSelection) && isHostNameFilterActive,
+            ready:
+                areParamsDefined(customService || selectedService, customTimeSelection || timeSelection) &&
+                isHostNameFilterActive,
             onSuccess: (result) => {
                 setLastHtmlData(result?.content);
             },

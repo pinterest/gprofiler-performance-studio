@@ -18,17 +18,20 @@
 
 import Flexbox from '@/components/common/layout/Flexbox';
 
-
-const HtmlView = ({lastHtml}) => {
+const HtmlView = ({ lastHtml }) => {
     return (
         <Flexbox column>
-            <iframe style={{
-                position: 'absolute',
-                margin: 0,
-                width: '90%',
-                height: '80%',
-                border: 'none'
-            }} title='last html' srcDoc={lastHtml}/>
+            <iframe
+                style={{
+                    position: 'absolute',
+                    margin: 0,
+                    width: '90%',
+                    height: '80%',
+                    border: 'none',
+                }}
+                title='last html'
+                srcDoc={lastHtml}
+            />
         </Flexbox>
     );
 };
