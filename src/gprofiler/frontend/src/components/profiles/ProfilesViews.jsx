@@ -19,6 +19,9 @@
 import _ from 'lodash';
 import { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
+import useGetFgMetrics from '@/api/hooks/useGetFgMetrics';
+import HtmlView from '@/components/profiles/views/htmlView/HtmlView';
+
 import {
     countZoomedSearchMatches,
     FgContext,
@@ -52,6 +55,7 @@ import TableView from './views/table/TableView';
 const ProfilesViews = () => {
     const { fgOriginData, lastWeekOriginData, zoomedFgData, setZoomedFgData, framesSelected, setIsFGEmpty, isFGEmpty } =
         useContext(FgContext);
+    const { lastHtmlData } = useGetFgMetrics({});
 
     const { viewMode, selectedService, timeSelection } = useContext(SelectorsContext);
     const { setHoverData } = useContext(FgHoverContext);
@@ -243,6 +247,8 @@ const ProfilesViews = () => {
         <ServiceView />
     ) : viewMode === PROFILES_VIEWS.table ? (
         <TableView timeSelection={timeSelection} rows={tableViewData} filteredData={filteredData} />
+    ) : viewMode === PROFILES_VIEWS.html ? (
+        <HtmlView lastHtml={lastHtmlData} />
     ) : !isFGEmpty ? (
         <FlamegraphView
             flameGraphData={flameGraphData}

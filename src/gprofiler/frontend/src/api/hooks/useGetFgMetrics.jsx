@@ -20,6 +20,9 @@ import _ from 'lodash';
 import { stringify } from 'query-string';
 import { useContext, useState } from 'react';
 
+import { isFilterTypeExist } from '@/components/filters/utils';
+import { FILTER_TYPES } from '@/utils/filtersUtils';
+
 import { FilterTagsContext } from '../../states/filters/FiltersTagsContext';
 import { SelectorsContext } from '../../states/selectors';
 import { PROFILES_VIEWS } from '../../utils/consts';
@@ -35,6 +38,7 @@ const useGetFgMetrics = ({ customTimeSelection, customService, disableCoreNodesR
     const { selectedService, timeSelection, viewMode, ignoreZeros } = useContext(SelectorsContext);
     const { activeFilterTag } = useContext(FilterTagsContext);
     const [metricsData, setMetricsData] = useState(undefined);
+    const [lastHtmlData, setLastHtmlData] = useState(undefined);
     const [coresNodesCountData, setCoresNodesCountData] = useState(undefined);
     const [instanceTypeData, setInstanceTypeData] = useState(undefined);
     const timeParams = getStartEndDateTimeFromSelection(customTimeSelection || timeSelection);
@@ -62,6 +66,30 @@ const useGetFgMetrics = ({ customTimeSelection, customService, disableCoreNodesR
             },
             onError: () => {
                 setMetricsData(undefined);
+            },
+        }
+    );
+
+    const isHostNameFilterActive = isFilterTypeExist(FILTER_TYPES.HostName.value, activeFilterTag);
+    const { loading: lastHtmlLoading } = useFetchWithRequest(
+        {
+            url: DATA_URLS.GET_LAST_HTML + '?' + stringify(metricsParams),
+        },
+        {
+            refreshDeps: [
+                customService,
+                selectedService,
+                customTimeSelection ? customTimeSelection : timeSelection,
+                activeFilterTag,
+            ],
+            ready:
+                areParamsDefined(customService || selectedService, customTimeSelection || timeSelection) &&
+                isHostNameFilterActive,
+            onSuccess: (result) => {
+                setLastHtmlData(result?.content);
+            },
+            onError: () => {
+                setLastHtmlData(undefined);
             },
         }
     );
@@ -117,6 +145,8 @@ const useGetFgMetrics = ({ customTimeSelection, customService, disableCoreNodesR
     return {
         metricsData,
         metricsLoading,
+        lastHtmlData,
+        lastHtmlLoading,
         coresNodesCountData: coresNodesCountData,
         coresNodesCountLoading,
         instanceTypeData,

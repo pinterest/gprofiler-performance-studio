@@ -21,7 +21,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/ClickHouse/clickhouse-go"
 	"log"
 	"math"
 	"regexp"
@@ -31,6 +30,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ClickHouse/clickhouse-go"
 )
 
 const (
@@ -543,7 +544,7 @@ func (c *ClickHouseClient) FetchSampleCountByFunction(ctx context.Context, param
 			GROUP BY Datetime
 			ORDER BY Datetime DESC
 		)
-	
+
 		SELECT (function_samples.sum_cpu/all_samples.sum_cpu) AS Samples , all_samples.Datetime AS Datetime
 		FROM all_samples
 		LEFT JOIN function_samples ON function_samples.Datetime = all_samples.Datetime;
@@ -870,11 +871,11 @@ func (c *ClickHouseClient) FetchMetricsCpuTrend(ctx context.Context, params comm
 
 	query := fmt.Sprintf(`
 		WITH CURRENT_CONSUMPTION AS (
-			SELECT 
-				arrayAvg(flatten(groupArray(CPUArray))) AS avg_cpu, 
+			SELECT
+				arrayAvg(flatten(groupArray(CPUArray))) AS avg_cpu,
 				MAX(MaxCPU) AS max_cpu,
-				AVG(MaxMemory) AS avg_memory, 
-				MAX(MaxMemory) AS max_memory, 
+				AVG(MaxMemory) AS avg_memory,
+				MAX(MaxMemory) AS max_memory,
 				1 SortOrder
 			FROM
 				(SELECT
@@ -886,11 +887,11 @@ func (c *ClickHouseClient) FetchMetricsCpuTrend(ctx context.Context, params comm
 				GROUP BY HostName)
 		),
 		PREVIOUS_CONSUMPTION AS (
-			SELECT 
-				arrayAvg(flatten(groupArray(CPUArray))) AS avg_cpu, 
+			SELECT
+				arrayAvg(flatten(groupArray(CPUArray))) AS avg_cpu,
 				MAX(MaxCPU) AS max_cpu,
-				AVG(MaxMemory) AS avg_memory, 
-				MAX(MaxMemory) AS max_memory, 
+				AVG(MaxMemory) AS avg_memory,
+				MAX(MaxMemory) AS max_memory,
 				2 SortOrder
 			FROM
 			(SELECT
@@ -901,7 +902,7 @@ func (c *ClickHouseClient) FetchMetricsCpuTrend(ctx context.Context, params comm
 			WHERE ServiceId = %d AND (Timestamp BETWEEN '%s' AND '%s') %s
 			GROUP BY HostName)
 		)
-			SELECT avg_cpu, max_cpu, avg_memory, max_memory 
+			SELECT avg_cpu, max_cpu, avg_memory, max_memory
 			FROM (
 				SELECT * FROM CURRENT_CONSUMPTION
 				UNION ALL
@@ -1019,4 +1020,29 @@ func (c *ClickHouseClient) FetchSessionsCount(ctx context.Context, params common
 		log.Println(err)
 	}
 	return 0, err
+}
+
+func (c *ClickHouseClient) FetchLastHTML(ctx context.Context, params common.MetricsLastHTMLParams,
+	filterQuery string) (string, error) {
+	_, conditions := BuildConditions(params.ContainerName, params.HostName, params.InstanceType, params.K8SObject, filterQuery)
+	query := fmt.Sprintf(`
+			SELECT argMax(HTMLPath,Timestamp) FROM flamedb.metrics WHERE ServiceId = %d AND
+			                                                                (Timestamp BETWEEN '%s' AND '%s') %s;
+		`, params.ServiceId, common.FormatTime(params.StartDateTime), common.FormatTime(params.EndDateTime), conditions)
+	rows, err := c.client.Query(query)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var htmlPath string
+			err = rows.Scan(&htmlPath)
+			if err != nil {
+				log.Printf("error scan result: %v", err)
+			}
+			return htmlPath, nil
+		}
+		err = rows.Err()
+	} else {
+		log.Println(err)
+	}
+	return "", nil
 }
