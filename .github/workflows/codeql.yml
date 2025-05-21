@@ -17,7 +17,7 @@ on:
   pull_request:
     branches: [ "master" ]
   schedule:
-    - cron: '15 21 * * 2'
+    - cron: '05 19 * * 2'
 
 jobs:
   analyze:
@@ -45,12 +45,20 @@ jobs:
         include:
         - language: actions
           build-mode: none
+        # - language: c-cpp
+        #   build-mode: autobuild
+        # - language: csharp
+        #   build-mode: none
         - language: go
           build-mode: autobuild
+        # - language: java-kotlin
+        #   build-mode: none # This mode only analyzes Java. Set this to 'autobuild' or 'manual' to analyze Kotlin too.
         - language: javascript-typescript
           build-mode: none
         - language: python
           build-mode: none
+        # - language: ruby
+        #   build-mode: none
         # CodeQL supports the following values keywords for 'language': 'actions', 'c-cpp', 'csharp', 'go', 'java-kotlin', 'javascript-typescript', 'python', 'ruby', 'swift'
         # Use `c-cpp` to analyze code written in C, C++ or both
         # Use 'java-kotlin' to analyze code written in Java, Kotlin or both
@@ -102,3 +110,17 @@ jobs:
       uses: github/codeql-action/analyze@v3
       with:
         category: "/language:${{matrix.language}}"
+    
+    - name: Generate Security Report
+      uses: rsdmike/github-security-report-action@v3.0.4
+      with:
+        template: report
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: GitHub Upload Release Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.language }}-report
+        path: |
+         ./report.pdf
+
