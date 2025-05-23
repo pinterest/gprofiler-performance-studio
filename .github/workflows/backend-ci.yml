@@ -16,6 +16,9 @@
 
 name: gProfiler Backend CI
 
+permissions:
+  contents: read
+
 on:
   push:
     branches:
