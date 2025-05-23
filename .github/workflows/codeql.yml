@@ -11,11 +11,15 @@
 #
 name: "CodeQL Advanced"
 
+permissions: 
+  security-events: write
+  
 on:
-  push:
-    branches: [ "master" ]
   pull_request:
-    branches: [ "master" ]
+  push:
+    tags:
+      - '**'
+      
   schedule:
     - cron: '05 19 * * 2'
 
