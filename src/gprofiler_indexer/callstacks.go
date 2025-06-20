@@ -290,7 +290,7 @@ func (pw *ProfilesWriter) ParseStackFrameFile(sess *session.Session, task SQSMes
 		}
 	}
 
-	if fileInfo.Metrics.CPUAvg != 0 && fileInfo.Metrics.MemoryAvg != 0 {
+	if htmlBlobPath != "" || (fileInfo.Metrics.CPUAvg != 0 && fileInfo.Metrics.MemoryAvg != 0) {
 		pw.writeMetrics(uint32(serviceId), fileInfo.Metadata.CloudInfo.InstanceType,
 			fileInfo.Metadata.Hostname, timestamp, fileInfo.Metrics.CPUAvg,
 			fileInfo.Metrics.MemoryAvg, htmlBlobPath)
