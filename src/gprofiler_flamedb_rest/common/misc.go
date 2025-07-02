@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"math"
 	"strings"
 	"time"
 
@@ -52,7 +53,11 @@ func LookupEnvOrDefault[V lookupEnvConstraint](key string, defaultValue V) V {
 			ret = val
 		case int:
 			i, _ := strconv.ParseInt(val, 10, 64)
-			ret = int(i)
+			if i >= math.MinInt && i <= math.MaxInt {
+				ret = int(i)
+			} else {
+				ret = defaultValue
+			}
 		case bool:
 			ret = !(strings.EqualFold(val, "false") || strings.EqualFold(val, "0"))
 		}
