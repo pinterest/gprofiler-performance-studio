@@ -40,5 +40,5 @@ jobs:
           body: |
             Automated weekly sync from Intel's gprofiler-performance-studio repository.
             Please review, resolve conflicts (if any), and approve to merge into main.
-          base: main
+          base: master
 
