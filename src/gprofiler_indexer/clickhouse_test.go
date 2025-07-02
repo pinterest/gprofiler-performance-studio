@@ -118,3 +118,32 @@ func TestDataIngestion(t *testing.T) {
 		t.Fatalf("wrong row count: %d", rowCount)
 	}
 }
+
+func TestDataIngestionHTML(t *testing.T) {
+	teardown := setupClickhouse(t)
+	defer teardown(t)
+
+	args := NewCliArgs()
+	args.ClickHouseAddr = fmt.Sprintf("localhost:%d", testClickhousePort)
+
+	ingestData(t, args, "testdata/test_stackfile_html")
+	//	time.Sleep(300 * time.Second)
+	// now test that the data was ingested
+	settings := ClickHouseSettings{
+		Addr: args.ClickHouseAddr,
+	}
+	chClient, _ := NewClickHouseClient(&settings)
+	var rowCount uint64
+	err := chClient.conn.QueryRow(context.Background(), "SELECT count() FROM flamedb.samples").Scan(&rowCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rowCount != 651 {
+		t.Fatalf("wrong row count: %d", rowCount)
+	}
+	var path string
+	chClient.conn.QueryRow(context.Background(), "SELECT HTMLPath FROM flamedb.metrics").Scan(&path)
+	if path == "" {
+		t.Fatalf("HTMLPath expected to be non empty")
+	}
+}

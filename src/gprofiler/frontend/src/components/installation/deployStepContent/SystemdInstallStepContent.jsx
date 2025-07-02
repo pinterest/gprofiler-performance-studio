@@ -23,7 +23,7 @@ import CopyableParagraph from '@/components/common/dataDisplay/CopyableParagraph
 import Flexbox from '@/components/common/layout/Flexbox';
 
 const SystemdInstallStepContent = ({ apiKey, serviceName }) => {
-    const curlCommand = `curl -s https://raw.githubusercontent.com/Granulate/gprofiler/master/deploy/systemd/create_systemd_service.sh | GPROFILER_TOKEN=${apiKey} GPROFILER_SERVICE=${serviceName} bash`;
+    const curlCommand = `curl -s https://raw.githubusercontent.com/intel/gprofiler/master/deploy/systemd/create_systemd_service.sh | GPROFILER_TOKEN=${apiKey} GPROFILER_SERVICE=${serviceName} bash`;
     const systemctlCommand = `systemctl enable $(pwd)/granulate-gprofiler.service
 systemctl start granulate-gprofiler.service`;
     const isParagraphDisabled = isEmpty(serviceName);

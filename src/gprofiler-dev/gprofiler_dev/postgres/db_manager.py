@@ -357,7 +357,7 @@ class DBManager(metaclass=Singleton):
             return None
 
         meta_json = json.dumps(meta)
-        hash_meta = hashlib.md5(meta_json.encode("utf-8")).hexdigest()
+        hash_meta = hashlib.new('md5', meta_json.encode("utf-8"), usedforsecurity=False).hexdigest()
         key = (meta_json, hash_meta)
         return self.db.add_or_fetch(
             SQLQueries.SELECT_INSTANCE_CLOUD_METADATA, key, SQLQueries.INSERT_INSTANCE_CLOUD_METADATA

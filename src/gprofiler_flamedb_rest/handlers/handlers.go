@@ -17,15 +17,18 @@
 package handlers
 
 import (
-	"github.com/a8m/rql"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"time"
 
-	"github.com/gin-gonic/gin"
+	"github.com/a8m/rql"
+
 	"restflamedb/common"
 	"restflamedb/db"
+
+	"github.com/gin-gonic/gin"
 )
 
 type Handlers struct {
@@ -285,4 +288,22 @@ func (h Handlers) GetMetricsCpuTrends(c *gin.Context) {
 		response.SetExecTime(c.GetTime("requestStartTime"))
 		c.JSON(http.StatusOK, response)
 	}
+}
+
+func (h Handlers) GetLastHTML(c *gin.Context) {
+	params, query, err := parseParams(common.MetricsLastHTMLParams{}, nil, c)
+	if err != nil {
+		return
+	}
+	fmt.Println(params, query)
+	ctx := c.Request.Context()
+	htmlPath, err := h.ChClient.FetchLastHTML(ctx, params, query)
+	if err != nil {
+		return
+	}
+	response := MetricsHTMLResponse{
+		Result: htmlPath,
+	}
+	response.SetExecTime(c.GetTime("requestStartTime"))
+	c.JSON(http.StatusOK, response)
 }

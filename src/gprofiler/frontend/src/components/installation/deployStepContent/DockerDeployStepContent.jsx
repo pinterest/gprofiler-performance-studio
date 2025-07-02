@@ -27,7 +27,7 @@ import { getServerHostFlag } from '@/utils/installationUtils';
 
 const DockerDeployStepContent = ({ apiKey, serviceName, serverHost }) => {
     const [shouldAddNoVerify, setShouldAddNoVerify] = useState(true);
-    const deployCommand = `docker pull granulate/gprofiler:latest\ndocker run --name granulate-gprofiler --restart=always -d --pid=host --userns=host --privileged granulate/gprofiler:latest -cu --token="${apiKey}" --service-name="${serviceName}" ${getServerHostFlag(
+    const deployCommand = `docker pull intel/gprofiler:latest\ndocker run --name granulate-gprofiler --restart=always -d --pid=host --userns=host --privileged intel/gprofiler:latest -cu --token="${apiKey}" --service-name="${serviceName}" ${getServerHostFlag(
         serverHost
     )}${shouldAddNoVerify ? ' --no-verify' : ''}`;
 

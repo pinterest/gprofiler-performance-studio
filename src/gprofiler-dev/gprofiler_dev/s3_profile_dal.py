@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-
+import gzip
 from datetime import datetime
 from io import BytesIO
 from typing import Callable, Optional
@@ -71,6 +71,14 @@ class S3ProfileDal:
             if error.response.get("Error", {}).get("Code") == "NoSuchKey":
                 raise FileNotFoundError("Requested file does not exist", src_file_path) from error
             raise
+
+    def get_object(self, s3_path: str, is_gzip=False) -> str:
+        s3_response = self._s3_client.get_object(Bucket=self.bucket_name, Key=s3_path)
+        response_body = s3_response["Body"].read()
+        if is_gzip:
+            with gzip.GzipFile(fileobj=BytesIO(response_body)) as gz:
+                response_body = gz.read()
+        return response_body.decode("utf-8")
 
     def write_file(self, file_path: str, content: bytes) -> None:
         io_content = BytesIO(content)

@@ -20,9 +20,10 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"github.com/ClickHouse/clickhouse-go/v2"
 	"sync"
 	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2"
 )
 
 type StackRecord struct {
@@ -47,6 +48,7 @@ type MetricRecord struct {
 	HostName                 string
 	CPUAverageUsedPercent    float64
 	MemoryAverageUsedPercent float64
+	HTMLPath                 string
 }
 
 type RecordsAttributesUnpack interface {
@@ -61,6 +63,7 @@ func (mr MetricRecord) getDbAttributes() []interface{} {
 		mr.HostName,
 		mr.CPUAverageUsedPercent,
 		mr.MemoryAverageUsedPercent,
+		mr.HTMLPath,
 	}
 	return dbAttributes
 }

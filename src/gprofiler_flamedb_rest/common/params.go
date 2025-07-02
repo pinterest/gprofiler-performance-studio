@@ -168,3 +168,10 @@ type MetricsServicesListSummary struct {
 	MetricsSummary
 	ServiceId int `json:"service_id"`
 }
+
+type MetricsLastHTMLParams struct {
+	TimeParams
+	AllFiltersParams
+	ServiceId int    `form:"service" binding:"required"`
+	Filter    string `form:"filter"`
+}

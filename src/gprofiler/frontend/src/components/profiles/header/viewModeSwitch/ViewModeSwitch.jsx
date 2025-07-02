@@ -17,6 +17,7 @@
 }
 
 import { Box, ListItemButton, ListItemIcon, Menu } from '@mui/material';
+import _ from 'lodash';
 import { useContext, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 
@@ -24,10 +25,12 @@ import Button from '@/components/common/button/Button';
 import Icon from '@/components/common/icon/Icon';
 import { ICONS_NAMES } from '@/components/common/icon/iconsData';
 import Flexbox from '@/components/common/layout/Flexbox';
+import { isFilterTypeExist } from '@/components/filters/utils';
 import { FgContext, SelectorsContext } from '@/states';
 import { FilterTagsContext } from '@/states/filters/FiltersTagsContext';
 import { COLORS } from '@/theme/colors';
 import { PROFILES_VIEWS } from '@/utils/consts';
+import { FILTER_TYPES } from '@/utils/filtersUtils';
 
 import ViewModeTooltip from './ViewModeTooltip';
 
@@ -35,6 +38,7 @@ const VIEW_TO_ICON_NAME = {
     [PROFILES_VIEWS.flamegraph]: ICONS_NAMES.FlameGraphView,
     [PROFILES_VIEWS.table]: ICONS_NAMES.TableView,
     [PROFILES_VIEWS.service]: ICONS_NAMES.ServiceView,
+    [PROFILES_VIEWS.html]: ICONS_NAMES.LastHtmlView,
 };
 
 const ToolTipWrappingThing = ({ viewMode, onChooseView }) => {
@@ -76,6 +80,11 @@ const ViewModeSwitch = () => {
     const { viewMode, setViewMode, areServicesLoading } = useContext(SelectorsContext);
     const { isFgDisplayed, isFgLoading } = useContext(FgContext);
     const { activeFilterTag } = useContext(FilterTagsContext);
+    const isHostNameFilterActive = isFilterTypeExist(FILTER_TYPES.HostName.value, activeFilterTag);
+    const profilesViewsToDisplay = _.omitBy(
+        PROFILES_VIEWS,
+        (view) => !isHostNameFilterActive && view === PROFILES_VIEWS.html
+    );
 
     const disabled = isFgLoading || areServicesLoading || (!isFgDisplayed && !activeFilterTag);
 
@@ -163,7 +172,7 @@ const ViewModeSwitch = () => {
                     vertical: 'top',
                     horizontal: mainClicked ? 'left' : 'right',
                 }}>
-                {Object.keys(PROFILES_VIEWS).map((view) => (
+                {Object.keys(profilesViewsToDisplay).map((view) => (
                     <ToolTipWrappingThing key={view} viewMode={view} onChooseView={onChooseView} />
                 ))}
             </Menu>

@@ -1,4 +1,4 @@
-FROM node:16.18 as frontend_dependencies
+FROM node:20.19 as frontend_dependencies
 
 ARG VITE_PRODUCTION_ENV
 ARG VITE_SERVER_HOST
@@ -14,7 +14,7 @@ RUN yarn --cwd /frontend/ install
 COPY gprofiler/frontend /frontend
 RUN yarn build
 
-FROM python:3.12-bullseye
+FROM python:3.12.3-bullseye
 
 WORKDIR /usr/src/app
 EXPOSE 80
@@ -76,13 +76,13 @@ RUN logrotate /etc/nginx/logrotate.conf
 # https://github.com/instrumenta/kubeval use this source to retrieve schema
 RUN mkdir backend/utils/daemonset_files && \
     curl -f "https://kubernetesjsonschema.dev/master/daemonsetspec.json" -o "backend/utils/daemonset_files/daemonsetspec.json" && \
-    curl -Lf "https://raw.githubusercontent.com/Granulate/gprofiler/master/deploy/k8s/gprofiler.yaml" -o "backend/utils/daemonset_files/daemonset.yml"
+    curl -Lf "https://raw.githubusercontent.com/intel/gprofiler/master/deploy/k8s/gprofiler.yaml" -o "backend/utils/daemonset_files/daemonset.yml"
 
 RUN mkdir backend/utils/ecs_files && \
-    curl -Lf "https://raw.githubusercontent.com/Granulate/gprofiler/master/deploy/ecs/gprofiler_task_definition.json" -o "backend/utils/ecs_files/task_definition.json"
+    curl -Lf "https://raw.githubusercontent.com/intel/gprofiler/master/deploy/ecs/gprofiler_task_definition.json" -o "backend/utils/ecs_files/task_definition.json"
 
 RUN mkdir backend/utils/ansible_files && \
-    curl -Lf "https://raw.githubusercontent.com/Granulate/gprofiler/master/deploy/ansible/gprofiler_playbook.yml" -o "backend/utils/ansible_files/gprofiler_playbook.yml"
+    curl -Lf "https://raw.githubusercontent.com/intel/gprofiler/master/deploy/ansible/gprofiler_playbook.yml" -o "backend/utils/ansible_files/gprofiler_playbook.yml"
 
 RUN mkdir backend/utils/docker_compose_files && \
-    curl -Lf "https://raw.githubusercontent.com/Granulate/gprofiler/master/deploy/docker-compose/docker-compose.yml" -o "backend/utils/docker_compose_files/docker-compose.yml"
+    curl -Lf "https://raw.githubusercontent.com/intel/gprofiler/master/deploy/docker-compose/docker-compose.yml" -o "backend/utils/docker_compose_files/docker-compose.yml"

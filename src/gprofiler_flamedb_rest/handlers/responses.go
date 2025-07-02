@@ -94,6 +94,11 @@ type MetricsCpuResponse struct {
 	ExecTimeResponse
 }
 
+type MetricsHTMLResponse struct {
+	Result string `json:"result"`
+	ExecTimeResponse
+}
+
 type FlameGraphResponse struct {
 	Name     string             `json:"name"`
 	Value    int                `json:"value"`

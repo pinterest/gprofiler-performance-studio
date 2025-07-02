@@ -80,6 +80,7 @@ func main() {
 	router.POST("/api/v1/metrics/services_list_summary", h.GetMetricsServicesListSummary)
 	router.GET("/api/v1/metrics/graph", h.GetMetricsGraph)
 	router.GET("/api/v1/metrics/cpu_trend", h.GetMetricsCpuTrends)
+	router.GET("/api/v1/metrics/lasthtml", h.GetLastHTML)
 	if config.UseTLS {
 		router.RunTLS("0.0.0.0:4433", config.CertFilePath, config.KeyFilePath)
 	} else {

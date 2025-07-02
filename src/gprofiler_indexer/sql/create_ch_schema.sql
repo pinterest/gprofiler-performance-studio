@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS flamedb.metrics
     HostName                 LowCardinality(String),
     HostNameHash             UInt32 MATERIALIZED xxHash32(HostName),
     CPUAverageUsedPercent    Float64,
-    MemoryAverageUsedPercent Float64
+    MemoryAverageUsedPercent Float64,
+    HTMLPath                 String
 ) engine = MergeTree() PARTITION BY toYYYYMMDD(Timestamp)
       ORDER BY (ServiceId, InstanceType, HostNameHash, Timestamp);
 

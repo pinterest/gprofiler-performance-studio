@@ -58,6 +58,9 @@ function clone(target) {
     function _clone(b, a) {
         var nextBatch = [];
         for (var key in b) {
+            if (key === '__proto__' || key === 'constructor') {
+                continue; // Skip unsafe properties
+            }
             if (typeof b[key] === 'object' && b[key] !== null) {
                 if (b[key] instanceof Array) {
                     a[key] = [];

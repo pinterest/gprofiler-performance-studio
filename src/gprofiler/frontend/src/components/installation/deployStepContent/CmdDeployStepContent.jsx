@@ -28,7 +28,7 @@ import CopyableParagraph from '../../common/dataDisplay/CopyableParagraph';
 
 const CmdDeployStepContent = ({ apiKey, serviceName, serverHost }) => {
     const [shouldAddNoVerify, setShouldAddNoVerify] = useState(true);
-    const deployCommand = `wget -O gprofiler https://github.com/Granulate/gprofiler/releases/latest/download/gprofiler_\`uname -m\`\nsudo chmod +x gprofiler\nsudo TMPDIR=/proc/self/cwd sh -c "setsid ./gprofiler -cu --token='${apiKey}' --service-name='${serviceName}' ${getServerHostFlag(
+    const deployCommand = `wget -O gprofiler https://github.com/intel/gprofiler/releases/latest/download/gprofiler_\`uname -m\`\nsudo chmod +x gprofiler\nsudo TMPDIR=/proc/self/cwd sh -c "setsid ./gprofiler -cu --token='${apiKey}' --service-name='${serviceName}' ${getServerHostFlag(
         serverHost
     )}${shouldAddNoVerify ? ' --no-verify' : ''}> /dev/null 2>&1 &"`;
 

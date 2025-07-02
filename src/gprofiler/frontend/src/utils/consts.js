@@ -58,7 +58,7 @@ export const EXTERNAL_URLS = {
     github: {
         key: 'github',
         label: 'github',
-        to: 'https://github.com/Granulate/gprofiler',
+        to: 'https://github.com/intel/gprofiler',
     },
     flameGraphLearn: {
         key: 'flameGraphLearn',
@@ -81,6 +81,7 @@ export const PROFILES_VIEWS = {
     flamegraph: 'flamegraph',
     table: 'table',
     service: 'service',
+    html: 'html',
 };
 
 export const SPLIT_VIEW_ANIMATION_DURATION_IN_SECONDS = 0.7;

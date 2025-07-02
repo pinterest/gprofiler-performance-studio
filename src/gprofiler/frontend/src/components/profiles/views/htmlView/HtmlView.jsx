@@ -16,17 +16,24 @@
      */
 }
 
-import { FILTER_OPERATIONS } from '../../utils/filtersUtils';
+import Flexbox from '@/components/common/layout/Flexbox';
 
-export const isFilterTypeExist = (type, filter) => {
-    if (!filter?.filter) return false;
-    const [, rules] = Object.entries(filter.filter)[0];
-    return rules?.some((rule) => {
-        const [ruleType] = Object.entries(rule)[0];
-        return type === ruleType;
-    });
+const HtmlView = ({ lastHtml }) => {
+    return (
+        <Flexbox column>
+            <iframe
+                style={{
+                    position: 'absolute',
+                    margin: 0,
+                    width: '90%',
+                    height: '80%',
+                    border: 'none',
+                }}
+                title='last html'
+                srcDoc={lastHtml}
+            />
+        </Flexbox>
+    );
 };
 
-export const shouldShowFilterTypeOptions = (filter, { type, operator }) => {
-    return operator === FILTER_OPERATIONS.$or.value || !isFilterTypeExist(type, filter);
-};
+export default HtmlView;

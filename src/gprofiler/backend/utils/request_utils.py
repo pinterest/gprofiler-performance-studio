@@ -111,7 +111,7 @@ def get_flamegraph_request(db_api_params, stream):
     return response
 
 
-def _common_fg_rest_response(response: Response, db_api_params: Dict) -> Union[List, Dict]:
+def _common_fg_rest_response(response: Response, db_api_params: Dict) -> Union[List, Dict, str]:
     if response.status_code == 401:
         logger.error(f"{response.request.url} request is unauthorized")
     if response.status_code >= 300:
@@ -138,7 +138,7 @@ def _common_fg_rest_response(response: Response, db_api_params: Dict) -> Union[L
 
 def get_query_response(
     fg_params: FGParamsBaseModel, lookup_for: str = "time", resolution=None, interval=None
-) -> Union[List, Dict]:
+) -> Union[List, Dict, str]:
     fg_filter = fg_params.filter.json().encode() if fg_params.filter else None
     db_api_params = get_api_params(
         fg_params.service_name,
@@ -169,8 +169,7 @@ def get_metrics_response(
     interval=None,
     compared_start_datetime=None,
     compared_end_datetime=None,
-    m2m: Optional[bool] = False,
-) -> Union[List, Dict]:
+) -> Union[List, Dict, str]:
     fg_filter = fg_params.filter.json().encode() if fg_params.filter else None
     db_api_params = get_api_params(
         fg_params.service_name,
