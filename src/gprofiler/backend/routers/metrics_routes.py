@@ -15,9 +15,12 @@
 #
 
 import math
+import uuid
 from datetime import datetime, timedelta
 from logging import getLogger
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
+
+from botocore.exceptions import ClientError
 
 from backend.models.filters_models import FilterTypes
 from backend.models.flamegraph_models import FGParamsBaseModel
@@ -30,15 +33,81 @@ from backend.models.metrics_models import (
     MetricNodesCoresSummary,
     MetricSummary,
     SampleCount,
+    HTMLMetadata,
 )
 from backend.utils.filters_utils import get_rql_first_eq_key, get_rql_only_for_one_key
 from backend.utils.request_utils import flamegraph_base_request_params, get_metrics_response, get_query_response
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import Response
+from pydantic import BaseModel
+
+from gprofiler_dev import S3ProfileDal
 from gprofiler_dev.postgres.db_manager import DBManager
 
 logger = getLogger(__name__)
 router = APIRouter()
+
+
+class ProfilingRequest(BaseModel):
+    """Model for profiling request parameters"""
+    service_name: str
+    request_type: str = "start"  # start, stop
+    duration: Optional[int] = 60  # seconds
+    frequency: Optional[int] = 11  # Hz
+    profiling_mode: Optional[str] = "cpu"  # cpu, allocation, none
+    target_hostnames: List[str]  # Required - list of target hostnames
+    pids: Optional[List[int]] = None
+    stop_level: Optional[str] = "process"  # process, host (only relevant for stop commands)
+    additional_args: Optional[Dict[str, Any]] = None
+
+
+class ProfilingResponse(BaseModel):
+    """Response model for profiling requests"""
+    success: bool
+    message: str
+    request_id: Optional[str] = None
+    command_id: Optional[str] = None  # Added for agent idempotency
+    estimated_completion_time: Optional[datetime] = None
+
+
+class HeartbeatRequest(BaseModel):
+    """Model for host heartbeat request"""
+    ip_address: str
+    hostname: str
+    service_name: str
+    last_command_id: Optional[str] = None
+    status: Optional[str] = "active"  # active, idle, error
+    timestamp: Optional[datetime] = None
+
+
+class HeartbeatResponse(BaseModel):
+    """Response model for heartbeat requests"""
+    success: bool
+    message: str
+    profiling_command: Optional[Dict[str, Any]] = None  # Changed from profiling_request to profiling_command
+    command_id: Optional[str] = None
+
+
+class ProfilingCommand(BaseModel):
+    """Model for combined profiling command sent to hosts"""
+    command_id: str
+    command_type: str  # start, stop
+    hostname: str
+    service_name: str
+    combined_config: Dict[str, Any]  # Combined configuration from multiple requests
+    request_ids: List[str]  # List of request IDs that make up this command
+    created_at: datetime
+    status: str  # pending, sent, completed, failed
+
+
+class CommandCompletionRequest(BaseModel):
+    """Model for reporting command completion"""
+    command_id: str
+    hostname: str
+    status: str  # completed, failed
+    execution_time: Optional[int] = None  # seconds
+    error_message: Optional[str] = None
+    results_path: Optional[str] = None  # S3 path or local path to results
 
 
 def get_time_interval_value(start_time: datetime, end_time: datetime, interval: str) -> str:
@@ -212,3 +281,318 @@ def calculate_trend_in_cpu(
     )
 
     return response
+
+
+@router.get("/html_metadata", response_model=HTMLMetadata)
+def get_html_metadata(
+    fg_params: FGParamsBaseModel = Depends(flamegraph_base_request_params),
+):
+    host_name_value = get_rql_first_eq_key(fg_params.filter, FilterTypes.HOSTNAME_KEY)
+    if not host_name_value:
+        raise HTTPException(400, detail="Must filter by hostname to get the html metadata")
+    s3_path = get_metrics_response(fg_params, lookup_for="lasthtml")
+    if not s3_path:
+        raise HTTPException(404, detail="The html metadata path not found in CH")
+    s3_dal = S3ProfileDal(logger)
+    try:
+        html_content = s3_dal.get_object(s3_path, is_gzip=True)
+    except ClientError:
+        raise HTTPException(status_code=404, detail="The html metadata file not found in S3")
+    return HTMLMetadata(content=html_content)
+
+
+@router.post("/profile_request", response_model=ProfilingResponse)
+def create_profiling_request(profiling_request: ProfilingRequest):
+    """
+    Create a new profiling request with the specified parameters.
+    
+    This endpoint accepts profiling arguments in JSON format and handles both
+    start and stop profiling commands. Each request generates a unique command_id
+    that agents use for idempotency - agents will only execute commands with 
+    new command IDs they haven't seen before.
+    
+    START commands:
+    - Create new profiling sessions with specified parameters
+    - Merge multiple requests for the same host into single commands
+    
+    STOP commands:
+    - Process-level stop: Remove specific PIDs from existing commands
+      - If only one PID remains, convert to host-level stop
+      - If multiple PIDs remain, update command with remaining PIDs
+    - Host-level stop: Stop entire profiling session for the host
+    """
+    try:
+        # Validate the profiling mode
+        valid_modes = ["cpu", "allocation", "none"]
+        if profiling_request.profiling_mode not in valid_modes:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Invalid profiling mode. Must be one of: {valid_modes}"
+            )
+        
+        # Validate duration (must be positive)
+        if profiling_request.duration and profiling_request.duration <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Duration must be a positive integer (seconds)"
+            )
+        
+        # Validate frequency (must be positive)
+        if profiling_request.frequency and profiling_request.frequency <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Frequency must be a positive integer (Hz)"
+            )
+        
+        # Validate target_hostnames (now required)
+        if not profiling_request.target_hostnames:
+            raise HTTPException(
+                status_code=400,
+                detail="target_hostnames is required and must contain at least one hostname"
+            )
+        
+        # Log the profiling request
+        logger.info(
+            f"Received {profiling_request.request_type} profiling request for service: {profiling_request.service_name}",
+            extra={
+                "request_type": profiling_request.request_type,
+                "service_name": profiling_request.service_name,
+                "duration": profiling_request.duration,
+                "frequency": profiling_request.frequency,
+                "mode": profiling_request.profiling_mode,
+                "target_hostnames": profiling_request.target_hostnames,
+                "pids": profiling_request.pids,
+                "stop_level": profiling_request.stop_level
+            }
+        )
+        
+        db_manager = DBManager()
+        request_id = str(uuid.uuid4())
+        command_id = str(uuid.uuid4())  # Generate unique command ID for agent idempotency
+        
+        try:
+            # Save the profiling request to database using enhanced method
+            success = db_manager.save_profiling_request(
+                request_id=request_id,
+                service_name=profiling_request.service_name,
+                command_type=profiling_request.request_type,
+                duration=profiling_request.duration,
+                frequency=profiling_request.frequency,
+                profiling_mode=profiling_request.profiling_mode,
+                target_hostnames=profiling_request.target_hostnames,
+                pids=profiling_request.pids,
+                stop_level=profiling_request.stop_level,
+                additional_args=profiling_request.additional_args
+            )
+            
+            if not success:
+                raise Exception("Failed to save profiling request to database")
+            
+            # Handle start vs stop commands differently
+            if profiling_request.request_type == "start":
+                # Create profiling commands for target hosts
+                for hostname in profiling_request.target_hostnames:
+                    db_manager.create_or_update_profiling_command(
+                        command_id=command_id,
+                        hostname=hostname,
+                        service_name=profiling_request.service_name,
+                        command_type="start",
+                        new_request_id=request_id
+                    )
+            
+            elif profiling_request.request_type == "stop":
+                # Handle stop commands
+                for hostname in profiling_request.target_hostnames:
+                    if profiling_request.stop_level == "host":
+                        # Stop entire host
+                        db_manager.create_stop_command_for_host(
+                            command_id=command_id,
+                            hostname=hostname,
+                            service_name=profiling_request.service_name,
+                            request_id=request_id
+                        )
+                    else:  # process level stop
+                        # Stop specific processes or modify existing commands
+                        db_manager.handle_process_level_stop(
+                            command_id=command_id,
+                            hostname=hostname,
+                            service_name=profiling_request.service_name,
+                            pids_to_stop=profiling_request.pids,
+                            request_id=request_id
+                        )
+            
+            logger.info(f"Profiling request {request_id} ({profiling_request.request_type}) saved and commands processed. Command ID: {command_id}")
+            
+        except Exception as e:
+            logger.error(f"Failed to save profiling request: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to save profiling request to database"
+            )
+        
+        # Calculate estimated completion time (only for start commands)
+        completion_time = None
+        if profiling_request.request_type == "start":
+            completion_time = datetime.now() + timedelta(seconds=profiling_request.duration or 60)
+        
+        return ProfilingResponse(
+            success=True,
+            message=f"{profiling_request.request_type.capitalize()} profiling request submitted successfully for service '{profiling_request.service_name}'",
+            request_id=request_id,
+            command_id=command_id,
+            estimated_completion_time=completion_time
+        )
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create profiling request: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error while processing profiling request"
+        )
+
+
+@router.post("/heartbeat", response_model=HeartbeatResponse)
+def receive_heartbeat(heartbeat: HeartbeatRequest):
+    """
+    Receive heartbeat from host and check for pending profiling requests.
+    
+    This endpoint:
+    1. Receives heartbeat information from hosts (IP, hostname, service, last command)
+    2. Updates host status in PostgreSQL DB
+    3. Checks for pending profiling requests for this host/service
+    4. Returns new profiling request if available and not already executed
+    """
+    try:
+        # Set timestamp if not provided
+        if heartbeat.timestamp is None:
+            heartbeat.timestamp = datetime.now()
+        
+        # Log the heartbeat
+        logger.info(
+            f"Received heartbeat from host: {heartbeat.hostname} ({heartbeat.ip_address})",
+            extra={
+                "hostname": heartbeat.hostname,
+                "ip_address": heartbeat.ip_address,
+                "service_name": heartbeat.service_name,
+                "last_command_id": heartbeat.last_command_id,
+                "status": heartbeat.status,
+                "timestamp": heartbeat.timestamp
+            }
+        )
+        
+        db_manager = DBManager()
+        
+        try:
+            # 1. Update host heartbeat information in PostgreSQL DB
+            db_manager.upsert_host_heartbeat(
+                hostname=heartbeat.hostname,
+                ip_address=heartbeat.ip_address,
+                service_name=heartbeat.service_name,
+                last_command_id=heartbeat.last_command_id,
+                status=heartbeat.status or "active"  # Provide default if None
+            )
+            
+            # 2. Check for pending profiling commands for this host/service  
+            pending_command = db_manager.get_pending_profiling_command(
+                hostname=heartbeat.hostname,
+                service_name=heartbeat.service_name,
+                exclude_command_id=heartbeat.last_command_id
+            )
+            
+            if pending_command:
+                # 3. Mark command as sent
+                success = db_manager.mark_profiling_command_sent(
+                    command_id=pending_command["command_id"],
+                    hostname=heartbeat.hostname
+                )
+                
+                if success:
+                    logger.info(f"Sending profiling command {pending_command['command_id']} to host {heartbeat.hostname}")
+                    
+                    return HeartbeatResponse(
+                        success=True,
+                        message="Heartbeat received. New profiling command available.",
+                        profiling_command={
+                            "command_type": pending_command["command_type"],
+                            "combined_config": pending_command.get("combined_config", {})
+                        },
+                        command_id=pending_command["command_id"]
+                    )
+                else:
+                    logger.warning(f"Failed to mark command {pending_command['command_id']} as sent to host {heartbeat.hostname}")
+            
+            # No pending commands or marking failed
+            return HeartbeatResponse(
+                success=True,
+                message="Heartbeat received. No pending profiling commands.",
+                profiling_command=None,
+                command_id=None
+            )
+                
+        except Exception as e:
+            logger.error(f"Failed to process heartbeat for {heartbeat.hostname}: {e}", exc_info=True)
+            # Still return success for heartbeat, but no command
+            return HeartbeatResponse(
+                success=True,
+                message="Heartbeat received, but failed to check for commands.",
+                profiling_command=None,
+                command_id=None
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to process heartbeat: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error while processing heartbeat"
+        )
+
+
+@router.post("/command_completion")
+def report_command_completion(completion: CommandCompletionRequest):
+    """
+    Report completion of a profiling command from a host.
+    
+    This endpoint:
+    1. Receives command completion status from hosts
+    2. Updates command status in PostgreSQL DB
+    3. Updates related profiling requests status
+    """
+    try:
+        db_manager = DBManager()
+        
+        # Log the completion
+        logger.info(
+            f"Received command completion from host: {completion.hostname}",
+            extra={
+                "command_id": completion.command_id,
+                "hostname": completion.hostname,
+                "status": completion.status,
+                "execution_time": completion.execution_time,
+                "error_message": completion.error_message
+            }
+        )
+        
+        # Update command status
+        db_manager.update_profiling_command_status(
+            command_id=completion.command_id,
+            hostname=completion.hostname,
+            status=completion.status,
+            execution_time=completion.execution_time,
+            error_message=completion.error_message,
+            results_path=completion.results_path
+        )
+        
+        return {
+            "success": True,
+            "message": f"Command completion recorded for {completion.command_id}"
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to process command completion: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error while processing command completion"
+        )
