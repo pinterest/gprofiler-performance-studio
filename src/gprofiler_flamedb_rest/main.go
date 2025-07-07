@@ -93,6 +93,9 @@ func main() {
 	router.GET("/api/v1/metrics/graph", h.GetMetricsGraph)
 	router.GET("/api/v1/metrics/cpu_trend", h.GetMetricsCpuTrends)
 	router.GET("/api/v1/metrics/lasthtml", h.GetLastHTML)
+	router.GET("/api/v1/optimization", h.GetOptimizationRecommendations)
+	router.GET("/api/v1/optimization/summary", h.GetOptimizationSummary)
+	router.GET("/api/v1/optimization/technologies", h.GetOptimizationTechnologies)
 	if config.UseTLS {
 		router.RunTLS("0.0.0.0:4433", config.CertFilePath, config.KeyFilePath)
 	} else {

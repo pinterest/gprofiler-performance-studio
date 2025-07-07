@@ -57,10 +57,8 @@ Content-Type: application/json
   "duration": 60,
   "frequency": 11,
   "profiling_mode": "cpu",
-  "target_hosts": {
-    "host1": [1234, 5678],
-    "host2": null
-  },
+  "target_hostnames": ["host1", "host2"],
+  "pids": [1234, 5678],
   "stop_level": "process",
   "additional_args": {}
 }
@@ -84,7 +82,7 @@ Content-Type: application/json
 
 {
   "hostname": "host1",
-  "ip_address": "10.0.1.100",
+  "ip_address": "my_ip",
   "service_name": "my-service",
   "last_command_id": "previous-command-uuid",
   "status": "active"
@@ -176,7 +174,7 @@ curl -X POST http://localhost:8000/api/metrics/heartbeat \
   -H "Content-Type: application/json" \
   -d '{
     "hostname": "web-01",
-    "ip_address": "10.0.1.10",
+    "ip_address": "my_ip",
     "service_name": "web-service",
     "status": "active"
   }'
@@ -214,6 +212,7 @@ curl -X POST http://localhost:8000/api/metrics/command_completion \
 
 ### 1. Test Heartbeat System
 ```bash
+
 cd gprofiler-performance-studio
 python3 test_heartbeat_system.py
 ```

@@ -108,7 +108,7 @@ def create_test_profiling_request(backend_url: str, service_name: str, request_t
         "duration": 60,
         "frequency": 11,
         "profiling_mode": "cpu",
-        "target_hosts": {HOSTNAME: [1234, 5678]},  # Required field
+        "target_hostnames": [HOSTNAME],  # Required field
         "additional_args": {"test": True}
     }
     

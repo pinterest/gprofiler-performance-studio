@@ -1098,3 +1098,171 @@ func (c *ClickHouseClient) FetchLastHTML(ctx context.Context, params common.Metr
 	}
 	return "", nil
 }
+
+// OptimizationRecommendation represents a single optimization recommendation
+type OptimizationRecommendation struct {
+	ServiceId                                string   `json:"ServiceId"`
+	Technology                               string   `json:"Technology"`
+	OptimizationPattern                      string   `json:"OptimizationPattern"`
+	ActionableRecommendation                 string   `json:"ActionableRecommendation"`
+	ImplementationComplexity                 string   `json:"ImplementationComplexity"`
+	RuleId                                   string   `json:"RuleId"`
+	RuleName                                 string   `json:"RuleName"`
+	RuleCategory                             string   `json:"RuleCategory"`
+	OptimizationType                         string   `json:"OptimizationType"`
+	RuleSource                               string   `json:"RuleSource"`
+	TopAffectedStacks                        []string `json:"TopAffectedStacks"`
+	MinGlobalImpactPercent                   float64  `json:"MinGlobalImpactPercent"`
+	MaxGlobalImpactPercent                   float64  `json:"MaxGlobalImpactPercent"`
+	PrecisionScore                           float64  `json:"PrecisionScore"`
+	AccuracyScore                            float64  `json:"AccuracyScore"`
+	AffectedStacks                           int      `json:"AffectedStacks"`
+	TotalSamplesInPattern                    int      `json:"TotalSamplesInPattern"`
+	RelativeResourceReductionPercentInService float64  `json:"RelativeResourceReductionPercentInService"`
+	DollarImpact                             float64  `json:"DollarImpact"`
+	NumHosts                                 int      `json:"NumHosts"`
+	CreatedDate                              string   `json:"created_date"`
+	UpdatedDate                              string   `json:"updated_date"`
+	CreatedBy                                string   `json:"created_by"`
+}
+
+// FetchOptimizationRecommendations fetches optimization recommendations from ClickHouse
+func (c *ClickHouseClient) FetchOptimizationRecommendations(ctx context.Context, query string) ([]OptimizationRecommendation, error) {
+	var result []OptimizationRecommendation
+	
+	rows, err := c.client.Query(query)
+	if err != nil {
+		log.Printf("unable to execute optimization query: %v\n", err)
+		return result, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var rec OptimizationRecommendation
+		var topStacksStr string
+		
+		err = rows.Scan(
+			&rec.ServiceId,
+			&rec.Technology,
+			&rec.OptimizationPattern,
+			&rec.ActionableRecommendation,
+			&rec.ImplementationComplexity,
+			&rec.RuleId,
+			&rec.RuleName,
+			&rec.RuleCategory,
+			&rec.OptimizationType,
+			&rec.RuleSource,
+			&topStacksStr,
+			&rec.MinGlobalImpactPercent,
+			&rec.MaxGlobalImpactPercent,
+			&rec.PrecisionScore,
+			&rec.AccuracyScore,
+			&rec.AffectedStacks,
+			&rec.TotalSamplesInPattern,
+			&rec.RelativeResourceReductionPercentInService,
+			&rec.DollarImpact,
+			&rec.NumHosts,
+			&rec.CreatedDate,
+			&rec.UpdatedDate,
+			&rec.CreatedBy,
+		)
+		if err != nil {
+			log.Printf("error scanning optimization result: %v", err)
+			continue
+		}
+		
+		// Parse TopAffectedStacks array from ClickHouse array format
+		if topStacksStr != "" && topStacksStr != "[]" {
+			// Remove brackets and split by comma
+			topStacksStr = strings.Trim(topStacksStr, "[]")
+			if topStacksStr != "" {
+				stacks := strings.Split(topStacksStr, "','")
+				for i, stack := range stacks {
+					stacks[i] = strings.Trim(stack, "'")
+				}
+				rec.TopAffectedStacks = stacks
+			}
+		}
+		if rec.TopAffectedStacks == nil {
+			rec.TopAffectedStacks = []string{}
+		}
+		
+		result = append(result, rec)
+	}
+	
+	return result, rows.Err()
+}
+
+// FetchOptimizationSummary fetches optimization summary statistics from ClickHouse
+func (c *ClickHouseClient) FetchOptimizationSummary(ctx context.Context, query string) (map[string]interface{}, error) {
+	result := make(map[string]interface{})
+	
+	rows, err := c.client.Query(query)
+	if err != nil {
+		log.Printf("unable to execute optimization summary query: %v\n", err)
+		return result, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var totalRecommendations, affectedServices, technologiesCount, totalAffectedStacks int
+		var avgCpuImpact, maxCpuImpact float64
+		var easyFixes, mediumFixes, complexFixes, veryComplexFixes int
+		
+		err = rows.Scan(
+			&totalRecommendations,
+			&affectedServices,
+			&technologiesCount,
+			&totalAffectedStacks,
+			&avgCpuImpact,
+			&maxCpuImpact,
+			&easyFixes,
+			&mediumFixes,
+			&complexFixes,
+			&veryComplexFixes,
+		)
+		if err != nil {
+			log.Printf("error scanning optimization summary result: %v", err)
+			return result, err
+		}
+		
+		result["total_recommendations"] = totalRecommendations
+		result["affected_services"] = affectedServices
+		result["technologies_count"] = technologiesCount
+		result["total_affected_stacks"] = totalAffectedStacks
+		result["avg_cpu_impact"] = avgCpuImpact
+		result["max_cpu_impact"] = maxCpuImpact
+		result["easy_fixes"] = easyFixes
+		result["medium_fixes"] = mediumFixes
+		result["complex_fixes"] = complexFixes
+		result["very_complex_fixes"] = veryComplexFixes
+		
+		break // Only expect one row for summary
+	}
+	
+	return result, rows.Err()
+}
+
+// FetchOptimizationTechnologies fetches available technologies from ClickHouse
+func (c *ClickHouseClient) FetchOptimizationTechnologies(ctx context.Context, query string) ([]string, error) {
+	var result []string
+	
+	rows, err := c.client.Query(query)
+	if err != nil {
+		log.Printf("unable to execute optimization technologies query: %v\n", err)
+		return result, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var technology string
+		err = rows.Scan(&technology)
+		if err != nil {
+			log.Printf("error scanning optimization technology result: %v", err)
+			continue
+		}
+		result = append(result, technology)
+	}
+	
+	return result, rows.Err()
+}

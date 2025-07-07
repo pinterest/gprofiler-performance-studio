@@ -32,6 +32,11 @@ export const PAGES = {
         label: 'Comparison',
         to: '/compare',
     },
+    optimization: {
+        key: 'optimization',
+        label: 'Optimization',
+        to: '/optimization',
+    },
     installation: {
         key: 'installation',
         label: 'Install Service',

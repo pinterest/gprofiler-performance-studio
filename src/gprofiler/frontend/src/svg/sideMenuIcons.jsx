@@ -68,3 +68,16 @@ export const ComparisonPageIcon = (props) => {
         </SvgIcon>
     );
 };
+
+export const OptimizationPageIcon = (props) => {
+    return (
+        <SvgIcon {...props}>
+            <path
+                fillRule='evenodd'
+                clipRule='evenodd'
+                d='M12 2L13.09 8.26L22 9L13.09 9.74L12 16L10.91 9.74L2 9L10.91 8.26L12 2ZM12 4.24L11.38 8.26L8 8.5L11.38 8.74L12 12.76L12.62 8.74L16 8.5L12.62 8.26L12 4.24ZM19 14L19.5 16.5L22 17L19.5 17.5L19 20L18.5 17.5L16 17L18.5 16.5L19 14ZM5 14L5.5 16.5L8 17L5.5 17.5L5 20L4.5 17.5L2 17L4.5 16.5L5 14Z'
+                fill={props.fill || '#ffffff'}
+            />
+        </SvgIcon>
+    );
+};

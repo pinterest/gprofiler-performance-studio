@@ -50,4 +50,7 @@ export const DATA_URLS = {
         `${API_PREFIX}${FILETERS_PREFIX}/tags/${filterType}?${stringify(params)}`,
     GET_FILTERS_FOR_SERVICE: (selectedService) => `${API_PREFIX}${FILETERS_PREFIX}/service/${selectedService}`,
     SNAPSHOT: `${API_PREFIX}/snapshots`,
+    GET_OPTIMIZATION_RECOMMENDATIONS: `/api/v1/optimization`,
+    GET_OPTIMIZATION_SUMMARY: `/api/v1/optimization/summary`,
+    GET_OPTIMIZATION_TECHNOLOGIES: `/api/v1/optimization/technologies`,
 };

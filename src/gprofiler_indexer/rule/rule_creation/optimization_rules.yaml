@@ -1,0 +1,2168 @@
+rules:
+  - rule_id: "JAVA_HOTSPOT_FULLGC_001"
+    rule_name: "Java HotSpot Full GC Performance Issue"
+    callstack_pattern: ".*(FullGC|G1.*Collection|ConcurrentMarkSweep).*"
+    platform_pattern: ".*(hotspot|OpenJDK|Oracle.*JDK).*(x86_64|amd64).*(m5\\.large|m5\\.xlarge|c5\\.large|c5\\.xlarge|r5\\.large|r5\\.xlarge).*"
+    technology_stack: "Java"
+    rule_category: "GC"
+    optimization_type: "UTILIZATION"
+    description: "Frequent Full GC events causing application pauses on x86_64 compute-optimized instances"
+    optimization_description: "UTILIZATION optimization: Increase heap size to match instance memory (m5.large=8GB heap, m5.xlarge=16GB heap). Switch to G1GC: -XX:+UseG1GC -XX:MaxGCPauseMillis=200. For c5 instances, use parallel GC settings."
+    implementation_complexity: "MEDIUM"
+    rule_source: "VERIFIED"
+    tags: ["java", "gc", "memory", "hotspot", "hardware", "aws"]
+    documentation_links: ["https://docs.oracle.com/javase/8/docs/technotes/guides/vm/gctuning/"]
+    created_by: "java-performance-team"
+
+  - rule_id: "JAVA_REGEX_COMPILE_001"
+    rule_name: "Java Regex Pattern Repeated Compilation"
+    callstack_pattern: ".*(Pattern\\.compile|Matcher\\.<init>|java\\.util\\.regex\\.Pattern\\.compile).*"
+    platform_pattern: ".*(hotspot|OpenJDK|Oracle.*JDK).*"
+    technology_stack: "Java"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Repeated regex pattern compilation in hot code paths causing CPU overhead"
+    optimization_description: "SOFTWARE optimization: Pre-compile Pattern objects as static final fields. Replace Pattern.compile(regex).matcher(input) with static Pattern PATTERN = Pattern.compile(regex); then PATTERN.matcher(input). Use Pattern.quote() for literal strings."
+    implementation_complexity: "EASY"
+    rule_source: "COMMUNITY"
+    tags: ["java", "regex", "pattern", "compilation", "cpu"]
+    documentation_links: ["https://docs.oracle.com/javase/8/docs/api/java/util/regex/Pattern.html"]
+    created_by: "java-performance-team"
+
+  - rule_id: "JAVA_STRING_CONCAT_001"
+    rule_name: "Java String Concatenation Performance"
+    callstack_pattern: ".*(StringBuilder\\.<init>|String\\.concat|String\\.\\+).*"
+    platform_pattern: ".*(hotspot|OpenJDK|Oracle.*JDK).*"
+    technology_stack: "Java"
+    rule_category: "Memory"
+    optimization_type: "SOFTWARE"
+    description: "Inefficient string concatenation using + operator in loops causing excessive object creation"
+    optimization_description: "SOFTWARE optimization: Replace string concatenation in loops with StringBuilder. Use StringBuilder sb = new StringBuilder(estimatedSize); sb.append(str1).append(str2); return sb.toString(). For known capacity, pre-size StringBuilder."
+    implementation_complexity: "EASY"
+    rule_source: "COMMUNITY"
+    tags: ["java", "string", "concatenation", "stringbuilder", "memory"]
+    documentation_links: ["https://docs.oracle.com/javase/8/docs/api/java/lang/StringBuilder.html"]
+    created_by: "java-performance-team"
+
+  - rule_id: "JAVA_HASHMAP_SIZE_001"
+    rule_name: "Java HashMap/HashSet Initial Capacity"
+    callstack_pattern: ".*(HashMap\\.<init>|HashSet\\.<init>|java\\.util\\.HashMap\\.resize).*"
+    platform_pattern: ".*(hotspot|OpenJDK|Oracle.*JDK).*"
+    technology_stack: "Java"
+    rule_category: "Memory"
+    optimization_type: "SOFTWARE"
+    description: "HashMap/HashSet resizing operations due to insufficient initial capacity causing performance degradation"
+    optimization_description: "SOFTWARE optimization: Initialize HashMap/HashSet with appropriate capacity: new HashMap<>(expectedSize * 4/3 + 1) to avoid resize operations. Use LinkedHashMap for insertion-order preservation. Consider THashMap for primitive keys."
+    implementation_complexity: "EASY"
+    rule_source: "COMMUNITY"
+    tags: ["java", "hashmap", "hashset", "capacity", "resize", "memory"]
+    documentation_links: ["https://docs.oracle.com/javase/8/docs/api/java/util/HashMap.html"]
+    created_by: "java-performance-team"
+
+  - rule_id: "JAVA_SERIALIZATION_001"
+    rule_name: "Java Object Serialization Performance"
+    callstack_pattern: ".*(ObjectOutputStream\\.writeObject|ObjectInputStream\\.readObject|Serializable).*"
+    platform_pattern: ".*(hotspot|OpenJDK|Oracle.*JDK).*"
+    technology_stack: "Java"
+    rule_category: "IO"
+    optimization_type: "SOFTWARE"
+    description: "Slow Java native serialization causing performance bottlenecks in distributed systems"
+    optimization_description: "SOFTWARE optimization: Replace Java serialization with faster alternatives: Kryo, Protocol Buffers, Avro, or Jackson for JSON. Implement custom writeExternal/readExternal methods. Use transient keyword for non-essential fields."
+    implementation_complexity: "MEDIUM"
+    rule_source: "VERIFIED"
+    tags: ["java", "serialization", "kryo", "protobuf", "jackson", "performance"]
+    documentation_links: ["https://github.com/EsotericSoftware/kryo", "https://developers.google.com/protocol-buffers/docs/javatutorial"]
+    created_by: "java-performance-team"
+
+  - rule_id: "JAVA_STRING_CONCATENATION_001"
+    rule_name: "Java String Concatenation Optimization"
+    callstack_pattern: ".*(String\\.valueOf|String\\.concat|StringBuilder\\.toString).*"
+    platform_pattern: ".*(hotspot|OpenJDK|Oracle.*JDK).*"
+    technology_stack: "Java"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Inefficient string concatenation patterns causing excessive CPU and memory usage"
+    optimization_description: "SOFTWARE optimization: Use String.join() for delimiter-separated strings, StringBuilder for loops, String.format() for complex formatting. Replace str1 + str2 + str3 with String.join(\"\", str1, str2, str3) or StringBuilder."
+    implementation_complexity: "EASY"
+    rule_source: "COMMUNITY"
+    tags: ["java", "string", "concatenation", "join", "format"]
+    documentation_links: ["https://docs.oracle.com/javase/8/docs/api/java/lang/String.html#join-java.lang.CharSequence-java.lang.CharSequence...-"]
+    created_by: "java-performance-team"
+
+  - rule_id: "GENERAL_COMPRESSION_001"
+    rule_name: "Data Compression Algorithm Optimization"
+    callstack_pattern: ".*(gzip|deflate|lz4|snappy|zstd|brotli).*"
+    platform_pattern: ".*"
+    technology_stack: "General"
+    rule_category: "IO"
+    optimization_type: "SOFTWARE"
+    description: "Suboptimal compression algorithm selection causing unnecessary CPU overhead or poor compression ratios"
+    optimization_description: "SOFTWARE optimization: Choose compression based on use case: LZ4/Snappy for speed, GZIP for balanced compression, Zstandard for best ratio. Use streaming compression for large datasets. Set appropriate compression levels (1-9)."
+    implementation_complexity: "MEDIUM"
+    rule_source: "COMMUNITY"
+    tags: ["compression", "gzip", "lz4", "snappy", "zstd", "performance"]
+    documentation_links: ["https://facebook.github.io/zstd/", "https://lz4.github.io/lz4/"]
+    created_by: "performance-team"
+
+  - rule_id: "JSON_PROCESSING_001"
+    rule_name: "JSON Parsing and Generation Optimization"
+    callstack_pattern: ".*(JSON\\.parse|JSON\\.stringify|JsonParser|ObjectMapper).*"
+    platform_pattern: ".*"
+    technology_stack: "General"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Inefficient JSON processing libraries or patterns causing CPU bottlenecks"
+    optimization_description: "SOFTWARE optimization: Use streaming JSON parsers for large files, faster libraries (Jackson > Gson > org.json > simd.json), object reuse with ObjectMapper, disable unnecessary features like pretty printing in production."
+    implementation_complexity: "MEDIUM"
+    rule_source: "COMMUNITY"
+    tags: ["json", "jackson", "gson", "parsing", "streaming"]
+    documentation_links: ["https://github.com/FasterXML/jackson", "https://github.com/google/gson"]
+    created_by: "performance-team"
+
+  - rule_id: "STRING_TRIM_OPTIMIZATION_001"
+    rule_name: "String Trimming and Whitespace Handling"
+    callstack_pattern: ".*(String\\.trim|String\\.strip|String\\.replaceAll.*\\\\s).*"
+    platform_pattern: ".*"
+    technology_stack: "General"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Inefficient string trimming operations in high-frequency code paths"
+    optimization_description: "SOFTWARE optimization: Use String.strip() over trim() in Java 11+, implement custom trim for specific whitespace, cache trimmed results, use StringBuilder for complex whitespace operations, consider regex-free approaches."
+    implementation_complexity: "EASY"
+    rule_source: "COMMUNITY"
+    tags: ["string", "trim", "strip", "whitespace", "optimization"]
+    documentation_links: ["https://docs.oracle.com/en/java/javase/11/docs/api/java.base/java/lang/String.html#strip()"]
+    created_by: "performance-team"
+
+  - rule_id: "PYTHON_LIST_COMPREHENSION_001"
+    rule_name: "Python List Comprehension vs Loop+Append"
+    callstack_pattern: ".*(list.*append.*for|\\\\[.*for.*in.*\\\\]).*"
+    platform_pattern: ".*(python3|Python.*3|cpython).*"
+    technology_stack: "Python"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Using explicit loops with list.append() instead of list comprehensions causing performance overhead"
+    optimization_description: "SOFTWARE optimization: Replace for loops with append() using list comprehensions. Change [result.append(func(x)) for x in items] to [func(x) for x in items]. Use generator expressions for memory efficiency: (func(x) for x in items)."
+    implementation_complexity: "EASY"
+    rule_source: "COMMUNITY"
+    tags: ["python", "list", "comprehension", "loop", "performance"]
+    documentation_links: ["https://docs.python.org/3/tutorial/datastructures.html#list-comprehensions"]
+    created_by: "python-performance-team"
+
+  - rule_id: "PYTHON_GIL_THREADING_001"
+    rule_name: "Python Threading vs Multiprocessing for CPU Tasks"
+    callstack_pattern: ".*(threading\\.Thread|concurrent\\.futures\\.ThreadPool).*"
+    platform_pattern: ".*(python3|Python.*3|cpython).*"
+    technology_stack: "Python"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Using threading for CPU-bound tasks in Python which are limited by GIL causing poor scalability"
+    optimization_description: "SOFTWARE optimization: Replace threading.Thread with multiprocessing.Process for CPU-bound tasks. Use concurrent.futures.ProcessPoolExecutor instead of ThreadPoolExecutor. For I/O-bound tasks, keep using threading or asyncio."
+    implementation_complexity: "MEDIUM"
+    rule_source: "COMMUNITY"
+    tags: ["python", "gil", "threading", "multiprocessing", "cpu"]
+    documentation_links: ["https://docs.python.org/3/library/multiprocessing.html"]
+    created_by: "python-performance-team"
+
+  - rule_id: "GO_SLICE_PREALLOCATION_001"
+    rule_name: "Go Slice Memory Reallocation Performance"
+    callstack_pattern: ".*(append.*slice|make.*slice.*0).*"
+    platform_pattern: ".*(go1\\.[0-9]+|golang).*"
+    technology_stack: "Go"
+    rule_category: "Memory"
+    optimization_type: "SOFTWARE"
+    description: "Go slices growing through append() without preallocation causing multiple memory reallocations"
+    optimization_description: "SOFTWARE optimization: Preallocate slice capacity when final size is known: make([]Type, 0, capacity) instead of make([]Type, 0). Use slice := make([]Type, 0, expectedSize) before append loop. Avoid growing slices in tight loops."
+    implementation_complexity: "EASY"
+    rule_source: "COMMUNITY"
+    tags: ["go", "slice", "preallocation", "append", "memory"]
+    documentation_links: ["https://go.dev/blog/slices-intro"]
+    created_by: "go-performance-team"
+
+  - rule_id: "GO_STRING_FORMATTING_001"
+    rule_name: "Go fmt.Sprintf Performance Optimization"
+    callstack_pattern: ".*(fmt\\.Sprintf|fmt\\.Printf.*string).*"
+    platform_pattern: ".*(go1\\.[0-9]+|golang).*"
+    technology_stack: "Go"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Heavy use of fmt.Sprintf for string formatting in hot code paths causing CPU overhead"
+    optimization_description: "SOFTWARE optimization: Use strings.Builder for complex concatenation, strconv package for primitive conversions. Replace fmt.Sprintf(\"%s%s\", a, b) with strings.Builder or simple concatenation a + b. Use strconv.Itoa() instead of fmt.Sprintf(\"%d\", num)."
+    implementation_complexity: "EASY"
+    rule_source: "COMMUNITY"
+    tags: ["go", "fmt", "sprintf", "string", "formatting"]
+    documentation_links: ["https://pkg.go.dev/strings#Builder"]
+    created_by: "go-performance-team"
+
+  - rule_id: "CPP_VECTOR_RESERVE_001"
+    rule_name: "C++ Vector Memory Reallocation Optimization"
+    callstack_pattern: ".*(std::vector.*push_back|vector.*resize).*"
+    platform_pattern: ".*(gcc|clang|msvc).*"
+    technology_stack: "C++"
+    rule_category: "Memory"
+    optimization_type: "SOFTWARE"
+    description: "C++ std::vector growing without reserve() causing multiple memory reallocations and copies"
+    optimization_description: "SOFTWARE optimization: Call vector.reserve(expectedSize) before push_back loop. Use vector.resize(size) when final size is known. Replace push_back in loops with direct indexing after resize. Consider using std::array for fixed-size arrays."
+    implementation_complexity: "EASY"
+    rule_source: "COMMUNITY"
+    tags: ["cpp", "vector", "reserve", "push_back", "memory"]
+    documentation_links: ["https://en.cppreference.com/w/cpp/container/vector/reserve"]
+    created_by: "cpp-performance-team"
+
+  - rule_id: "CPP_STRING_CONCAT_001"
+    rule_name: "C++ String Concatenation Performance"
+    callstack_pattern: ".*(std::string.*\\\\+|string.*append.*loop).*"
+    platform_pattern: ".*(gcc|clang|msvc).*"
+    technology_stack: "C++"
+    rule_category: "Memory"
+    optimization_type: "SOFTWARE"
+    description: "C++ string concatenation using + operator in loops causing multiple allocations"
+    optimization_description: "SOFTWARE optimization: Use std::stringstream or std::string::reserve() for multiple concatenations. Replace str1 + str2 + str3 with stringstream or single reserve() + append() calls. Consider std::string_view for read-only operations."
+    implementation_complexity: "EASY"
+    rule_source: "COMMUNITY"
+    tags: ["cpp", "string", "concatenation", "stringstream", "performance"]
+    documentation_links: ["https://en.cppreference.com/w/cpp/io/basic_stringstream"]
+    created_by: "cpp-performance-team"
+
+  - rule_id: "PYTHON_DICT_COMPREHENSION_001"
+    rule_name: "Python Dict Comprehension vs Loop+Update"
+    callstack_pattern: ".*(dict.*update.*for|\\{.*for.*in.*\\}).*"
+    platform_pattern: ".*(python3|Python.*3|cpython).*"
+    technology_stack: "Python"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Using explicit loops with dict.update() instead of dict comprehensions causing performance overhead"
+    optimization_description: "SOFTWARE optimization: Replace for loops with update() using dict comprehensions. Use '{{k: v for k, v in iterable}}' instead of explicit for-update loops."
+    implementation_complexity: "EASY"
+    rule_source: "COMMUNITY"
+    tags: ["python", "dict", "comprehension", "loop", "performance"]
+    documentation_links: ["https://docs.python.org/3/tutorial/datastructures.html#dictionaries"]
+    created_by: "python-performance-team"
+
+  - rule_id: "PYTHON_SET_COMPREHENSION_001"
+    rule_name: "Python Set Comprehension vs Loop+Add"
+    callstack_pattern: ".*(set.*add.*for|\\{.*for.*in.*\\}).*"
+    platform_pattern: ".*(python3|Python.*3|cpython).*"
+    technology_stack: "Python"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Using explicit loops with set.add() instead of set comprehensions causing performance overhead"
+    optimization_description: "SOFTWARE optimization: Replace for loops with add() using set comprehensions. Use '{x for x in iterable}' instead of explicit for-add loops."
+    implementation_complexity: "EASY"
+    rule_source: "COMMUNITY"
+    tags: ["python", "set", "comprehension", "loop", "performance"]
+    documentation_links: ["https://docs.python.org/3/tutorial/datastructures.html#set-comprehensions"]
+    created_by: "python-performance-team"
+
+  - rule_id: "PYTHON_BUILTIN_SORT_001"
+    rule_name: "Python Built-in Sort vs Custom Sort"
+    callstack_pattern: ".*(sorted|list\\.sort|custom_sort).*"
+    platform_pattern: ".*(python3|Python.*3|cpython).*"
+    technology_stack: "Python"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Using custom sort implementations instead of built-in sorted() or list.sort() causing performance issues"
+    optimization_description: "SOFTWARE optimization: Use built-in sorted() or list.sort() which are highly optimized in C. Avoid custom sort implementations in Python."
+    implementation_complexity: "EASY"
+    rule_source: "COMMUNITY"
+    tags: ["python", "sort", "builtin", "performance"]
+    documentation_links: ["https://docs.python.org/3/howto/sorting.html"]
+    created_by: "python-performance-team"
+
+  - rule_id: "PYTHON_MEMOIZATION_001"
+    rule_name: "Python Memoization for Expensive Functions"
+    callstack_pattern: ".*(functools\\.lru_cache|memoize|cache).*"
+    platform_pattern: ".*(python3|Python.*3|cpython).*"
+    technology_stack: "Python"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Repeated computation of expensive functions without memoization causing performance bottlenecks"
+    optimization_description: "SOFTWARE optimization: Use functools.lru_cache or custom memoization to cache results of expensive function calls."
+    implementation_complexity: "EASY"
+    rule_source: "COMMUNITY"
+    tags: ["python", "memoization", "cache", "performance"]
+    documentation_links: ["https://docs.python.org/3/library/functools.html#functools.lru_cache"]
+    created_by: "python-performance-team"
+
+  - rule_id: "PYTHON_NUMPY_VECTORIZE_001"
+    rule_name: "Python Numpy Vectorization vs Loops"
+    callstack_pattern: ".*(numpy|np)\\..*(for|while).*"
+    platform_pattern: ".*(python3|Python.*3|cpython).*"
+    technology_stack: "Python"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Using explicit Python loops for array operations instead of numpy vectorized operations causing performance issues"
+    optimization_description: "SOFTWARE optimization: Replace explicit loops with numpy vectorized operations for array processing."
+    implementation_complexity: "EASY"
+    rule_source: "COMMUNITY"
+    tags: ["python", "numpy", "vectorization", "performance"]
+    documentation_links: ["https://numpy.org/doc/stable/user/quickstart.html#the-basics"]
+    created_by: "python-performance-team"
+
+  - rule_id: "GO_GC_TUNING_001"
+    rule_name: "Go Garbage Collector Tuning for High Utilization"
+    callstack_pattern: ".*(runtime\\.GC|GOGC).*"
+    platform_pattern: ".*(go1\\.[0-9]+|golang).*"
+    technology_stack: "Go"
+    rule_category: "UTILIZATION"
+    optimization_type: "UTILIZATION"
+    description: "Default Go GC settings causing suboptimal CPU/memory utilization in high-throughput services"
+    optimization_description: "UTILIZATION optimization: Tune GOGC and GOMAXPROCS for higher throughput. Increase GOGC for less frequent GC, set GOMAXPROCS to match CPU cores."
+    implementation_complexity: "MEDIUM"
+    rule_source: "COMMUNITY"
+    tags: ["go", "gc", "utilization", "tuning"]
+    documentation_links: ["https://go.dev/doc/gc-guide"]
+    created_by: "go-performance-team"
+
+  - rule_id: "CPP_MOVE_SEMANTICS_001"
+    rule_name: "C++ Move Semantics for Expensive Objects"
+    callstack_pattern: ".*(std::move|std::vector|std::string).*"
+    platform_pattern: ".*(gcc|clang|msvc).*"
+    technology_stack: "C++"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Copying expensive objects instead of using move semantics causing unnecessary allocations"
+    optimization_description: "SOFTWARE optimization: Use std::move to transfer ownership and avoid deep copies for expensive objects."
+    implementation_complexity: "EASY"
+    rule_source: "COMMUNITY"
+    tags: ["cpp", "move", "semantics", "performance"]
+    documentation_links: ["https://en.cppreference.com/w/cpp/utility/move"]
+    created_by: "cpp-performance-team"
+
+  - rule_id: "CPP_PARALLEL_STL_001"
+    rule_name: "C++ Parallel STL Algorithms"
+    callstack_pattern: ".*(std::for_each|std::transform|std::sort).*"
+    platform_pattern: ".*(gcc|clang|msvc).*"
+    technology_stack: "C++"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Using sequential STL algorithms instead of parallel versions causing underutilization of CPU cores"
+    optimization_description: "SOFTWARE optimization: Use parallel STL algorithms (C++17 and later) for data processing: std::for_each(std::execution::par, ...)."
+    implementation_complexity: "MEDIUM"
+    rule_source: "COMMUNITY"
+    tags: ["cpp", "stl", "parallel", "cpu", "performance"]
+    documentation_links: ["https://en.cppreference.com/w/cpp/algorithm/for_each"]
+    created_by: "cpp-performance-team"
+
+  - rule_id: "PYTHON_MULTIPROCESSING_UTILIZATION_001"
+    rule_name: "Python Multiprocessing for CPU Utilization"
+    callstack_pattern: ".*(multiprocessing|concurrent\\.futures\\.ProcessPool).*"
+    platform_pattern: ".*(python3|Python.*3|cpython).*"
+    technology_stack: "Python"
+    rule_category: "UTILIZATION"
+    optimization_type: "UTILIZATION"
+    description: "CPU-bound Python code running single-threaded due to GIL, causing low CPU utilization"
+    optimization_description: "UTILIZATION optimization: Use multiprocessing or ProcessPoolExecutor to parallelize CPU-bound tasks and increase CPU utilization."
+    implementation_complexity: "MEDIUM"
+    rule_source: "COMMUNITY"
+    tags: ["python", "multiprocessing", "utilization", "cpu"]
+    documentation_links: ["https://docs.python.org/3/library/multiprocessing.html"]
+    created_by: "python-performance-team"
+
+  - rule_id: "JAVA_STREAM_PARALLEL_001"
+    rule_name: "Java Stream Parallel Processing Optimization"
+    callstack_pattern: ".*(Stream\\.parallel|parallelStream).*"
+    platform_pattern: ".*(hotspot|OpenJDK|Oracle.*JDK).*"
+    technology_stack: "Java"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Inefficient use of parallel streams causing overhead in small datasets or IO-bound operations"
+    optimization_description: "SOFTWARE optimization: Use parallel streams only for CPU-intensive operations with large datasets (>10,000 elements). Consider collection size, operation complexity, and thread creation overhead."
+    implementation_complexity: "MEDIUM"
+    rule_source: "COMMUNITY"
+    tags: ["java", "stream", "parallel", "performance", "cpu"]
+    documentation_links: ["https://docs.oracle.com/javase/8/docs/api/java/util/stream/Stream.html"]
+    created_by: "java-performance-team"
+
+  - rule_id: "GO_MAP_SIZING_001"
+    rule_name: "Go Map Initial Size Optimization"
+    callstack_pattern: ".*(make.*map|map\\[.*\\].*)"
+    platform_pattern: ".*(go1\\.[0-9]+|golang).*"
+    technology_stack: "Go"
+    rule_category: "Memory"
+    optimization_type: "SOFTWARE"
+    description: "Go maps created without size hints causing gradual resizing and memory reallocation"
+    optimization_description: "SOFTWARE optimization: Initialize maps with make(map[KeyType]ValueType, size) when approximate size is known. Use maps.Clone() for shallow copies in Go 1.21+."
+    implementation_complexity: "EASY"
+    rule_source: "COMMUNITY"
+    tags: ["go", "map", "initialization", "memory"]
+    documentation_links: ["https://golang.org/doc/effective_go#maps"]
+    created_by: "go-performance-team"
+
+  - rule_id: "PYTHON_STRING_JOIN_001"
+    rule_name: "Python String Join Performance"
+    callstack_pattern: ".*(\\.join|\\+.*string.*loop).*"
+    platform_pattern: ".*(python3|Python.*3|cpython).*"
+    technology_stack: "Python"
+    rule_category: "Memory"
+    optimization_type: "SOFTWARE"
+    description: "String concatenation in loops using + operator instead of join() causing quadratic complexity"
+    optimization_description: "SOFTWARE optimization: Use ''.join(string_list) instead of += or + in loops. For mixed types, use f-strings or str.format() instead of +."
+    implementation_complexity: "EASY"
+    rule_source: "COMMUNITY"
+    tags: ["python", "string", "join", "concatenation", "performance"]
+    documentation_links: ["https://docs.python.org/3/library/stdtypes.html#str.join"]
+    created_by: "python-performance-team"
+
+  - rule_id: "CPP_SMART_POINTER_001"
+    rule_name: "C++ Smart Pointer Usage Optimization"
+    callstack_pattern: ".*(new|delete|malloc|free).*"
+    platform_pattern: ".*(gcc|clang|msvc).*"
+    technology_stack: "C++"
+    rule_category: "Memory"
+    optimization_type: "SOFTWARE"
+    description: "Manual memory management with new/delete instead of smart pointers leading to potential leaks"
+    optimization_description: "SOFTWARE optimization: Replace raw pointers with std::unique_ptr for exclusive ownership, std::shared_ptr for shared ownership. Use make_unique/make_shared for exception safety."
+    implementation_complexity: "MEDIUM"
+    rule_source: "VERIFIED"
+    tags: ["cpp", "smart_pointer", "memory", "leak"]
+    documentation_links: ["https://en.cppreference.com/w/cpp/memory/unique_ptr"]
+    created_by: "cpp-performance-team"
+
+  - rule_id: "GO_INTERFACE_ALLOCATION_001"
+    rule_name: "Go Interface Allocation Optimization"
+    callstack_pattern: ".*(interface\\{\\}|interface.*struct).*"
+    platform_pattern: ".*(go1\\.[0-9]+|golang).*"
+    technology_stack: "Go"
+    rule_category: "Memory"
+    optimization_type: "SOFTWARE"
+    description: "Excessive interface allocations in hot paths causing memory pressure"
+    optimization_description: "SOFTWARE optimization: Avoid interface{} in hot paths, use concrete types where possible. Pre-allocate interface conversions outside loops. Use generics (Go 1.18+) instead of interface{} for type-safe containers."
+    implementation_complexity: "MEDIUM"
+    rule_source: "COMMUNITY"
+    tags: ["go", "interface", "allocation", "memory"]
+    documentation_links: ["https://golang.org/doc/effective_go#interfaces"]
+    created_by: "go-performance-team"
+
+  - rule_id: "PYTHON_GENERATOR_001"
+    rule_name: "Python Generator Expression Optimization"
+    callstack_pattern: ".*(list\\(.*\\)|\\[.*\\].*loop).*"
+    platform_pattern: ".*(python3|Python.*3|cpython).*"
+    technology_stack: "Python"
+    rule_category: "Memory"
+    optimization_type: "SOFTWARE"
+    description: "Creating full lists in memory instead of using memory-efficient generators"
+    optimization_description: "SOFTWARE optimization: Use generator expressions (x for x in y) instead of list comprehensions [x for x in y] when iterating once. Use itertools for efficient iteration patterns."
+    implementation_complexity: "EASY"
+    rule_source: "COMMUNITY"
+    tags: ["python", "generator", "memory", "iteration"]
+    documentation_links: ["https://docs.python.org/3/howto/functional.html#generator-expressions-and-list-comprehensions"]
+    created_by: "python-performance-team"
+
+  - rule_id: "CPP_CONSTEXPR_001"
+    rule_name: "C++ Constexpr Optimization"
+    callstack_pattern: ".*(const|static.*const|constexpr).*"
+    platform_pattern: ".*(gcc|clang|msvc).*"
+    technology_stack: "C++"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Missing constexpr opportunities for compile-time computation"
+    optimization_description: "SOFTWARE optimization: Use constexpr for compile-time evaluation of functions and variables. Replace runtime calculations with constexpr when inputs are known at compile time."
+    implementation_complexity: "MEDIUM"
+    rule_source: "COMMUNITY"
+    tags: ["cpp", "constexpr", "compile-time", "optimization"]
+    documentation_links: ["https://en.cppreference.com/w/cpp/language/constexpr"]
+    created_by: "cpp-performance-team"
+
+  - rule_id: "JAVA_OPTIONAL_PERFORMANCE_001"
+    rule_name: "Java Optional Usage Performance"
+    callstack_pattern: ".*(Optional\\.of|Optional\\.ofNullable).*"
+    platform_pattern: ".*(hotspot|OpenJDK|Oracle.*JDK).*"
+    technology_stack: "Java"
+    rule_category: "Memory"
+    optimization_type: "SOFTWARE"
+    description: "Unnecessary Optional creation and chaining in performance-critical paths"
+    optimization_description: "SOFTWARE optimization: Avoid Optional in hot loops or performance-critical code. Use null checks for simple cases. Consider Optional only for public APIs and return values."
+    implementation_complexity: "EASY"
+    rule_source: "COMMUNITY"
+    tags: ["java", "optional", "performance", "memory"]
+    documentation_links: ["https://docs.oracle.com/javase/8/docs/api/java/util/Optional.html"]
+    created_by: "java-performance-team"
+
+  - rule_id: "JAVA_REFLECTION_CACHE_002"
+    rule_name: "Java Reflection Method Cache Optimization"
+    callstack_pattern: ".*(Class\\.getMethod|Class\\.getDeclaredMethod).*"
+    platform_pattern: ".*(hotspot|OpenJDK|Oracle.*JDK).*"
+    technology_stack: "Java"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Repeated reflection method lookups causing performance overhead in hot paths"
+    optimization_description: "SOFTWARE optimization: Cache Method objects in static fields. Use MethodHandles for better performance. Consider using LambdaMetafactory for dynamic method invocation."
+    implementation_complexity: "MEDIUM"
+    rule_source: "COMMUNITY"
+    tags: ["java", "reflection", "method", "cache", "performance"]
+    documentation_links: ["https://docs.oracle.com/javase/8/docs/api/java/lang/reflect/Method.html"]
+    created_by: "performance-team"
+
+  - rule_id: "GO_DEFER_PERFORMANCE_002"
+    rule_name: "Go Defer Statement Performance"
+    callstack_pattern: ".*(defer.*func|defer.*close).*"
+    platform_pattern: ".*(go1\\.[0-9]+|golang).*"
+    technology_stack: "Go"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Excessive use of defer statements in hot paths causing performance overhead"
+    optimization_description: "SOFTWARE optimization: Move defer statements outside hot loops. Use explicit cleanup for short functions. Consider direct calls when performance is critical."
+    implementation_complexity: "EASY"
+    rule_source: "COMMUNITY"
+    tags: ["go", "defer", "performance", "optimization"]
+    documentation_links: ["https://golang.org/doc/effective_go#defer"]
+    created_by: "performance-team"
+
+  - rule_id: "JAVA_COLLECTION_COPY_002"
+    rule_name: "Java Collection Copy Performance"
+    callstack_pattern: ".*(Collections\\.copy|ArrayList\\.addAll).*"
+    platform_pattern: ".*(hotspot|OpenJDK|Oracle.*JDK).*"
+    technology_stack: "Java"
+    rule_category: "Memory"
+    optimization_type: "SOFTWARE"
+    description: "Inefficient collection copying causing unnecessary memory allocation and CPU overhead"
+    optimization_description: "SOFTWARE optimization: Use collection constructors with capacity. Use Arrays.asList for fixed-size lists. Consider using Collection.toArray(new T[0]) for array conversion."
+    implementation_complexity: "EASY"
+    rule_source: "COMMUNITY"
+    tags: ["java", "collection", "copy", "memory"]
+    documentation_links: ["https://docs.oracle.com/javase/8/docs/api/java/util/Collections.html"]
+    created_by: "performance-team"
+
+  - rule_id: "CPP_TEMPLATE_META_002"
+    rule_name: "C++ Template Metaprogramming Optimization"
+    callstack_pattern: ".*(template|typename|enable_if).*"
+    platform_pattern: ".*(gcc|clang|msvc).*"
+    technology_stack: "C++"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Runtime polymorphism overhead where compile-time resolution is possible"
+    optimization_description: "SOFTWARE optimization: Use template metaprogramming for compile-time polymorphism. Implement static polymorphism using CRTP pattern. Use concepts (C++20) for better template constraints."
+    implementation_complexity: "COMPLEX"
+    rule_source: "COMMUNITY"
+    tags: ["cpp", "template", "metaprogramming", "optimization"]
+    documentation_links: ["https://en.cppreference.com/w/cpp/language/templates"]
+    created_by: "performance-team"
+
+  - rule_id: "GO_ATOMIC_OPERATIONS_002"
+    rule_name: "Go Atomic Operations Usage"
+    callstack_pattern: ".*(sync/atomic|sync\\.Mutex).*"
+    platform_pattern: ".*(go1\\.[0-9]+|golang).*"
+    technology_stack: "Go"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Using mutex locks where atomic operations would suffice causing contention"
+    optimization_description: "SOFTWARE optimization: Replace mutex locks with atomic operations for simple counters and flags. Use atomic.Value for complex atomic operations. Consider lock-free algorithms."
+    implementation_complexity: "MEDIUM"
+    rule_source: "COMMUNITY"
+    tags: ["go", "atomic", "mutex", "concurrency"]
+    documentation_links: ["https://golang.org/pkg/sync/atomic/"]
+    created_by: "performance-team"
+
+  - rule_id: "JAVA_ARRAY_COPY_002"
+    rule_name: "Java Array Copy Performance"
+    callstack_pattern: ".*(for.*loop.*array.*copy|array.*clone|Arrays\\.asList.*toArray).*"
+    platform_pattern: ".*(hotspot|OpenJDK|Oracle.*JDK).*"
+    technology_stack: "Java"
+    rule_category: "Memory"
+    optimization_type: "SOFTWARE"
+    description: "Inefficient array copying using manual loops or clone() causing unnecessary memory allocation and CPU overhead"
+    optimization_description: "SOFTWARE optimization: Replace manual array copying loops with System.arraycopy. Avoid array.clone() for better performance. Use Arrays.copyOf or Arrays.copyOfRange for partial copies with known sizes."
+    implementation_complexity: "EASY"
+    rule_source: "COMMUNITY"
+    tags: ["java", "array", "copy", "memory"]
+    documentation_links: ["https://docs.oracle.com/javase/8/docs/api/java/lang/System.html#arraycopy-java.lang.Object-int-java.lang.Object-int-int-"]
+    created_by: "performance-team"
+
+  - rule_id: "CPU_WASTE_UTILIZATION_001"
+    rule_name: "Unacceptable CPU Waste Detection"
+    callstack_pattern: ".*(cpu.used|CpuUtilization|ProcessorUsage).*"
+    platform_pattern: ".*"
+    technology_stack: "Infrastructure"
+    rule_category: "CPU"
+    optimization_type: "UTILIZATION"
+    description: "Severely underutilized CPU resources indicating significant waste (P95 < 20%)"
+    optimization_description: "UTILIZATION optimization: Consider downsizing instance or consolidating workloads. Current P95 CPU utilization indicates severe resource waste. Evaluate workload patterns and right-size accordingly."
+    implementation_complexity: "MEDIUM"
+    rule_source: "VERIFIED"
+    tags: ["cpu", "waste", "utilization", "perfspect"]
+    documentation_links: ["https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-optimize-cpu.html"]
+    created_by: "performance-team"
+    created_at: "2025-07-25 08:56:17"
+    metrics: {
+      "thresholds": {
+        "unacceptable_waste": {
+          "p95_threshold": 20,
+          "comparison": "less_than",
+          "evaluation_period_days": 7
+        },
+        "low_utilization": {
+          "p95_threshold": 60,
+          "comparison": "less_than",
+          "evaluation_period_days": 7
+        }
+      },
+      "pattern": {
+        "cpu_metrics": {
+          "utilization": "$.cpu.utilized_percent",
+          "p95_utilization": "$.cpu.p95_utilized_percent",
+          "core_count": "$.cpu.core_count",
+          "thread_count": "$.cpu.thread_count"
+        }
+      },
+      "monitoring_window": {
+        "sample_rate_seconds": 60,
+        "aggregation_function": "p95",
+        "minimum_data_points": 10080 # 7 days worth of minutes
+      }
+    }
+    metadata: {
+      "waste_categories": {
+        "severe": {
+          "threshold": 20,
+          "action": "immediate_rightsizing",
+          "savings_potential": "high"
+        },
+        "moderate": {
+          "threshold": 40,
+          "action": "scheduled_review",
+          "savings_potential": "medium"
+        }
+      },
+      "recommended_actions": [
+        "evaluate_workload_patterns",
+        "consider_spot_instances",
+        "implement_auto_scaling"
+      ]
+    }
+
+  - rule_id: "MEMORY_WASTE_UTILIZATION_001"
+    rule_name: "Unacceptable Memory Waste Detection"
+    callstack_pattern: ".*(memory.used|mem.utilized|MemoryUtilization).*"
+    platform_pattern: ".*"
+    technology_stack: "Infrastructure"
+    rule_category: "Memory"
+    optimization_type: "UTILIZATION"
+    description: "Severely underutilized memory resources indicating significant waste (P95 < 40%)"
+    optimization_description: "UTILIZATION optimization: Consider downsizing instance memory or consolidating workloads. Current P95 memory utilization indicates severe resource waste."
+    implementation_complexity: "MEDIUM"
+    rule_source: "VERIFIED"
+    tags: ["memory", "waste", "utilization", "perfspect"]
+    documentation_links: ["https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/memory-optimized-instances.html"]
+    created_by: "performance-team"
+    created_at: "2025-07-25 08:56:17"
+    metrics: {
+      "thresholds": {
+        "unacceptable_waste": {
+          "p95_threshold": 40,
+          "comparison": "less_than",
+          "evaluation_period_days": 7
+        },
+        "low_utilization": {
+          "p95_threshold": 60,
+          "comparison": "less_than",
+          "evaluation_period_days": 7
+        }
+      },
+      "pattern": {
+        "memory_metrics": {
+          "utilization": "$.memory.utilized_percent",
+          "p95_utilization": "$.memory.p95_utilized_percent",
+          "total_gb": "$.memory.total_gb",
+          "used_gb": "$.memory.used_gb"
+        }
+      },
+      "monitoring_window": {
+        "sample_rate_seconds": 60,
+        "aggregation_function": "p95",
+        "minimum_data_points": 10080
+      }
+    }
+    metadata: {
+      "waste_categories": {
+        "severe": {
+          "threshold": 40,
+          "action": "immediate_rightsizing",
+          "savings_potential": "high"
+        },
+        "moderate": {
+          "threshold": 60,
+          "action": "scheduled_review",
+          "savings_potential": "medium"
+        }
+      },
+      "recommended_actions": [
+        "evaluate_memory_requirements",
+        "consider_burstable_instances",
+        "implement_auto_scaling"
+      ]
+    }
+
+  - rule_id: "DISK_WASTE_UTILIZATION_001"
+    rule_name: "Unacceptable Disk Waste Detection"
+    callstack_pattern: ".*(disk.used|VolumeUsage|DiskUtilization).*"
+    platform_pattern: ".*"
+    technology_stack: "Infrastructure"
+    rule_category: "Storage"
+    optimization_type: "UTILIZATION"
+    description: "Severely underutilized disk resources indicating significant waste (P95 < 40%)"
+    optimization_description: "UTILIZATION optimization: Consider downsizing EBS volumes or changing volume type. Current P95 disk utilization indicates severe resource waste."
+    implementation_complexity: "MEDIUM"
+    rule_source: "VERIFIED"
+    tags: ["storage", "waste", "utilization", "perfspect"]
+    documentation_links: ["https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ebs-volume-types.html"]
+    created_by: "performance-team"
+    created_at: "2025-07-25 08:56:17"
+    metrics: {
+      "thresholds": {
+        "unacceptable_waste": {
+          "p95_threshold": 40,
+          "comparison": "less_than",
+          "evaluation_period_days": 7
+        },
+        "low_utilization": {
+          "p95_threshold": 60,
+          "comparison": "less_than",
+          "evaluation_period_days": 7
+        }
+      },
+      "pattern": {
+        "disk_metrics": {
+          "utilization": "$.disk.utilized_percent",
+          "p95_utilization": "$.disk.p95_utilized_percent",
+          "iops_utilized": "$.disk.iops.utilized_percent",
+          "throughput_utilized": "$.disk.throughput.utilized_percent"
+        }
+      },
+      "monitoring_window": {
+        "sample_rate_seconds": 300,
+        "aggregation_function": "p95",
+        "minimum_data_points": 2016
+      }
+    }
+    metadata: {
+      "waste_categories": {
+        "severe": {
+          "threshold": 40,
+          "action": "volume_resize",
+          "savings_potential": "high"
+        },
+        "moderate": {
+          "threshold": 60,
+          "action": "scheduled_review",
+          "savings_potential": "medium"
+        }
+      },
+      "recommended_actions": [
+        "evaluate_storage_requirements",
+        "consider_gp3_migration",
+        "implement_lifecycle_policies"
+      ]
+    }
+
+  - rule_id: "SM_WASTE_UTILIZATION_001"
+    rule_name: "Unacceptable Streaming Multiprocessor Waste Detection"
+    callstack_pattern: ".*(gpu.sm|SMUtilization).*"
+    platform_pattern: ".*"
+    technology_stack: "Infrastructure"
+    rule_category: "GPU"
+    optimization_type: "UTILIZATION"
+    description: "Severely underutilized GPU SM resources indicating significant waste (P95 < 30%)"
+    optimization_description: "UTILIZATION optimization: Consider downsizing GPU instance type or sharing GPU resources. Current P95 SM utilization indicates severe resource waste."
+    implementation_complexity: "MEDIUM"
+    rule_source: "VERIFIED"
+    tags: ["gpu", "sm", "waste", "utilization", "perfspect"]
+    documentation_links: ["https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/accelerated-computing-instances.html"]
+    created_by: "performance-team"
+    created_at: "2025-07-25 08:56:17"
+    metrics: {
+      "thresholds": {
+        "unacceptable_waste": {
+          "p95_threshold": 30,
+          "comparison": "less_than",
+          "evaluation_period_days": 7
+        },
+        "low_utilization": {
+          "p95_threshold": 60,
+          "comparison": "less_than",
+          "evaluation_period_days": 7
+        }
+      },
+      "pattern": {
+        "gpu_metrics": {
+          "sm_utilization": "$.gpu.sm_utilized_percent",
+          "p95_sm_utilization": "$.gpu.p95_sm_utilized_percent",
+          "memory_utilized": "$.gpu.memory.utilized_percent",
+          "power_utilized": "$.gpu.power.utilized_percent"
+        }
+      },
+      "monitoring_window": {
+        "sample_rate_seconds": 60,
+        "aggregation_function": "p95",
+        "minimum_data_points": 10080
+      }
+    }
+    metadata: {
+      "waste_categories": {
+        "severe": {
+          "threshold": 30,
+          "action": "immediate_rightsizing",
+          "savings_potential": "high"
+        },
+        "moderate": {
+          "threshold": 50,
+          "action": "scheduled_review",
+          "savings_potential": "medium"
+        }
+      },
+      "recommended_actions": [
+        "evaluate_gpu_requirements",
+        "consider_elastic_inference",
+        "implement_gpu_sharing"
+      ]
+    }
+
+  - rule_id: "GO_ALLOCATION_001"
+    rule_name: "Go Memory Allocation Optimization"
+    callstack_pattern: ".*(runtime\\.mallocgc|runtime\\.newobject).*"
+    platform_pattern: ".*(go1\\.[0-9]+|golang).*"
+    technology_stack: "Go"
+    rule_category: "Memory"
+    optimization_type: "SOFTWARE"
+    description: "Excessive memory allocations detected through runtime.mallocgc/newobject calls, causing increased GC pressure and memory churn"
+    optimization_description: |
+      SOFTWARE optimization in order of priority:
+      
+      1. Reduce Allocations:
+         - Use sync.Pool for frequently allocated/deallocated objects
+         - Pre-allocate slices with known capacity: make([]Type, 0, cap)
+         - Avoid string concatenation in loops, use strings.Builder
+         - Return pointers only when necessary
+      
+      2. Memory Settings:
+         - Tune GOGC based on monitoring (default 100):
+           * GOGC=50 for less memory, more GC
+           * GOGC=200 for more memory, less GC
+         - Use runtime.SetMaxHeap if available in your Go version
+         - Consider runtime.SetMutexProfileFraction for lock contention
+      
+      3. Profile and Monitor:
+         - Use pprof to identify allocation hot spots
+         - Monitor GC frequency and duration
+         - Track allocation size distribution
+      
+      Only after software optimization, consider hardware changes if needed.
+    implementation_complexity: "MEDIUM"
+    rule_source: "VERIFIED"
+    tags: ["go", "memory", "allocation", "gc", "performance"]
+    documentation_links: [
+      "https://golang.org/pkg/sync/#Pool",
+      "https://golang.org/pkg/runtime/#MemStats",
+      "https://golang.org/doc/diagnostics#heap_profile"
+    ]
+    created_by: "performance-team"
+    created_at: "2025-07-25 16:54:12"
+    metrics: {
+      "thresholds": {
+        "critical": {
+          "allocations_per_second": 100000,
+          "gc_pause_ms": 100,
+          "heap_objects": 1000000,
+          "comparison": "greater_than",
+          "evaluation_period_minutes": 5
+        },
+        "warning": {
+          "allocations_per_second": 50000,
+          "gc_pause_ms": 50,
+          "heap_objects": 500000,
+          "comparison": "greater_than",
+          "evaluation_period_minutes": 15
+        }
+      },
+      "pattern": {
+        "memory_metrics": {
+          "allocation_rate": "$.go.mem.alloc_rate",
+          "gc_pause": "$.go.gc.pause_ms",
+          "heap_objects": "$.go.mem.heap_objects",
+          "heap_inuse": "$.go.mem.heap_inuse_bytes"
+        }
+      },
+      "monitoring_window": {
+        "sample_rate_seconds": 60,
+        "aggregation_function": "avg",
+        "minimum_data_points": 5
+      }
+    }
+    metadata: {
+      "allocation_patterns": {
+        "high_impact": [
+          "Slice growth without capacity",
+          "String concatenation in loops",
+          "Map initialization without size hints",
+          "Interface conversions in hot paths"
+        ],
+        "common_fixes": {
+          "sync_pool": {
+            "use_case": "Frequent alloc/dealloc cycles",
+            "impact": "high",
+            "complexity": "medium"
+          },
+          "preallocation": {
+            "use_case": "Known size collections",
+            "impact": "medium",
+            "complexity": "low"
+          },
+          "strings_builder": {
+            "use_case": "String concatenation",
+            "impact": "high",
+            "complexity": "low"
+          }
+        }
+      },
+      "profiling_guide": {
+        "commands": [
+          "go tool pprof -alloc_space heap.prof",
+          "go tool pprof -inuse_space heap.prof",
+          "GODEBUG=gctrace=1"
+        ],
+        "metrics_to_watch": [
+          "alloc-rate",
+          "gc-pause",
+          "heap-inuse"
+        ]
+      }
+    }
+  - rule_id: "THRIFT_SERIALIZATION_OPTIMIZATION_001"
+    rule_name: "Thrift Serialization/Deserialization Hotspot"
+    callstack_pattern: ".*(org.apache.thrift.protocol|org.apache.thrift.transport).*"
+    platform_pattern: ".*"
+    technology_stack: "Java"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Excessive CPU spent serializing/deserializing Thrift messages"
+    optimization_description: "SOFTWARE optimization: Avoid deep, large, or optional fields that are unused. Evaluate Protobuf migration if schema stability is maintained."
+    implementation_complexity: "MEDIUM"
+    rule_source: "COMMUNITY"
+    tags: ["thrift", "serialization", "deserialization", "cpu"]
+    documentation_links: ["https://thrift.apache.org/docs/protocols"]
+    created_by: "YourCompany-performance-team"
+  - rule_id: "FINAGLE_FILTER_CHAIN_OPTIMIZATION_001"
+    rule_name: "Finagle Filter Chain Performance"
+    callstack_pattern: ".*(com.twitter.finagle.Filter|com.twitter.finagle.Service).*"
+    platform_pattern: ".*(hotspot|OpenJDK|Oracle.*JDK).*"
+    technology_stack: "Java"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Excessively long or redundant Finagle filter chains increasing request latency"
+    optimization_description: "SOFTWARE optimization: Minimize number of filters in critical path. Combine small filters where possible, and avoid redundant stats/logging/tracing filters. Profile with async-profiler or Flight Recorder to see filter hotspots."
+    implementation_complexity: "MEDIUM"
+    rule_source: "COMMUNITY"
+    tags: ["finagle", "filter", "latency", "optimization"]
+    documentation_links: ["https://twitter.github.io/finagle/guide/Filters.html"]
+    created_by: "YourCompany-performance-team"
+  - rule_id: "FINAGLE_FUTURE_FANOUT_001"
+    rule_name: "Finagle Future Fan-out/concurrency Management"
+    callstack_pattern: ".*(com.twitter.util.Future|Promise|com.twitter.util.Try).*"
+    platform_pattern: ".*"
+    technology_stack: "Java"
+    rule_category: "Concurrency"
+    optimization_type: "SOFTWARE"
+    description: "Unbounded fan-out of Futures causes thread pool or event loop contention"
+    optimization_description: "SOFTWARE optimization: When issuing many Futures, limit concurrency with AsyncSemaphore, FuturePool, or Batchers. Monitor and cap outstanding requests. Throttle and collapse requests when fan-out causes GC or thread starvation."
+    implementation_complexity: "MEDIUM"
+    rule_source: "COMMUNITY"
+    tags: ["finagle", "future", "concurrency", "throttling"]
+    documentation_links: ["https://twitter.github.io/util/docs/#com.twitter.concurrent.AsyncSemaphore"]
+    created_by: "YourCompany-performance-team"
+  - rule_id: "JAVA_BUFFER_POOLING_001"
+    rule_name: "Java Buffer Pooling for Frequent Allocation/Deallocation"
+    callstack_pattern: ".*(ByteBuffer\\.allocate|PooledByteBufAllocator|BufferedInputStream).*"
+    platform_pattern: ".*(hotspot|OpenJDK|Oracle.*JDK).*"
+    technology_stack: "Java"
+    rule_category: "Memory"
+    optimization_type: "SOFTWARE"
+    description: "Frequent buffer allocation/deallocation causing excessive GC pressure and memory churn"
+    optimization_description: "SOFTWARE optimization: Implement buffer pooling using PooledByteBufAllocator from Netty or custom buffer pools. Reuse buffers across operations to reduce GC overhead. Example: Singer reduced CPU from 176% to 156% and GC time from 7k ms to 1k ms with reader buffer pooling."
+    implementation_complexity: "MEDIUM"
+    rule_source: "VERIFIED"
+    tags: ["java", "buffer", "pooling", "gc", "memory", "netty"]
+    documentation_links: ["https://netty.io/wiki/reference-counted-objects.html"]
+    created_by: "YourCompany-performance-team"
+  - rule_id: "JAVA_DIRECT_MEMORY_OPTIMIZATION_001"
+    rule_name: "Java Direct Memory Allocation Optimization"
+    callstack_pattern: ".*(DirectByteBuffer|io\\.netty.*direct|MaxDirectMemorySize).*"
+    platform_pattern: ".*(hotspot|OpenJDK|Oracle.*JDK).*"
+    technology_stack: "Java"
+    rule_category: "Memory"
+    optimization_type: "SOFTWARE"
+    description: "Excessive direct memory allocation causing off-heap memory pressure and potential OOMs"
+    optimization_description: "SOFTWARE optimization: Use custom pooled allocators to reduce direct buffer usage. Configure -XX:MaxDirectMemorySize appropriately. Monitor and limit Netty direct buffer allocations. Consider using heap buffers for short-lived operations."
+    implementation_complexity: "MEDIUM"
+    rule_source: "VERIFIED"
+    tags: ["java", "direct_memory", "netty", "off_heap", "optimization"]
+    documentation_links: ["https://docs.oracle.com/javase/8/docs/technotes/guides/troubleshoot/memleaks002.html"]
+    created_by: "YourCompany-performance-team"
+  - rule_id: "JAVA_BYTEBUFFER_REUSE_001"
+    rule_name: "Java ByteBuffer Reuse Pattern for Text Processing"
+    callstack_pattern: ".*(ByteBuffer\\.allocate|String.*getBytes|new.*byte\\[\\]).*"
+    platform_pattern: ".*(hotspot|OpenJDK|Oracle.*JDK).*"
+    technology_stack: "Java"
+    rule_category: "Memory"
+    optimization_type: "SOFTWARE"
+    description: "Runtime byte array allocation and string conversions in text processing causing performance bottlenecks"
+    optimization_description: "SOFTWARE optimization: Move from String to ByteBuffer for text processing. Eliminate string parsing for common cases. Preallocate and reuse ByteBuffers. Example: Singer text reader optimization achieved 5-9x CPU reduction by eliminating runtime byte array allocations."
+    implementation_complexity: "MEDIUM"
+    rule_source: "VERIFIED"
+    tags: ["java", "bytebuffer", "text_processing", "string", "allocation"]
+    documentation_links: ["https://docs.oracle.com/javase/8/docs/api/java/nio/ByteBuffer.html"]
+    created_by: "YourCompany-performance-team"
+  - rule_id: "JAVA_STREAMING_PROCESSING_001"
+    rule_name: "Java Streaming vs Micro-batch Processing Memory Optimization"
+    callstack_pattern: ".*(ArrayList.*add|List.*addAll|batch.*size).*"
+    platform_pattern: ".*(hotspot|OpenJDK|Oracle.*JDK).*"
+    technology_stack: "Java"
+    rule_category: "Memory"
+    optimization_type: "SOFTWARE"
+    description: "Micro-batch processing with in-memory buffering causing substantial memory usage instead of streaming"
+    optimization_description: "SOFTWARE optimization: Replace micro-batch List buffering with iterator-like streaming design. Process data directly without loading all into memory first. Example: Singer memory optimization reduced heap usage from 600MB to 30MB (20x reduction) by switching from List buffering to streaming."
+    implementation_complexity: "MEDIUM"
+    rule_source: "VERIFIED"
+    tags: ["java", "streaming", "micro_batch", "memory", "iterator"]
+    documentation_links: ["https://docs.oracle.com/javase/8/docs/api/java/util/Iterator.html"]
+    created_by: "YourCompany-performance-team"
+  - rule_id: "JAVA_QUEUE_DEDUPLICATION_001"
+    rule_name: "Java Event Queue Deduplication for High-Volume Processing"
+    callstack_pattern: ".*(Queue.*add|BlockingQueue|FSEvent|modify.*event).*"
+    platform_pattern: ".*(hotspot|OpenJDK|Oracle.*JDK).*"
+    technology_stack: "Java"
+    rule_category: "Memory"
+    optimization_type: "SOFTWARE"
+    description: "Unbounded event queues with duplicate events causing memory pressure and processing overhead"
+    optimization_description: "SOFTWARE optimization: Implement event deduplication in queues, especially for file system modify events. Use bounded queues with dedup logic to prevent memory accumulation. Example: Singer FSEvent queue optimization with dedup resolved OOMs and latency issues."
+    implementation_complexity: "MEDIUM"
+    rule_source: "VERIFIED"
+    tags: ["java", "queue", "deduplication", "events", "filesystem"]
+    documentation_links: ["https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/BlockingQueue.html"]
+    created_by: "YourCompany-performance-team"
+  - rule_id: "NATIVE_LIBRARY_OPTIMIZATION_001"
+    rule_name: "Native Library Performance Optimization"
+    callstack_pattern: ".*(libz|zlib|jemalloc|libc\\.so).*"
+    platform_pattern: ".*"
+    technology_stack: "General"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Using default native libraries without optimized versions causing unnecessary CPU overhead"
+    optimization_description: "SOFTWARE optimization: Replace vanilla zlib with zlib-ng for 50%+ CPU reduction in compression. Use jemalloc instead of default malloc for 15-38% memory usage reduction. Enable CPU-optimized libraries with AVX/AVX2 support."
+    implementation_complexity: "MEDIUM"
+    rule_source: "VERIFIED"
+    tags: ["native", "zlib", "jemalloc", "compression", "malloc"]
+    documentation_links: ["https://github.com/zlib-ng/zlib-ng", "http://jemalloc.net/"]
+    created_by: "YourCompany-performance-team"
+  - rule_id: "REGEX_COMPILATION_CACHE_001"
+    rule_name: "Regex Pattern Compilation Caching for URL Processing"
+    callstack_pattern: ".*(Pattern\\.compile.*URL|URLDecoder|URLEncoder|regex.*url).*"
+    platform_pattern: ".*"
+    technology_stack: "General"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Repeated regex compilation for URL processing causing excessive CPU usage (86% of processing time)"
+    optimization_description: "SOFTWARE optimization: Cache compiled regex patterns as static fields. Avoid regex for simple string operations like URL encoding/decoding. Use optimized URL processing libraries like YourCompanyURLEncoder - http://pinch.your-domain.com/YourCompanyencoder. Example: YourCompany URL processing fix achieved 2.2x throughput improvement and 6x GC reduction."
+    implementation_complexity: "EASY"
+    rule_source: "VERIFIED"
+    tags: ["regex", "url", "pattern", "compilation", "cache", "encoder"]
+    documentation_links: ["https://docs.oracle.com/javase/8/docs/api/java/util/regex/Pattern.html", "http://pinch.your-domain.com/YourCompanyencoder"]
+    created_by: "YourCompany-performance-team"
+  - rule_id: "KVSTORE_BATCH_OPTIMIZATION_001"
+    rule_name: "KVStore Batch Get Optimization"
+    callstack_pattern: ".*(KVStoreClient\\.get|KVStoreClient\\.batch).*"
+    platform_pattern: ".*"
+    technology_stack: "Java"
+    rule_category: "Network"
+    optimization_type: "SOFTWARE"
+    description: "Inefficient batch requests leading to high latency or serialization overhead"
+    optimization_description: "SOFTWARE optimization: Perform batching for single call to KVStore. Improve KVStoreClient to improve batching across datasets "
+    implementation_complexity: "MEDIUM"
+    rule_source: "COMMUNITY"
+    tags: ["kvstore", "batch", "latency", "optimization"]
+    documentation_links: []
+    created_by: "YourCompany-perf-team"
+  - rule_id: "JAVA_FASTUTIL_PRIMITIVE_COLLECTIONS_001"
+    rule_name: "Java FastUtil Primitive Collections Optimization"
+    callstack_pattern: ".*(HashMap.*Integer|ArrayList.*Integer|HashSet.*Integer).*"
+    platform_pattern: ".*(hotspot|OpenJDK|Oracle.*JDK).*"
+    technology_stack: "Java"
+    rule_category: "Memory"
+    optimization_type: "SOFTWARE"
+    description: "Using boxed primitive collections causing excessive memory overhead and GC pressure"
+    optimization_description: "SOFTWARE optimization: Replace boxed primitive collections with FastUtil equivalents. Use Int2ObjectMap instead of HashMap<Integer, Object>, IntArrayList instead of ArrayList<Integer>. Reduces memory usage by 3-4x and improves performance."
+    implementation_complexity: "EASY"
+    rule_source: "VERIFIED"
+    tags: ["java", "fastutil", "primitive", "collections", "memory"]
+    documentation_links: ["https://fastutil.di.unimi.it/"]
+    created_by: "performance-team"
+  - rule_id: "JAVA_CHRONICLE_MAP_OFF_HEAP_001"
+    rule_name: "Java Chronicle Map Off-Heap Storage"
+    callstack_pattern: ".*(ConcurrentHashMap|HashMap.*large).*"
+    platform_pattern: ".*(hotspot|OpenJDK|Oracle.*JDK).*"
+    technology_stack: "Java"
+    rule_category: "Memory"
+    optimization_type: "SOFTWARE"
+    description: "Large in-memory maps causing heap pressure and GC pauses"
+    optimization_description: "SOFTWARE optimization: Replace large in-memory maps with Chronicle Map for off-heap storage. Reduces GC pressure and enables larger datasets. Use for caches, lookup tables, and persistent key-value storage."
+    implementation_complexity: "MEDIUM"
+    rule_source: "VERIFIED"
+    tags: ["java", "chronicle_map", "off_heap", "gc", "memory"]
+    documentation_links: ["https://github.com/OpenHFT/Chronicle-Map"]
+    created_by: "performance-team"
+  - rule_id: "JAVA_DISRUPTOR_LOCK_FREE_001"
+    rule_name: "Java LMAX Disruptor Lock-Free Queue"
+    callstack_pattern: ".*(BlockingQueue|ArrayBlockingQueue|LinkedBlockingQueue).*"
+    platform_pattern: ".*(hotspot|OpenJDK|Oracle.*JDK).*"
+    technology_stack: "Java"
+    rule_category: "Concurrency"
+    optimization_type: "SOFTWARE"
+    description: "Blocking queues causing thread contention and context switching overhead"
+    optimization_description: "SOFTWARE optimization: Replace blocking queues with LMAX Disruptor for lock-free, high-throughput message passing. Achieves 6M messages/sec vs 0.5M for BlockingQueue. Use for high-frequency trading, event processing."
+    implementation_complexity: "MEDIUM"
+    rule_source: "VERIFIED"
+    tags: ["java", "disruptor", "lock_free", "queue", "concurrency"]
+    documentation_links: ["https://lmax-exchange.github.io/disruptor/"]
+    created_by: "performance-team"
+  - rule_id: "JAVA_CAFFEINE_CACHE_001"
+    rule_name: "Java Caffeine High-Performance Cache"
+    callstack_pattern: ".*(ConcurrentHashMap.*cache|HashMap.*cache|Guava.*Cache).*"
+    platform_pattern: ".*(hotspot|OpenJDK|Oracle.*JDK).*"
+    technology_stack: "Java"
+    rule_category: "Memory"
+    optimization_type: "SOFTWARE"
+    description: "Inefficient caching implementations causing memory waste and poor hit ratios"
+    optimization_description: "SOFTWARE optimization: Replace manual caching or Guava Cache with Caffeine. Provides better memory efficiency, higher throughput (3x faster than Guava), and advanced eviction policies. Use async loading for non-blocking cache misses."
+    implementation_complexity: "EASY"
+    rule_source: "VERIFIED"
+    tags: ["java", "caffeine", "cache", "performance", "memory"]
+    documentation_links: ["https://github.com/ben-manes/caffeine"]
+    created_by: "performance-team"
+  - rule_id: "PYTHON_ORJSON_JSON_PROCESSING_001"
+    rule_name: "Python orjson High-Performance JSON Library"
+    callstack_pattern: ".*(json\\.loads|json\\.dumps|ujson).*"
+    platform_pattern: ".*(python3|Python.*3|cpython).*"
+    technology_stack: "Python"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Slow JSON processing with standard library or ujson causing CPU bottlenecks"
+    optimization_description: "SOFTWARE optimization: Replace json/ujson with orjson for 2-5x faster JSON processing. Written in Rust with SIMD optimizations. Use orjson.loads() and orjson.dumps() as drop-in replacements."
+    implementation_complexity: "EASY"
+    rule_source: "VERIFIED"
+    tags: ["python", "orjson", "json", "performance", "rust"]
+    documentation_links: ["https://github.com/ijl/orjson"]
+    created_by: "performance-team"
+  - rule_id: "PYTHON_POLARS_DATAFRAME_001"
+    rule_name: "Python Polars High-Performance DataFrame"
+    callstack_pattern: ".*(pandas\\.DataFrame|pd\\.read_csv|pandas\\.concat).*"
+    platform_pattern: ".*(python3|Python.*3|cpython).*"
+    technology_stack: "Python"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Slow pandas operations causing performance bottlenecks in data processing"
+    optimization_description: "SOFTWARE optimization: Replace pandas with Polars for 10-100x faster data processing. Written in Rust with lazy evaluation and SIMD. Use pl.DataFrame() and lazy() operations for optimal performance."
+    implementation_complexity: "MEDIUM"
+    rule_source: "VERIFIED"
+    tags: ["python", "polars", "dataframe", "pandas", "rust"]
+    documentation_links: ["https://pola.rs/"]
+    created_by: "performance-team"
+  - rule_id: "PYTHON_UVLOOP_ASYNCIO_001"
+    rule_name: "Python uvloop High-Performance Event Loop"
+    callstack_pattern: ".*(asyncio\\.run|asyncio\\.get_event_loop).*"
+    platform_pattern: ".*(python3|Python.*3|cpython).*"
+    technology_stack: "Python"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Standard asyncio event loop causing performance bottlenecks in async applications"
+    optimization_description: "SOFTWARE optimization: Replace default asyncio event loop with uvloop for 2-4x performance improvement. Built on libuv (Node.js). Use asyncio.set_event_loop_policy(uvloop.EventLoopPolicy()) at startup."
+    implementation_complexity: "EASY"
+    rule_source: "VERIFIED"
+    tags: ["python", "uvloop", "asyncio", "event_loop", "performance"]
+    documentation_links: ["https://github.com/MagicStack/uvloop"]
+    created_by: "performance-team"
+  - rule_id: "PYTHON_NUMBA_JIT_COMPILATION_001"
+    rule_name: "Python Numba JIT Compilation for Numerical Code"
+    callstack_pattern: ".*(for.*range.*numpy|numpy.*loop|math\\..*loop).*"
+    platform_pattern: ".*(python3|Python.*3|cpython).*"
+    technology_stack: "Python"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Slow numerical computations in pure Python causing performance bottlenecks"
+    optimization_description: "SOFTWARE optimization: Use Numba @jit decorator for numerical functions to achieve near C performance. Compiles Python to machine code. Use @njit for no-Python mode and parallel=True for automatic parallelization."
+    implementation_complexity: "EASY"
+    rule_source: "VERIFIED"
+    tags: ["python", "numba", "jit", "numerical", "performance"]
+    documentation_links: ["https://numba.pydata.org/"]
+    created_by: "performance-team"
+  - rule_id: "GO_SYNC_POOL_OBJECT_REUSE_001"
+    rule_name: "Go sync.Pool Object Reuse Optimization"
+    callstack_pattern: ".*(make.*struct|new.*struct|&.*struct).*"
+    platform_pattern: ".*(go1\\.[0-9]+|golang).*"
+    technology_stack: "Go"
+    rule_category: "Memory"
+    optimization_type: "SOFTWARE"
+    description: "Frequent object allocation/deallocation causing GC pressure and memory churn"
+    optimization_description: "SOFTWARE optimization: Use sync.Pool to reuse expensive objects like buffers, structs, or slices. Reduces GC pressure and allocation overhead. Example: var pool = sync.Pool{New: func() interface{} { return &MyStruct{} }}"
+    implementation_complexity: "EASY"
+    rule_source: "VERIFIED"
+    tags: ["go", "sync_pool", "object_reuse", "gc", "memory"]
+    documentation_links: ["https://golang.org/pkg/sync/#Pool"]
+    created_by: "performance-team"
+  - rule_id: "GO_FASTHTTP_HTTP_SERVER_001"
+    rule_name: "Go FastHTTP High-Performance HTTP Server"
+    callstack_pattern: ".*(net/http\\.ListenAndServe|http\\.Server).*"
+    platform_pattern: ".*(go1\\.[0-9]+|golang).*"
+    technology_stack: "Go"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Standard net/http causing performance bottlenecks in high-throughput HTTP services"
+    optimization_description: "SOFTWARE optimization: Replace net/http with fasthttp for 10x better performance. Zero memory allocations per request. Use fasthttp.RequestHandler and fasthttp.ListenAndServe() for maximum throughput."
+    implementation_complexity: "MEDIUM"
+    rule_source: "VERIFIED"
+    tags: ["go", "fasthttp", "http", "performance", "zero_alloc"]
+    documentation_links: ["https://github.com/valyala/fasthttp"]
+    created_by: "performance-team"
+  - rule_id: "GO_SONIC_JSON_PROCESSING_001"
+    rule_name: "Go Sonic High-Performance JSON Library"
+    callstack_pattern: ".*(json\\.Marshal|json\\.Unmarshal|encoding/json).*"
+    platform_pattern: ".*(go1\\.[0-9]+|golang).*"
+    technology_stack: "Go"
+    rule_category: "CPU"
+    optimization_type: "SOFTWARE"
+    description: "Standard encoding/json causing CPU bottlenecks in JSON-heavy applications"
+    optimization_description: "SOFTWARE optimization: Replace encoding/json with sonic for 2-10x faster JSON processing. Uses SIMD instructions and JIT compilation. Use sonic.Marshal() and sonic.Unmarshal() as drop-in replacements."
+    implementation_complexity: "EASY"
+    rule_source: "VERIFIED"
+    tags: ["go", "sonic", "json", "performance", "simd"]
+    documentation_links: ["https://github.com/bytedance/sonic"]
+    created_by: "performance-team"
+  - rule_id: "GO_BIGCACHE_MEMORY_CACHE_001"
+    rule_name: "Go BigCache High-Performance Memory Cache"
+    callstack_pattern: ".*(map.*cache|sync\\.Map.*cache).*"
+    platform_pattern: ".*(go1\\.[0-9]+|golang).*"
+    technology_stack: "Go"
+    rule_category: "Memory"
+    optimization_type: "SOFTWARE"
+    description: "Manual map-based caching causing GC pressure and memory overhead"
+    optimization_description: "SOFTWARE optimization: Replace manual caching with BigCache for GC-free operation. Stores millions of entries without GC overhead. Use bigcache.NewBigCache() with appropriate configuration for high-performance caching."
+    implementation_complexity: "EASY"
+    rule_source: "VERIFIED"
+    tags: ["go", "bigcache", "cache", "gc_free", "memory"]
+    documentation_links: ["https://github.com/allegro/bigcache"]
+    created_by: "performance-team"
+
+  # ==============================
+  # UTILIZATION OPPORTUNITY RECOMMENDATIONS
+  # ==============================
+
+  - rule_id: "EC2_HORIZONTAL_SIZING_UTILIZATION_001"
+    rule_name: "EC2 Horizontal Scaling Utilization Optimization"
+    callstack_pattern: ".*(AutoScaling|EC2.*launch|instance.*count).*"
+    platform_pattern: ".*(aws|ec2|autoscaling).*"
+    technology_stack: "Infrastructure"
+    rule_category: "UTILIZATION"
+    optimization_type: "UTILIZATION"
+    description: "Underutilized EC2 instances requiring horizontal scaling optimization through load testing to reach target utilization SLOs"
+    optimization_description: |
+      UTILIZATION optimization workflow:
+      
+      1. UNDERUTILIZATION DETECTION:
+         - Current P95 CPU < 75% target SLO
+         - Current P95 Memory < 95% target SLO  
+         - Current P95 Storage < 75% target SLO
+      
+      2. LOAD TESTING PHASE (if available):
+         - Implement throughput SLO testing with gradual load increase
+         - Monitor latency SLO adherence during load testing
+         - Target: 75% CPU, 95% Memory, 75% Storage utilization
+         - If load testing unavailable → proceed directly to perfspect analysis
+      
+      3. PERFSPECT ANALYSIS (if not reaching target utilization):
+         - Frontend Bound: Instruction delivery issues, branch mispredictions
+         - Backend Bound - Memory: L1/L2/L3 cache misses, DRAM bandwidth
+         - Backend Bound - Core: Execution units saturation, dependency chains
+         - Backend Bound - I/O: Disk I/O waits, network latency
+      
+      4. HORIZONTAL SCALING RECOMMENDATIONS:
+         - Min Instances: Based on baseline load + 20% buffer
+         - Max Instances: Based on peak load capacity + fault tolerance
+         - Scaling Triggers: CPU > 75%, Memory > 95%, custom metrics
+         - Cooldown Periods: Scale-out 300s, Scale-in 600s
+    implementation_complexity: "MEDIUM"
+    rule_source: "VERIFIED"
+    tags: ["ec2", "horizontal", "scaling", "utilization", "perfspect", "autoscaling"]
+    documentation_links: ["https://docs.aws.amazon.com/autoscaling/ec2/userguide/auto-scaling-benefits.html"]
+    created_by: "performance-team"
+    created_at: "2025-01-27 10:30:00"
+    metrics: {
+      "target_slos": {
+        "cpu_utilization_target": 75,
+        "memory_utilization_target": 95,
+        "storage_utilization_target": 75,
+        "evaluation_period_days": 7
+      },
+      "load_testing": {
+        "throughput_slo": {
+          "rps_target": "$.load_test.target_rps",
+          "success_rate_min": 99.5,
+          "duration_minutes": 30
+        },
+        "latency_slo": {
+          "p95_max_ms": "$.load_test.p95_latency_target",
+          "p99_max_ms": "$.load_test.p99_latency_target"
+        }
+      },
+      "perfspect_analysis": {
+        "frontend_bound_threshold": 25,
+        "backend_memory_bound_threshold": 30,
+        "backend_core_bound_threshold": 20,
+        "backend_io_bound_threshold": 15
+      },
+      "scaling_parameters": {
+        "min_instances": "$.autoscaling.calculated_min",
+        "max_instances": "$.autoscaling.calculated_max",
+        "target_cpu_percent": 75,
+        "scale_out_cooldown": 300,
+        "scale_in_cooldown": 600
+      }
+    }
+    metadata: {
+      "utilization_analysis": {
+        "underutilized_thresholds": {
+          "cpu_percent": 75,
+          "memory_percent": 95,
+          "storage_percent": 75
+        },
+        "load_testing_available": "$.infrastructure.load_testing_enabled",
+        "direct_perfspect_fallback": true
+      },
+      "load_testing_scenarios": {
+        "throughput_testing": {
+          "ramp_up_duration_minutes": 10,
+          "steady_state_duration_minutes": 30,
+          "target_utilization": {
+            "cpu": 75,
+            "memory": 95,
+            "storage": 75
+          }
+        },
+        "latency_testing": {
+          "p95_target_ms": "$.slo.latency.p95",
+          "p99_target_ms": "$.slo.latency.p99",
+          "success_rate_minimum": 99.5
+        }
+      },
+      "perfspect_actionable_recommendations": {
+        "frontend_bound": [
+          "Optimize instruction cache usage with better code locality",
+          "Reduce branch mispredictions with profile-guided optimization",
+          "Consider larger instance types with more instruction cache"
+        ],
+        "backend_memory_bound": [
+          "Implement data structure optimizations to reduce cache misses",
+          "Consider memory-optimized instances (r5, r6i series)",
+          "Optimize memory access patterns and data layout"
+        ],
+        "backend_core_bound": [
+          "Parallelize workloads to utilize more CPU cores",
+          "Optimize algorithms to reduce computation complexity",
+          "Consider compute-optimized instances (c5, c6i series)"
+        ],
+        "backend_io_bound": [
+          "Implement I/O optimizations and async processing",
+          "Consider instances with enhanced networking (up to 100 Gbps)",
+          "Optimize storage with NVMe SSD or provisioned IOPS"
+        ]
+      }
+    }
+
+  - rule_id: "EC2_VERTICAL_SIZING_UTILIZATION_002"
+    rule_name: "EC2 Vertical Scaling Instance Type Optimization"
+    callstack_pattern: ".*(instance.*type|m5|c5|r5|graviton).*"
+    platform_pattern: ".*(aws|ec2).*"
+    technology_stack: "Infrastructure"
+    rule_category: "UTILIZATION"
+    optimization_type: "UTILIZATION"
+    description: "Suboptimal EC2 instance types causing resource waste or performance bottlenecks requiring vertical optimization"
+    optimization_description: |
+      UTILIZATION optimization workflow:
+      
+      1. CURRENT INSTANCE ANALYSIS:
+         - Analyze current instance family utilization patterns
+         - Identify CPU/Memory/Network/Storage bottlenecks
+         - Calculate cost per workload unit
+      
+      2. LOAD TESTING WITH DIFFERENT INSTANCE TYPES (if available):
+         - Test workload on preferred families: c6i/c7i (compute), r6i/r7i (memory), m7g (general)
+         - Measure throughput SLO and latency SLO compliance
+         - Target utilization: 75% CPU, 95% Memory, 75% Storage
+         - If load testing unavailable → use perfspect analysis for instance selection
+      
+      3. PERFSPECT ANALYSIS FOR INSTANCE TYPE SELECTION:
+         - Frontend Bound → Favor instances with larger L1I cache
+         - Backend Memory Bound → Choose memory-optimized instances
+         - Backend Core Bound → Select compute-optimized instances
+         - Backend I/O Bound → Opt for enhanced networking instances
+      
+      4. INSTANCE TYPE RECOMMENDATIONS:
+         - Cost-Performance Analysis: TCO per transaction
+         - Graviton3 vs x86_64 performance comparison
+         - Network performance requirements (up to 100 Gbps)
+         - EBS optimization and NVME support
+    implementation_complexity: "MEDIUM"
+    rule_source: "VERIFIED"
+    tags: ["ec2", "vertical", "instance_type", "utilization", "perfspect", "graviton"]
+    documentation_links: ["https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-types.html"]
+    created_by: "performance-team"
+    created_at: "2025-01-27 10:30:00"
+    metrics: {
+      "instance_analysis": {
+        "current_utilization": {
+          "cpu_percent": "$.instance.cpu.utilization",
+          "memory_percent": "$.instance.memory.utilization",
+          "network_percent": "$.instance.network.utilization",
+          "storage_iops_percent": "$.instance.storage.iops_utilization"
+        },
+        "cost_efficiency": {
+          "cost_per_hour": "$.instance.hourly_cost",
+          "transactions_per_hour": "$.workload.transactions_per_hour",
+          "cost_per_transaction": "$.calculated.cost_per_transaction"
+        }
+      },
+      "preferred_instances": {
+        "compute_optimized": ["c6i", "c6id", "c7g", "c7gd", "c7i"],
+        "memory_optimized": ["r6gd", "r6i", "r6id", "r7g", "r7gd", "r7i"],
+        "general_purpose": ["m6gd", "m7g", "m7gd", "m6in"],
+        "storage_optimized": ["d3en", "i3en", "i4i", "i5en"],
+        "gpu_instances": ["g5", "g6", "p4d", "p4de", "p5"],
+        "specialized": ["mac2"]
+      }
+    }
+    metadata: {
+      "utilization_analysis": {
+        "instance_efficiency_metrics": {
+          "cost_per_vcpu_hour": "$.instance.cost.vcpu_hour",
+          "cost_per_gb_hour": "$.instance.cost.memory_gb_hour",
+          "performance_per_dollar": "$.instance.performance.cost_ratio"
+        },
+        "load_testing_scenarios": {
+          "instance_comparison": {
+            "compute_families": ["c6i", "c6id", "c7g", "c7gd", "c7i"],
+            "memory_families": ["r6gd", "r6i", "r6id", "r7g", "r7gd", "r7i"],
+            "general_families": ["m6gd", "m7g", "m7gd", "m6in"]
+          },
+          "performance_benchmarks": {
+            "cpu_intensive_workload": "$.benchmark.cpu_score",
+            "memory_intensive_workload": "$.benchmark.memory_score",
+            "mixed_workload": "$.benchmark.overall_score"
+          }
+        }
+      },
+      "perfspect_instance_mapping": {
+        "frontend_bound_high": {
+          "recommended_families": ["c6i", "c6id", "c7i", "m7g"],
+          "reason": "Larger instruction cache and better branch prediction",
+          "specific_recommendations": [
+            "c6i/c7i: Enhanced instruction cache performance",
+            "c7i: Intel Turbo Boost up to 3.5 GHz",
+            "m7g: Graviton3 with improved branch prediction"
+          ]
+        },
+        "backend_memory_bound_high": {
+          "recommended_families": ["r6i", "r6id", "r7i", "r7g", "r7gd"],
+          "reason": "Higher memory bandwidth and optimized memory subsystem",
+          "specific_recommendations": [
+            "r6i/r7i: Up to 4.8 GT/s DDR4/DDR5 memory speed",
+            "r7g: Graviton3 with optimized memory controllers",
+            "r6id/r7gd: Local NVMe storage for memory overflow"
+          ]
+        },
+        "backend_core_bound_high": {
+          "recommended_families": ["c6i", "c6id", "c7i", "c7g", "c7gd"],
+          "reason": "Higher CPU performance and optimized compute",
+          "specific_recommendations": [
+            "c7i: Latest Intel Xeon with up to 3.5 GHz turbo",
+            "c7g: Graviton3 with 25% better performance",
+            "c6id/c7gd: Local NVMe for compute-intensive workloads"
+          ]
+        },
+        "backend_io_bound_high": {
+          "recommended_families": ["m6in", "i3en", "i4i", "i5en", "d3en"],
+          "reason": "Enhanced networking and storage performance",
+          "specific_recommendations": [
+            "m6in: Up to 200 Gbps networking",
+            "i4i/i5en: NVMe SSD with optimized I/O performance",
+            "d3en: High sequential I/O for data processing"
+          ]
+        }
+      }
+    }
+
+  - rule_id: "GPU_HORIZONTAL_SIZING_UTILIZATION_003"
+    rule_name: "GPU Horizontal Scaling Utilization Optimization"
+    callstack_pattern: ".*(gpu.*scaling|nvidia.*smi|cuda.*device).*"
+    platform_pattern: ".*(gpu|cuda|nvidia).*"
+    technology_stack: "Infrastructure"
+    rule_category: "UTILIZATION"
+    optimization_type: "UTILIZATION"
+    description: "Underutilized GPU resources requiring horizontal scaling optimization through comprehensive GPU metrics analysis"
+    optimization_description: |
+      UTILIZATION optimization workflow:
+      
+      1. GPU UTILIZATION ANALYSIS:
+         - SM (Streaming Multiprocessor) Utilization < 75% target
+         - GPU Memory Utilization < 95% target
+         - Warp Execution Efficiency analysis
+         - PCIe Bandwidth Utilization monitoring
+         - CPU-GPU synchronization bottlenecks
+      
+      2. LOAD TESTING WITH GPU SCALING (if available):
+         - Implement multi-GPU workload distribution
+         - Test throughput SLO with varying GPU counts
+         - Monitor latency SLO with GPU memory transfers
+         - Target: 75% SM, 95% GPU Memory, 75% PCIe utilization
+         - If load testing unavailable → use GPU metrics analysis for scaling decisions
+      
+      3. PERFSPECT ANALYSIS FOR GPU WORKLOADS:
+         - Frontend Bound: CPU instruction delivery to GPU kernels
+         - Backend Memory Bound: GPU memory bandwidth limitations
+         - Backend I/O Bound: PCIe transfers, NVLink utilization
+         - Core Bound: SM occupancy and warp scheduling
+      
+      4. GPU HORIZONTAL SCALING RECOMMENDATIONS:
+         - Min GPU Instances: Based on baseline compute requirements
+         - Max GPU Instances: Based on peak training/inference loads
+         - Multi-GPU Communication: NVLink vs PCIe optimization
+         - GPU Memory Management: Unified memory vs explicit transfers
+    implementation_complexity: "COMPLEX"
+    rule_source: "VERIFIED"
+    tags: ["gpu", "horizontal", "scaling", "nvidia", "cuda", "perfspect", "sm"]
+    documentation_links: ["https://docs.nvidia.com/cuda/cuda-c-programming-guide/", "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/accelerated-computing-instances.html"]
+    created_by: "performance-team"
+    created_at: "2025-01-27 10:30:00"
+    metrics: {
+      "gpu_utilization_targets": {
+        "sm_utilization_target": 75,
+        "gpu_memory_utilization_target": 95,
+        "pcie_utilization_target": 75,
+        "warp_execution_efficiency_target": 80
+      },
+      "gpu_metrics": {
+        "sm_utilization": "$.nvidia_smi.utilization.gpu",
+        "memory_utilization": "$.nvidia_smi.utilization.memory",
+        "memory_used_mb": "$.nvidia_smi.memory.used",
+        "memory_total_mb": "$.nvidia_smi.memory.total",
+        "power_draw_w": "$.nvidia_smi.power.draw",
+        "temperature_c": "$.nvidia_smi.temperature.gpu",
+        "pcie_link_speed": "$.nvidia_smi.pcie.link.speed",
+        "pcie_link_width": "$.nvidia_smi.pcie.link.width"
+      },
+      "performance_metrics": {
+        "cuda_cores": "$.gpu.specs.cuda_cores",
+        "tensor_cores": "$.gpu.specs.tensor_cores",
+        "rt_cores": "$.gpu.specs.rt_cores",
+        "base_clock_mhz": "$.gpu.specs.base_clock",
+        "memory_bandwidth_gb_s": "$.gpu.specs.memory_bandwidth"
+      },
+      "scaling_parameters": {
+        "min_gpu_instances": "$.gpu_scaling.calculated_min",
+        "max_gpu_instances": "$.gpu_scaling.calculated_max",
+        "target_sm_percent": 75,
+        "auto_scaling_enabled": true
+      }
+    }
+    metadata: {
+      "gpu_perfspect_analysis": {
+        "sm_underutilization": [
+          "Increase batch size to improve SM occupancy",
+          "Optimize kernel launch parameters (threads per block)",
+          "Implement dynamic parallelism for irregular workloads",
+          "Consider multi-stream execution for concurrent kernels"
+        ],
+        "memory_bound_optimizations": [
+          "Implement memory coalescing for sequential access",
+          "Use shared memory to reduce global memory access",
+          "Optimize data layout for better cache utilization",
+          "Consider texture memory for read-only data"
+        ],
+        "pcie_bottleneck_solutions": [
+          "Minimize CPU-GPU data transfers",
+          "Use GPU Direct for peer-to-peer communication",
+          "Implement asynchronous memory transfers",
+          "Consider NVLink for multi-GPU setups"
+        ],
+        "warp_efficiency_improvements": [
+          "Reduce warp divergence in conditional code",
+          "Optimize memory access patterns",
+          "Increase arithmetic intensity",
+          "Use CUDA occupancy calculator for optimal configuration"
+        ]
+      },
+      "horizontal_scaling_strategies": {
+        "data_parallelism": {
+          "use_cases": ["Training large models", "Batch inference"],
+          "implementation": "Distribute data across multiple GPUs",
+          "frameworks": ["Horovod", "PyTorch DDP", "TensorFlow MirroredStrategy"]
+        },
+        "model_parallelism": {
+          "use_cases": ["Large models that don't fit on single GPU"],
+          "implementation": "Split model layers across GPUs",
+          "frameworks": ["Megatron-LM", "FairScale", "DeepSpeed"]
+        },
+        "pipeline_parallelism": {
+          "use_cases": ["Sequential model processing"],
+          "implementation": "Pipeline different stages across GPUs",
+          "frameworks": ["GPipe", "PipeDream", "FairScale"]
+        }
+      }
+    }
+
+  - rule_id: "GPU_VERTICAL_SIZING_UTILIZATION_004"
+    rule_name: "GPU Vertical Scaling Instance Type Optimization"
+    callstack_pattern: ".*(p3|p4|g4|g5|a100|v100|t4).*"
+    platform_pattern: ".*(gpu|cuda|nvidia).*"
+    technology_stack: "Infrastructure"
+    rule_category: "UTILIZATION"
+    optimization_type: "UTILIZATION"
+    description: "Suboptimal GPU instance types causing performance bottlenecks or cost inefficiency requiring vertical optimization"
+    optimization_description: |
+      UTILIZATION optimization workflow:
+      
+      1. CURRENT GPU INSTANCE ANALYSIS:
+         - Analyze GPU family performance characteristics
+         - Compare A100 vs V100 vs T4 performance for workload
+         - Evaluate memory capacity vs compute utilization
+         - Calculate cost per CUDA core hour or tensor operation
+      
+      2. LOAD TESTING ACROSS GPU TYPES (if available):
+         - Benchmark training/inference performance on g5, g6, p4d, p4de, p5
+         - Measure throughput SLO compliance across instance families
+         - Test latency SLO with different memory configurations
+         - Target: 75% SM utilization, 95% GPU memory utilization
+         - If load testing unavailable → use workload characteristics for GPU selection
+      
+      3. PERFSPECT ANALYSIS FOR GPU SELECTION:
+         - Memory Bound → Choose high-memory instances (A100 80GB)
+         - Compute Bound → Select high-SM count instances
+         - I/O Bound → Opt for high-bandwidth instances (NVLink)
+         - Mixed Workloads → Balance memory/compute/cost
+      
+      4. GPU INSTANCE TYPE RECOMMENDATIONS:
+         - Training Workloads: p4d (A100) for large models
+         - Inference Workloads: g5 (A10G) for cost efficiency
+         - Development/Testing: g4dn (T4) for smaller workloads
+         - Cost optimization: Spot instances vs On-Demand analysis
+    implementation_complexity: "COMPLEX"
+    rule_source: "VERIFIED"
+    tags: ["gpu", "vertical", "instance_type", "a100", "v100", "t4", "perfspect"]
+    documentation_links: ["https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/accelerated-computing-instances.html"]
+    created_by: "performance-team"
+    created_at: "2025-01-27 10:30:00"
+    metrics: {
+      "gpu_instance_comparison": {
+        "p4d_a100": {
+          "sm_count": 108,
+          "memory_gb": 80,
+          "memory_bandwidth_gb_s": 2039,
+          "tensor_performance_tflops": 312,
+          "nvlink_bandwidth_gb_s": 600
+        },
+        "p3_v100": {
+          "sm_count": 80,
+          "memory_gb": 32,
+          "memory_bandwidth_gb_s": 900,
+          "tensor_performance_tflops": 125,
+          "nvlink_bandwidth_gb_s": 300
+        },
+        "g5_a10g": {
+          "sm_count": 80,
+          "memory_gb": 24,
+          "memory_bandwidth_gb_s": 600,
+          "tensor_performance_tflops": 62.5,
+          "pcie_gen": 4
+        },
+        "g4dn_t4": {
+          "sm_count": 40,
+          "memory_gb": 16,
+          "memory_bandwidth_gb_s": 320,
+          "tensor_performance_tflops": 8.1,
+          "pcie_gen": 3
+        }
+      },
+      "workload_matching": {
+        "large_language_models": {
+          "recommended_instance": "p4d.24xlarge",
+          "reason": "Requires high memory bandwidth and capacity",
+          "memory_requirement_gb": "> 40"
+        },
+        "computer_vision_training": {
+          "recommended_instance": "p3.8xlarge",
+          "reason": "Balanced compute and memory for CNN training",
+          "batch_size_optimization": "large"
+        },
+        "real_time_inference": {
+          "recommended_instance": "g5.xlarge",
+          "reason": "Cost-effective with low latency requirements",
+          "latency_requirement_ms": "< 100"
+        },
+        "batch_inference": {
+          "recommended_instance": "g4dn.xlarge",
+          "reason": "Cost-optimized for throughput workloads",
+          "cost_priority": "high"
+        }
+      }
+    }
+    metadata: {
+      "perfspect_gpu_selection": {
+        "memory_bound_workloads": {
+          "indicators": ["Low SM utilization", "High memory bandwidth usage"],
+          "recommendations": [
+            "Choose A100 80GB for large models",
+            "Consider memory-optimized batch sizes",
+            "Implement gradient checkpointing to reduce memory"
+          ],
+          "instance_types": ["p4d.24xlarge", "p4de.24xlarge"]
+        },
+        "compute_bound_workloads": {
+          "indicators": ["High SM utilization", "Low memory bandwidth usage"],
+          "recommendations": [
+            "Select instances with higher SM count",
+            "Optimize kernel utilization",
+            "Consider mixed precision training"
+          ],
+          "instance_types": ["p3.16xlarge", "p4d.24xlarge"]
+        },
+        "communication_bound": {
+          "indicators": ["High NVLink/PCIe usage", "Multi-GPU scaling issues"],
+          "recommendations": [
+            "Use NVLink-enabled instances for multi-GPU",
+            "Optimize all-reduce communication patterns",
+            "Consider gradient compression techniques"
+          ],
+          "instance_types": ["p4d.24xlarge", "p3dn.24xlarge"]
+        }
+      },
+      "cost_optimization_strategies": {
+        "spot_instances": {
+          "training_workloads": "Use spot for fault-tolerant training",
+          "checkpointing": "Implement frequent checkpointing",
+          "cost_savings": "up to 90% vs on-demand"
+        },
+        "reserved_instances": {
+          "steady_workloads": "1-3 year commitments for predictable usage",
+          "cost_savings": "up to 75% vs on-demand"
+        },
+        "instance_rightsizing": {
+          "monitoring_period": "7-14 days",
+          "utilization_threshold": "< 50% average",
+          "action": "Downgrade to smaller instance type"
+        }
+      }
+    }
+
+  - rule_id: "PINCOMPUTE_QUOTA_SIZING_UTILIZATION_005"
+    rule_name: "Pincompute Namespace Quota Sizing Optimization"
+    callstack_pattern: ".*(namespace.*quota|resource.*quota|pincompute.*quota).*"
+    platform_pattern: ".*(pincompute|kubernetes|k8s).*"
+    technology_stack: "Infrastructure"
+    rule_category: "UTILIZATION"
+    optimization_type: "UTILIZATION"
+    description: "Namespace-level resource quota optimization for total pods, vCPUs, memory, and GPU allocation across multiple applications"
+    optimization_description: |
+      UTILIZATION optimization workflow:
+      
+      1. NAMESPACE QUOTA ANALYSIS:
+         - Total pod count across all applications in namespace
+         - Total vCPU allocation and utilization efficiency
+         - Total memory allocation vs actual usage patterns
+         - Total GPU allocation and sharing across applications
+         - Cross-application resource contention analysis
+      
+      2. LOAD TESTING WITH QUOTA SCALING (if available):
+         - Test namespace scaling with varying application loads
+         - Validate total resource utilization targets
+         - Monitor inter-application resource competition
+         - Target: Namespace-level 75% vCPU, 95% Memory, 75% GPU utilization
+         - If load testing unavailable → use historical utilization patterns
+      
+      3. PERFSPECT ANALYSIS FOR NAMESPACE EFFICIENCY:
+         - Resource fragmentation analysis across applications
+         - Scheduling efficiency and pod placement optimization
+         - Network and storage bandwidth sharing
+         - Cluster-level resource allocation patterns
+      
+      4. QUOTA SIZING RECOMMENDATIONS:
+         - Optimal total pod limits for namespace
+         - Total vCPU quota based on application mix
+         - Total memory quota with buffer for peak usage
+         - GPU quota and sharing policies
+    implementation_complexity: "MEDIUM"
+    rule_source: "VERIFIED"
+    tags: ["pincompute", "namespace", "quota", "resource_allocation", "kubernetes"]
+    documentation_links: ["https://kubernetes.io/docs/concepts/policy/resource-quotas/"]
+    created_by: "performance-team"
+    created_at: "2025-01-27 10:30:00"
+    metrics: {
+      "namespace_quota_metrics": {
+        "total_pods": "$.k8s.namespace.total_pod_count",
+        "total_vcpu_allocated": "$.k8s.namespace.total_vcpu.allocated",
+        "total_vcpu_utilized": "$.k8s.namespace.total_vcpu.utilized",
+        "total_memory_allocated_gb": "$.k8s.namespace.total_memory.allocated_gb",
+        "total_memory_utilized_gb": "$.k8s.namespace.total_memory.utilized_gb",
+        "total_gpu_allocated": "$.k8s.namespace.total_gpu.allocated",
+        "total_gpu_utilized": "$.k8s.namespace.total_gpu.utilized"
+      },
+      "application_distribution": {
+        "application_count": "$.k8s.namespace.application_count",
+        "pods_per_application": "$.k8s.namespace.pods_per_app",
+        "resource_diversity_index": "$.k8s.namespace.resource_diversity",
+        "scheduling_efficiency": "$.k8s.namespace.scheduling_efficiency"
+      },
+      "quota_targets": {
+        "total_vcpu_utilization_target": 75,
+        "total_memory_utilization_target": 95,
+        "total_gpu_utilization_target": 75,
+        "pod_density_target": "$.k8s.namespace.optimal_pod_density"
+      }
+    }
+    metadata: {
+      "utilization_analysis": {
+        "namespace_efficiency_metrics": {
+          "resource_fragmentation_percent": "$.k8s.namespace.fragmentation",
+          "scheduling_success_rate": "$.k8s.namespace.scheduling_success",
+          "cross_app_contention": "$.k8s.namespace.resource_contention"
+        },
+        "load_testing_scenarios": {
+          "multi_app_scaling": {
+            "concurrent_app_scaling": true,
+            "resource_contention_testing": true,
+            "quota_limit_testing": true
+          }
+        }
+      },
+      "quota_sizing_recommendations": {
+        "small_namespace": {
+          "total_pods": "50-100",
+          "total_vcpu": "50-100 cores",
+          "total_memory": "200-400Gi",
+          "total_gpu": "0-10",
+          "application_mix": "web_services_dominant"
+        },
+        "medium_namespace": {
+          "total_pods": "100-500",
+          "total_vcpu": "100-500 cores",
+          "total_memory": "400-2000Gi",
+          "total_gpu": "10-50",
+          "application_mix": "mixed_workloads"
+        },
+        "large_namespace": {
+          "total_pods": "500-1000",
+          "total_vcpu": "500-1000 cores",
+          "total_memory": "2000-8000Gi",
+          "total_gpu": "50-200",
+          "application_mix": "data_processing_ml_heavy"
+        }
+      },
+      "perfspect_namespace_optimization": {
+        "resource_fragmentation_reduction": [
+          "Optimize pod bin packing algorithms",
+          "Implement resource request right-sizing",
+          "Use pod affinity/anti-affinity rules",
+          "Monitor and reduce resource waste"
+        ],
+        "scheduling_efficiency_improvement": [
+          "Optimize node selection policies",
+          "Implement priority classes for critical workloads",
+          "Use resource quotas with appropriate limits",
+          "Monitor scheduler performance metrics"
+        ]
+      }
+    }
+
+  - rule_id: "PINCOMPUTE_CRD_HORIZONTAL_SIZING_UTILIZATION_006"
+    rule_name: "Pincompute CRD Horizontal Scaling Optimization"
+    callstack_pattern: ".*(hpa|horizontal.*autoscaler|crd.*scaling).*"
+    platform_pattern: ".*(pincompute|kubernetes|k8s).*"
+    technology_stack: "Infrastructure"
+    rule_category: "UTILIZATION"
+    optimization_type: "UTILIZATION"
+    description: "Application/pod-level horizontal scaling optimization with HPA recommendations and load testing integration"
+    optimization_description: |
+      UTILIZATION optimization workflow:
+      
+      1. CRD HORIZONTAL SCALING ANALYSIS:
+         - Current min/max replica configuration per CRD
+         - HPA trigger metrics and thresholds
+         - Scaling behavior and stabilization periods
+         - Cross-CRD scaling dependencies and conflicts
+      
+      2. LOAD TESTING WITH HPA OPTIMIZATION (if available):
+         - Test auto-scaling behavior with varying load patterns
+         - Validate scaling triggers and response times
+         - Monitor latency during scaling events
+         - Target: Optimal min/max replicas for SLO compliance
+         - If load testing unavailable → use historical scaling patterns
+      
+      3. PERFSPECT ANALYSIS FOR SCALING EFFICIENCY:
+         - Pod startup time optimization
+         - Resource allocation during scaling events
+         - Network and load balancer impact
+         - Scaling overhead and efficiency metrics
+      
+      4. HPA RECOMMENDATIONS:
+         - Min Replicas: Based on minimum SLO requirements
+         - Max Replicas: Based on resource limits and cost constraints
+         - Scaling Metrics: CPU, memory, custom application metrics
+         - Behavior Policies: Scale-up/down rates and stabilization
+    implementation_complexity: "MEDIUM"
+    rule_source: "VERIFIED"
+    tags: ["pincompute", "crd", "hpa", "horizontal_scaling", "kubernetes"]
+    documentation_links: ["https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscaler/"]
+    created_by: "performance-team"
+    created_at: "2025-01-27 10:30:00"
+    metrics: {
+      "hpa_configuration": {
+        "current_min_replicas": "$.k8s.crd.hpa.min_replicas",
+        "current_max_replicas": "$.k8s.crd.hpa.max_replicas",
+        "target_cpu_percent": "$.k8s.crd.hpa.target_cpu",
+        "target_memory_percent": "$.k8s.crd.hpa.target_memory",
+        "custom_metrics": "$.k8s.crd.hpa.custom_metrics",
+        "scale_up_stabilization": "$.k8s.crd.hpa.scale_up_stabilization",
+        "scale_down_stabilization": "$.k8s.crd.hpa.scale_down_stabilization"
+      },
+      "scaling_performance": {
+        "avg_scale_up_time_seconds": "$.k8s.crd.scaling.avg_scale_up_time",
+        "avg_scale_down_time_seconds": "$.k8s.crd.scaling.avg_scale_down_time",
+        "scaling_frequency_per_hour": "$.k8s.crd.scaling.frequency",
+        "scaling_efficiency_ratio": "$.k8s.crd.scaling.efficiency"
+      },
+      "slo_compliance": {
+        "latency_during_scaling_ms": "$.k8s.crd.slo.latency_during_scaling",
+        "availability_during_scaling": "$.k8s.crd.slo.availability_during_scaling",
+        "throughput_degradation_percent": "$.k8s.crd.slo.throughput_degradation"
+      }
+    }
+    metadata: {
+      "utilization_analysis": {
+        "load_testing_scenarios": {
+          "gradual_load_increase": {
+            "duration_minutes": 30,
+            "load_increment_percent": 10,
+            "scaling_response_measurement": true
+          },
+          "traffic_spikes": {
+            "spike_duration_minutes": 5,
+            "spike_magnitude_percent": 200,
+            "recovery_time_measurement": true
+          },
+          "sustained_high_load": {
+            "duration_minutes": 60,
+            "load_level_percent": 150,
+            "resource_utilization_tracking": true
+          }
+        }
+      },
+      "hpa_optimization_recommendations": {
+        "web_services": {
+          "optimal_min_replicas": 2,
+          "optimal_max_replicas": 50,
+          "target_cpu_percent": 70,
+          "target_memory_percent": 80,
+          "scale_up_behavior": "fast",
+          "scale_down_behavior": "conservative"
+        },
+        "batch_processing": {
+          "optimal_min_replicas": 1,
+          "optimal_max_replicas": 100,
+          "target_cpu_percent": 80,
+          "target_memory_percent": 85,
+          "scale_up_behavior": "aggressive",
+          "scale_down_behavior": "fast"
+        },
+        "ml_training": {
+          "optimal_min_replicas": 1,
+          "optimal_max_replicas": 10,
+          "target_gpu_percent": 75,
+          "target_memory_percent": 90,
+          "scale_up_behavior": "conservative",
+          "scale_down_behavior": "slow"
+        },
+        "streaming_processing": {
+          "optimal_min_replicas": 3,
+          "optimal_max_replicas": 30,
+          "custom_metrics": ["queue_depth", "processing_lag"],
+          "scale_up_behavior": "fast",
+          "scale_down_behavior": "conservative"
+        }
+      },
+      "perfspect_scaling_optimization": {
+        "pod_startup_optimization": [
+          "Optimize container image layers for faster pulls",
+          "Use image caching and pre-pulling strategies",
+          "Implement readiness probes for faster availability",
+          "Optimize application startup time"
+        ],
+        "scaling_overhead_reduction": [
+          "Minimize resource allocation conflicts",
+          "Optimize pod scheduling and placement",
+          "Reduce network configuration overhead",
+          "Implement efficient load balancer updates"
+        ]
+      }
+    }
+
+  - rule_id: "PINCOMPUTE_CRD_VERTICAL_SIZING_UTILIZATION_007"
+    rule_name: "Pincompute CRD Vertical Scaling Resource Optimization"
+    callstack_pattern: ".*(vpa|vertical.*autoscaler|crd.*resources).*"
+    platform_pattern: ".*(pincompute|kubernetes|k8s).*"
+    technology_stack: "Infrastructure"
+    rule_category: "UTILIZATION"
+    optimization_type: "UTILIZATION"
+    description: "Application/pod-level vertical scaling optimization with VPA recommendations and resource right-sizing"
+    optimization_description: |
+      UTILIZATION optimization workflow:
+      
+      1. CRD RESOURCE UTILIZATION ANALYSIS:
+         - Current CPU/memory requests vs actual usage per CRD
+         - Resource efficiency metrics per application type
+         - Over-provisioning and under-provisioning identification
+         - Resource waste calculation and cost impact
+      
+      2. LOAD TESTING WITH RESOURCE OPTIMIZATION (if available):
+         - Test application performance with varying resource allocations
+         - Identify minimum viable resources for SLO compliance
+         - Measure resource utilization under different load patterns
+         - Target: Right-sized resources for optimal cost/performance
+         - If load testing unavailable → use VPA recommendations and historical data
+      
+      3. PERFSPECT ANALYSIS FOR RESOURCE EFFICIENCY:
+         - Application memory access patterns
+         - CPU utilization distribution and bottlenecks
+         - JVM heap sizing for Java applications
+         - Container-level performance optimization
+      
+      4. VPA RECOMMENDATIONS:
+         - Right-sized CPU requests and limits
+         - Optimal memory requests and limits
+         - GPU resource allocation for ML workloads
+         - Resource profiles per application type
+    implementation_complexity: "COMPLEX"
+    rule_source: "VERIFIED"
+    tags: ["pincompute", "crd", "vpa", "vertical_scaling", "resource_optimization"]
+    documentation_links: ["https://kubernetes.io/docs/tasks/run-application/vertical-pod-autoscaler/"]
+    created_by: "performance-team"
+    created_at: "2025-01-27 10:30:00"
+    metrics: {
+      "resource_utilization_analysis": {
+        "cpu_request_vs_usage": "$.k8s.crd.cpu.request_usage_ratio",
+        "memory_request_vs_usage": "$.k8s.crd.memory.request_usage_ratio",
+        "gpu_request_vs_usage": "$.k8s.crd.gpu.request_usage_ratio",
+        "resource_waste_percent": "$.k8s.crd.resource_waste",
+        "cost_per_application": "$.k8s.crd.cost_per_app"
+      },
+      "vpa_recommendations": {
+        "recommended_cpu_request": "$.k8s.vpa.cpu.request",
+        "recommended_cpu_limit": "$.k8s.vpa.cpu.limit",
+        "recommended_memory_request": "$.k8s.vpa.memory.request",
+        "recommended_memory_limit": "$.k8s.vpa.memory.limit",
+        "confidence_level": "$.k8s.vpa.confidence",
+        "recommendation_age_days": "$.k8s.vpa.recommendation_age"
+      },
+      "performance_impact": {
+        "oom_kill_count": "$.k8s.crd.oom_kills",
+        "cpu_throttling_percent": "$.k8s.crd.cpu_throttling",
+        "application_latency_ms": "$.k8s.crd.latency",
+        "error_rate_percent": "$.k8s.crd.error_rate"
+      }
+    }
+    metadata: {
+      "utilization_analysis": {
+        "load_testing_scenarios": {
+          "resource_stress_testing": {
+            "cpu_stress_test": true,
+            "memory_stress_test": true,
+            "concurrent_resource_usage": true,
+            "performance_degradation_thresholds": {
+              "latency_increase_percent": 20,
+              "throughput_decrease_percent": 10,
+              "error_rate_increase_percent": 5
+            }
+          }
+        },
+        "cost_optimization_metrics": {
+          "resource_cost_per_request": "$.k8s.crd.cost_per_request",
+          "waste_cost_per_day": "$.k8s.crd.waste_cost_daily",
+          "potential_savings_percent": "$.k8s.crd.potential_savings"
+        }
+      },
+      "resource_optimization_recommendations": {
+        "java_applications": {
+          "cpu_request": "100m-2000m",
+          "cpu_limit": "2000m-8000m",
+          "memory_request": "512Mi-4Gi",
+          "memory_limit": "1Gi-8Gi",
+          "jvm_heap_ratio": 0.75,
+          "specific_optimizations": [
+            "Set -Xmx to 75% of memory limit",
+            "Use G1GC for applications > 4GB heap",
+            "Enable JVM ergonomics for CPU allocation"
+          ]
+        },
+        "nodejs_applications": {
+          "cpu_request": "100m-1000m",
+          "cpu_limit": "1000m-4000m",
+          "memory_request": "256Mi-2Gi",
+          "memory_limit": "512Mi-4Gi",
+          "node_heap_ratio": 0.8,
+          "specific_optimizations": [
+            "Set --max-old-space-size to 80% of memory limit",
+            "Use cluster mode for CPU-intensive applications",
+            "Optimize event loop utilization"
+          ]
+        },
+        "python_applications": {
+          "cpu_request": "100m-2000m",
+          "cpu_limit": "2000m-8000m",
+          "memory_request": "256Mi-4Gi",
+          "memory_limit": "512Mi-8Gi",
+          "worker_processes": "auto",
+          "specific_optimizations": [
+            "Use gunicorn with multiple workers",
+            "Implement memory profiling for large datasets",
+            "Consider async frameworks for I/O bound tasks"
+          ]
+        },
+        "ml_applications": {
+          "cpu_request": "1000m-4000m",
+          "cpu_limit": "4000m-16000m",
+          "memory_request": "4Gi-32Gi",
+          "memory_limit": "8Gi-64Gi",
+          "gpu_request": "1",
+          "specific_optimizations": [
+            "Allocate based on model size and batch size",
+            "Use GPU memory efficiently with gradient checkpointing",
+            "Implement model parallelism for large models"
+          ]
+        }
+      },
+      "perfspect_resource_optimization": {
+        "memory_efficiency_improvements": [
+          "Implement memory pooling for frequent allocations",
+          "Optimize data structures for memory locality",
+          "Use memory-mapped files for large datasets",
+          "Monitor and reduce memory fragmentation"
+        ],
+        "cpu_efficiency_improvements": [
+          "Profile and optimize hot code paths",
+          "Implement CPU-efficient algorithms",
+          "Use vectorization for numerical computations",
+          "Optimize thread pool sizes and usage"
+        ],
+        "application_specific_optimizations": [
+          "Database connection pool sizing",
+          "HTTP client connection pool optimization",
+          "Cache sizing and eviction policies",
+          "Batch processing optimization"
+        ]
+      }
+    }
+ 
