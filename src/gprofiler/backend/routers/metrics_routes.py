@@ -53,6 +53,68 @@ logger = getLogger(__name__)
 router = APIRouter()
 
 
+class ProfilingRequest(BaseModel):
+    """Model for profiling request parameters"""
+    service_name: str
+    request_type: str = "start"  # start, stop
+    duration: Optional[int] = 60  # seconds
+    frequency: Optional[int] = 11  # Hz
+    profiling_mode: Optional[str] = "cpu"  # cpu, allocation, none
+    target_hostnames: List[str]  # Required - list of target hostnames
+    pids: Optional[List[int]] = None
+    stop_level: Optional[str] = "process"  # process, host (only relevant for stop commands)
+    additional_args: Optional[Dict[str, Any]] = None
+
+
+class ProfilingResponse(BaseModel):
+    """Response model for profiling requests"""
+    success: bool
+    message: str
+    request_id: Optional[str] = None
+    command_id: Optional[str] = None  # Added for agent idempotency
+    estimated_completion_time: Optional[datetime] = None
+
+
+class HeartbeatRequest(BaseModel):
+    """Model for host heartbeat request"""
+    ip_address: str
+    hostname: str
+    service_name: str
+    last_command_id: Optional[str] = None
+    status: Optional[str] = "active"  # active, idle, error
+    timestamp: Optional[datetime] = None
+
+
+class HeartbeatResponse(BaseModel):
+    """Response model for heartbeat requests"""
+    success: bool
+    message: str
+    profiling_command: Optional[Dict[str, Any]] = None  # Changed from profiling_request to profiling_command
+    command_id: Optional[str] = None
+
+
+class ProfilingCommand(BaseModel):
+    """Model for combined profiling command sent to hosts"""
+    command_id: str
+    command_type: str  # start, stop
+    hostname: str
+    service_name: str
+    combined_config: Dict[str, Any]  # Combined configuration from multiple requests
+    request_ids: List[str]  # List of request IDs that make up this command
+    created_at: datetime
+    status: str  # pending, sent, completed, failed
+
+
+class CommandCompletionRequest(BaseModel):
+    """Model for reporting command completion"""
+    command_id: str
+    hostname: str
+    status: str  # completed, failed
+    execution_time: Optional[int] = None  # seconds
+    error_message: Optional[str] = None
+    results_path: Optional[str] = None  # S3 path or local path to results
+
+
 def get_time_interval_value(start_time: datetime, end_time: datetime, interval: str) -> str:
     if interval in [
         "15 seconds",
