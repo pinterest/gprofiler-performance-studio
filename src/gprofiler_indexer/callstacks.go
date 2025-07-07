@@ -18,11 +18,16 @@ package main
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/aws/aws-sdk-go/aws/session"
+	log "github.com/sirupsen/logrus"
 )
 
 type FrameValuesMap map[string]map[string]FrameValue
@@ -48,7 +53,8 @@ type FileInfo struct {
 			ProfileApiVersion string `json:"profile_api_version"`
 		} `json:"run_arguments"`
 	} `json:"metadata"`
-	Metrics struct {
+	HTMLBlob string `json:"htmlblob"`
+	Metrics  struct {
 		CPUAvg    float64 `json:"cpu_avg"`
 		MemoryAvg float64 `json:"mem_avg"`
 	} `json:"metrics"`
@@ -204,7 +210,8 @@ func (pw *ProfilesWriter) writeStacks(weights FrameValuesMap, frames map[string]
 }
 
 func (pw *ProfilesWriter) writeMetrics(serviceId uint32, instanceType string,
-	hostname string, timestamp time.Time, cpuAverageUsedPercent float64, memoryAverageUsedPercent float64) {
+	hostname string, timestamp time.Time, cpuAverageUsedPercent float64,
+	memoryAverageUsedPercent float64, path string) {
 
 	metricRecord := MetricRecord{
 		Timestamp:                timestamp,
@@ -213,14 +220,17 @@ func (pw *ProfilesWriter) writeMetrics(serviceId uint32, instanceType string,
 		HostName:                 hostname,
 		CPUAverageUsedPercent:    cpuAverageUsedPercent,
 		MemoryAverageUsedPercent: memoryAverageUsedPercent,
+		HTMLPath:                 path,
 	}
 	pw.metricsRecords <- metricRecord
 }
 
-func (pw *ProfilesWriter) ParseStackFrameFile(serviceId int, timestamp time.Time, buf []byte) error {
+func (pw *ProfilesWriter) ParseStackFrameFile(sess *session.Session, task SQSMessage, s3bucket string,
+	timestamp time.Time, buf []byte) error {
 	var fileInfo FileInfo
 	var withMetadata bool
 	var err error
+	serviceId := task.ServiceId
 	logger.Debugf("start processing file with len %d from %d", len(buf), serviceId)
 
 	weights := make(FrameValuesMap)
@@ -265,9 +275,25 @@ func (pw *ProfilesWriter) ParseStackFrameFile(serviceId int, timestamp time.Time
 		fileInfo.Metadata.CloudInfo.InstanceType, fileInfo.Metadata.Hostname, timestamp)
 	pw.chMutex.Unlock()
 
-	if fileInfo.Metrics.CPUAvg != 0 && fileInfo.Metrics.MemoryAvg != 0 {
+	var htmlBlobPath string
+	if fileInfo.HTMLBlob != "" {
+		baseFileName := strings.TrimSuffix(task.Filename, ".gz")
+		htmlBlobPath = fmt.Sprintf("products/%s/stacks/%s.html", task.Service, baseFileName)
+		decodedBlob, err := base64.StdEncoding.DecodeString(fileInfo.HTMLBlob)
+		if err != nil {
+			log.Errorf("failed to decode base64 HTML blob for file %s: %v", task.Filename, err)
+		} else {
+			err = PutFileToS3(sess, s3bucket, htmlBlobPath, decodedBlob)
+			if err != nil {
+				log.Errorf("failed to upload HTML blob for file %s: %v", task.Filename, err)
+			}
+		}
+	}
+
+	if htmlBlobPath != "" || (fileInfo.Metrics.CPUAvg != 0 && fileInfo.Metrics.MemoryAvg != 0) {
 		pw.writeMetrics(uint32(serviceId), fileInfo.Metadata.CloudInfo.InstanceType,
-			fileInfo.Metadata.Hostname, timestamp, fileInfo.Metrics.CPUAvg, fileInfo.Metrics.MemoryAvg)
+			fileInfo.Metadata.Hostname, timestamp, fileInfo.Metrics.CPUAvg,
+			fileInfo.Metrics.MemoryAvg, htmlBlobPath)
 	}
 
 	return nil

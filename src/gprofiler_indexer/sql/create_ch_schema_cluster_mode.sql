@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS flamedb.metrics_local ON CLUSTER '{cluster}'
     HostName                 LowCardinality(String),
     HostNameHash             UInt32 MATERIALIZED xxHash32(HostName),
     CPUAverageUsedPercent    Float64,
-    MemoryAverageUsedPercent Float64
+    MemoryAverageUsedPercent Float64,
+    HTMLPath                 String
     ) engine = ReplicatedMergeTree('/clickhouse/{installation}/{cluster}/tables/{shard}/{database}/{table}',
                                    '{replica}') PARTITION BY toYYYYMMDD(Timestamp)
     ORDER BY (ServiceId, InstanceType, HostNameHash, Timestamp);
@@ -209,7 +210,7 @@ CREATE TABLE IF NOT EXISTS flamedb.samples_1day_all_local_store ON CLUSTER '{clu
     ) ENGINE = ReplicatedSummingMergeTree('/clickhouse/{installation}/{cluster}/tables/{shard}/{database}/{table}', '{replica}', (NumSamples))
     PARTITION BY toYYYYMMDD(Timestamp)
     ORDER BY (ServiceId, Timestamp, CallStackHash, CallStackParent);
-    
+
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS flamedb.samples_1day_all_local ON CLUSTER '{cluster}' TO
     flamedb.samples_1day_all_local_store AS
