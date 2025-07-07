@@ -585,3 +585,489 @@ class DBManager(metaclass=Singleton):
         return self.db.execute(
             AggregationSQLQueries.SERVICES_SUMMARY, values, one_value=False, return_dict=True, fetch_all=True
         )
+
+    # Profiling Request Management Methods (Simplified)
+
+    def save_profiling_request(
+        self,
+        request_id: str,
+        service_name: str,
+        command_type: str,  # Keep the parameter name for backward compatibility
+        duration: Optional[int] = 60,
+        frequency: Optional[int] = 11,
+        profiling_mode: Optional[str] = "cpu",
+        target_hostnames: Optional[List[str]] = None,
+        pids: Optional[List[int]] = None,
+        stop_level: Optional[str] = "process",
+        additional_args: Optional[Dict] = None
+    ) -> bool:
+        """Save a profiling request with request_type and stop_level support"""
+        query = """
+        INSERT INTO ProfilingRequests (
+            request_id, service_name, request_type, duration, frequency, profiling_mode,
+            target_hostnames, pids, stop_level, additional_args, service_id, updated_at
+        ) VALUES (
+            %(request_id)s::uuid, %(service_name)s, %(request_type)s, %(duration)s, %(frequency)s, 
+            %(profiling_mode)s::ProfilingMode, %(target_hostnames)s, %(pids)s, %(stop_level)s,
+            %(additional_args)s, (SELECT ID FROM Services WHERE name = %(service_name)s LIMIT 1),
+            CURRENT_TIMESTAMP
+        )
+        """
+        
+        values = {
+            "request_id": request_id,
+            "service_name": service_name,
+            "request_type": command_type,  # Map command_type to request_type
+            "duration": duration,
+            "frequency": frequency,
+            "profiling_mode": profiling_mode,
+            "target_hostnames": target_hostnames,
+            "pids": pids,
+            "stop_level": stop_level,
+            "additional_args": json.dumps(additional_args) if additional_args else None
+        }
+        
+        rows_affected = self.db.execute(query, values, has_value=False)
+        return rows_affected > 0
+
+    def upsert_host_heartbeat(
+        self,
+        hostname: str,
+        ip_address: str,
+        service_name: str,
+        last_command_id: Optional[str] = None,
+        status: str = "active"
+    ) -> None:
+        """Update or insert host heartbeat information using simple SQL"""
+        query = """
+        INSERT INTO HostHeartbeats (hostname, ip_address, service_name, last_command_id, status, heartbeat_timestamp, updated_at)
+        VALUES (%(hostname)s, %(ip_address)s::inet, %(service_name)s, %(last_command_id)s::uuid, %(status)s::HostStatus, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT (hostname, service_name)
+        DO UPDATE SET
+            ip_address = EXCLUDED.ip_address,
+            last_command_id = EXCLUDED.last_command_id,
+            status = EXCLUDED.status,
+            heartbeat_timestamp = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        """
+
+        values = {
+            "hostname": hostname,
+            "ip_address": ip_address,
+            "service_name": service_name,
+            "last_command_id": last_command_id,
+            "status": status
+        }
+
+        self.db.execute(query, values, has_value=False)
+
+    def get_active_hosts(self, service_name: Optional[str] = None) -> List[Dict]:
+        """Get list of active hosts, optionally filtered by service"""
+        query = """
+        SELECT
+            hostname, ip_address, service_name, last_command_id,
+            status, heartbeat_timestamp
+        FROM HostHeartbeats
+        WHERE status = 'active'
+          AND heartbeat_timestamp > NOW() - INTERVAL '10 minutes'
+        """
+
+        values = {}
+        if service_name:
+            query += " AND service_name = %(service_name)s"
+            values["service_name"] = service_name
+
+        query += " ORDER BY heartbeat_timestamp DESC"
+
+        return self.db.execute(query, values, one_value=False, return_dict=True, fetch_all=True)
+
+    def create_or_update_profiling_command(
+        self,
+        command_id: str,
+        hostname: str,
+        service_name: str,
+        command_type: str,
+        new_request_id: str
+    ) -> bool:
+        """Create or update a profiling command for a host with command_type support"""
+        # Get the new request details to build combined_config
+        new_request = self._get_profiling_request_details(new_request_id)
+        if not new_request:
+            return False
+            
+        # Check if there's an existing command for this host/service
+        existing_command = self.get_current_profiling_command(hostname, service_name)
+        
+        combined_config = {}
+        request_ids = [new_request_id]
+        
+        if existing_command and existing_command.get("status") == "pending":
+            # Merge with existing command
+            existing_config = existing_command.get("combined_config", {})
+            existing_request_ids = existing_command.get("request_ids", [])
+            
+            # Merge request IDs
+            request_ids = existing_request_ids + [new_request_id]
+            
+            # Build combined config by merging all requests
+            combined_config = self._build_combined_config(request_ids, hostname, service_name)
+        else:
+            # Create new combined config from single request
+            combined_config = {
+                "duration": new_request.get("duration", 60),
+                "frequency": new_request.get("frequency", 11),
+                "profiling_mode": new_request.get("profiling_mode", "cpu")
+            }
+            
+            if new_request.get("pids"):
+                combined_config["pids"] = ",".join(map(str, new_request["pids"]))
+        
+        # For specific hostname, create/update command
+        query = """
+        INSERT INTO ProfilingCommands (
+            command_id, hostname, service_name, command_type, request_ids, combined_config, status, created_at
+        ) VALUES (
+            %(command_id)s::uuid, %(hostname)s, %(service_name)s, %(command_type)s,
+            %(request_ids)s, %(combined_config)s::jsonb, 'pending', CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (hostname, service_name) 
+        DO UPDATE SET
+            command_id = %(command_id)s::uuid,
+            command_type = %(command_type)s,
+            request_ids = %(request_ids)s,
+            combined_config = %(combined_config)s::jsonb,
+            status = 'pending',
+            created_at = CURRENT_TIMESTAMP
+        """
+        
+        values = {
+            "command_id": command_id,
+            "hostname": hostname,
+            "service_name": service_name,
+            "command_type": command_type,
+            "new_request_id": new_request_id,
+            "request_ids": request_ids,
+            "combined_config": json.dumps(combined_config)
+        }
+        
+        rows_affected = self.db.execute(query, values, has_value=False)
+        return rows_affected > 0
+
+    def create_stop_command_for_host(
+        self,
+        command_id: str,
+        hostname: str,
+        service_name: str,
+        request_id: str
+    ) -> bool:
+        """Create a stop command for an entire host"""
+        query = """
+        INSERT INTO ProfilingCommands (
+            command_id, hostname, service_name, command_type, request_ids, 
+            combined_config, status, created_at
+        ) VALUES (
+            %(command_id)s::uuid, %(hostname)s, %(service_name)s, 'stop',
+            ARRAY[%(request_id)s::uuid], 
+            '{"stop_level": "host"}'::jsonb,
+            'pending', CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (hostname, service_name)
+        DO UPDATE SET
+            command_id = %(command_id)s::uuid,
+            command_type = 'stop',
+            request_ids = array_append(ProfilingCommands.request_ids, %(request_id)s::uuid),
+            combined_config = '{"stop_level": "host"}'::jsonb,
+            status = 'pending',
+            created_at = CURRENT_TIMESTAMP
+        """
+        
+        values = {
+            "command_id": command_id,
+            "hostname": hostname,
+            "service_name": service_name,
+            "request_id": request_id
+        }
+        
+        rows_affected = self.db.execute(query, values, has_value=False)
+        return rows_affected > 0
+
+    def handle_process_level_stop(
+        self,
+        command_id: str,
+        hostname: str,
+        service_name: str,
+        pids_to_stop: Optional[List[int]],
+        request_id: str
+    ) -> bool:
+        """Handle process-level stop logic with PID management"""
+        if not pids_to_stop:
+            # If no PIDs specified, treat as host-level stop
+            return self.create_stop_command_for_host(command_id, hostname, service_name, request_id)
+        
+        # Get current command for this host to check existing PIDs
+        current_command = self.get_current_profiling_command(hostname, service_name)
+        
+        if current_command and current_command.get("command_type") == "start":
+            current_pids_str = current_command.get("combined_config", {}).get("pids", "")
+            
+            if current_pids_str:
+                # Parse the comma-separated PIDs string
+                current_pids = [int(pid.strip()) for pid in current_pids_str.split(",") if pid.strip()]
+                
+                # Remove specified PIDs from current command
+                remaining_pids = [pid for pid in current_pids if pid not in pids_to_stop]
+                
+                if len(remaining_pids) <= 1:
+                    # Convert to host-level stop if only one or no PIDs remain
+                    return self.create_stop_command_for_host(command_id, hostname, service_name, request_id)
+                else:
+                    # Update command with remaining PIDs as comma-separated string
+                    remaining_pids_str = ",".join(map(str, remaining_pids))
+                    query = """
+                    UPDATE ProfilingCommands 
+                    SET command_id = %(command_id)s::uuid,
+                        combined_config = jsonb_set(combined_config, '{pids}', %(remaining_pids)s::jsonb),
+                        request_ids = array_append(request_ids, %(request_id)s::uuid),
+                        status = 'pending',
+                        created_at = CURRENT_TIMESTAMP
+                    WHERE hostname = %(hostname)s AND service_name = %(service_name)s
+                    """
+                    
+                    values = {
+                        "command_id": command_id,
+                        "hostname": hostname,
+                        "service_name": service_name,
+                        "request_id": request_id,
+                        "remaining_pids": json.dumps(remaining_pids_str)
+                    }
+                    
+                    rows_affected = self.db.execute(query, values, has_value=False)
+                    return rows_affected > 0
+        
+        # Default: create stop command with specific PIDs
+        query = """
+        INSERT INTO ProfilingCommands (
+            command_id, hostname, service_name, command_type, request_ids,
+            combined_config, status, created_at
+        ) VALUES (
+            %(command_id)s::uuid, %(hostname)s, %(service_name)s, 'stop',
+            ARRAY[%(request_id)s::uuid],
+            %(combined_config)s::jsonb,
+            'pending', CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (hostname, service_name)
+        DO UPDATE SET
+            command_id = %(command_id)s::uuid,
+            command_type = 'stop',
+            request_ids = array_append(ProfilingCommands.request_ids, %(request_id)s::uuid),
+            combined_config = %(combined_config)s::jsonb,
+            status = 'pending',
+            created_at = CURRENT_TIMESTAMP
+        """
+        
+        combined_config = {
+            "stop_level": "process",
+            "pids": ",".join(map(str, pids_to_stop))
+        }
+        
+        values = {
+            "command_id": command_id,
+            "hostname": hostname,
+            "service_name": service_name,
+            "request_id": request_id,
+            "combined_config": json.dumps(combined_config)
+        }
+        
+        rows_affected = self.db.execute(query, values, has_value=False)
+        return rows_affected > 0
+
+    def get_current_profiling_command(self, hostname: str, service_name: str) -> Optional[Dict]:
+        """Get the current profiling command for a host/service"""
+        query = """
+        SELECT command_id, command_type, combined_config, request_ids, status, created_at
+        FROM ProfilingCommands
+        WHERE hostname = %(hostname)s AND service_name = %(service_name)s
+        ORDER BY created_at DESC
+        LIMIT 1
+        """
+        
+        values = {
+            "hostname": hostname,
+            "service_name": service_name
+        }
+        
+        result = self.db.execute(query, values, one_value=True, return_dict=True)
+        return result if result else None
+
+    def get_pending_profiling_command(
+        self,
+        hostname: str,
+        service_name: str,
+        exclude_command_id: Optional[str] = None
+    ) -> Optional[Dict]:
+        """Get pending profiling command for a specific host/service"""
+        query = """
+        SELECT command_id, command_type, combined_config, request_ids, status, created_at
+        FROM ProfilingCommands
+        WHERE hostname = %(hostname)s 
+          AND service_name = %(service_name)s
+          AND status = 'pending'
+        """
+        
+        values = {
+            "hostname": hostname,
+            "service_name": service_name
+        }
+        
+        if exclude_command_id:
+            query += " AND command_id != %(exclude_command_id)s::uuid"
+            values["exclude_command_id"] = exclude_command_id
+        
+        query += " ORDER BY created_at DESC LIMIT 1"
+        
+        result = self.db.execute(query, values, one_value=True, return_dict=True)
+        
+        if not result:
+            return None
+            
+        # Ensure combined_config has the correct structure and merged PIDs
+        combined_config = result.get("combined_config", {})
+        
+        # If combined_config is empty or missing required fields, rebuild it
+        if not combined_config or not all(k in combined_config for k in ["duration", "frequency", "profiling_mode"]):
+            request_ids = result.get("request_ids", [])
+            combined_config = self._build_combined_config(request_ids, hostname, service_name)
+            
+            # Update the command with the rebuilt combined_config
+            if combined_config:
+                update_query = """
+                UPDATE ProfilingCommands
+                SET combined_config = %(combined_config)s::jsonb
+                WHERE command_id = %(command_id)s::uuid AND hostname = %(hostname)s
+                """
+                
+                update_values = {
+                    "command_id": str(result["command_id"]),
+                    "hostname": hostname,
+                    "combined_config": json.dumps(combined_config)
+                }
+                
+                self.db.execute(update_query, update_values, has_value=False)
+                result["combined_config"] = combined_config
+        
+        return result
+
+    def mark_profiling_command_sent(self, command_id: str, hostname: str) -> bool:
+        """Mark a profiling command as sent to a host"""
+        query = """
+        UPDATE ProfilingCommands
+        SET status = 'sent', sent_at = CURRENT_TIMESTAMP
+        WHERE command_id = %(command_id)s::uuid AND hostname = %(hostname)s
+        """
+        
+        values = {
+            "command_id": command_id,
+            "hostname": hostname
+        }
+        
+        rows_affected = self.db.execute(query, values, has_value=False)
+        return rows_affected > 0
+    
+    def update_profiling_command_status(
+        self,
+        command_id: str,
+        hostname: str,
+        status: str,
+        execution_time: Optional[int] = None,
+        error_message: Optional[str] = None,
+        results_path: Optional[str] = None
+    ) -> bool:
+        """Update the status of a profiling command"""
+        query = """
+        UPDATE ProfilingCommands
+        SET status = %(status)s,
+            completed_at = CASE WHEN %(status)s IN ('completed', 'failed') THEN CURRENT_TIMESTAMP ELSE completed_at END,
+            execution_time = %(execution_time)s,
+            error_message = %(error_message)s,
+            results_path = %(results_path)s
+        WHERE command_id = %(command_id)s::uuid AND hostname = %(hostname)s
+        """
+        
+        values = {
+            "command_id": command_id,
+            "hostname": hostname,
+            "status": status,
+            "execution_time": execution_time,
+            "error_message": error_message,
+            "results_path": results_path
+        }
+        
+        rows_affected = self.db.execute(query, values, has_value=False)
+        return rows_affected > 0
+
+    def update_host_heartbeat(
+        self,
+        hostname: str,
+        ip_address: str,
+        service_name: str,
+        status: str,
+        last_command_id: Optional[str] = None,
+        timestamp: Optional[datetime] = None
+    ) -> None:
+        """Update host heartbeat information (wrapper around upsert_host_heartbeat)"""
+        self.upsert_host_heartbeat(
+            hostname=hostname,
+            ip_address=ip_address,
+            service_name=service_name,
+            last_command_id=last_command_id,
+            status=status
+        )
+
+    def _get_profiling_request_details(self, request_id: str) -> Optional[Dict]:
+        """Get details of a specific profiling request"""
+        query = """
+        SELECT request_id, duration, frequency, profiling_mode, pids, target_hostnames
+        FROM ProfilingRequests
+        WHERE request_id = %(request_id)s::uuid
+        """
+        
+        values = {"request_id": request_id}
+        result = self.db.execute(query, values, one_value=True, return_dict=True)
+        return result if result else None
+
+    def _build_combined_config(self, request_ids: List[str], hostname: str, service_name: str) -> Dict:
+        """Build combined configuration from multiple profiling requests"""
+        if not request_ids:
+            return {}
+        
+        # Get all request details
+        request_details = []
+        for req_id in request_ids:
+            details = self._get_profiling_request_details(req_id)
+            if details:
+                request_details.append(details)
+        
+        if not request_details:
+            return {}
+        
+        # Use the most recent request's basic settings
+        latest_request = request_details[-1]
+        combined_config = {
+            "duration": latest_request.get("duration", 60),
+            "frequency": latest_request.get("frequency", 11),
+            "profiling_mode": latest_request.get("profiling_mode", "cpu")
+        }
+        
+        # Merge PIDs from all requests that target this hostname
+        all_pids = set()
+        for req in request_details:
+            if req.get("pids"):
+                # Check if this request targets this hostname or all hostnames
+                target_hostnames = req.get("target_hostnames")
+                if not target_hostnames or hostname in target_hostnames:
+                    all_pids.update(req["pids"])
+        
+        if all_pids:
+            combined_config["pids"] = ",".join(map(str, sorted(all_pids)))
+        
+        return combined_config

@@ -15,11 +15,10 @@
 #
 
 import math
+import uuid
 from datetime import datetime, timedelta
 from logging import getLogger
 from typing import List, Optional
-
-from botocore.exceptions import ClientError
 
 from backend.models.filters_models import FilterTypes
 from backend.models.flamegraph_models import FGParamsBaseModel
@@ -38,12 +37,72 @@ from backend.utils.filters_utils import get_rql_first_eq_key, get_rql_only_for_o
 from backend.utils.request_utils import flamegraph_base_request_params, get_metrics_response, get_query_response
 from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import Response
-
-from gprofiler_dev import S3ProfileDal
 from gprofiler_dev.postgres.db_manager import DBManager
 
 logger = getLogger(__name__)
 router = APIRouter()
+
+
+class ProfilingRequest(BaseModel):
+    """Model for profiling request parameters"""
+    service_name: str
+    request_type: str = "start"  # start, stop
+    duration: Optional[int] = 60  # seconds
+    frequency: Optional[int] = 11  # Hz
+    profiling_mode: Optional[str] = "cpu"  # cpu, allocation, none
+    target_hostnames: List[str]  # Required - list of target hostnames
+    pids: Optional[List[int]] = None
+    stop_level: Optional[str] = "process"  # process, host (only relevant for stop commands)
+    additional_args: Optional[Dict[str, Any]] = None
+
+
+class ProfilingResponse(BaseModel):
+    """Response model for profiling requests"""
+    success: bool
+    message: str
+    request_id: Optional[str] = None
+    command_id: Optional[str] = None  # Added for agent idempotency
+    estimated_completion_time: Optional[datetime] = None
+
+
+class HeartbeatRequest(BaseModel):
+    """Model for host heartbeat request"""
+    ip_address: str
+    hostname: str
+    service_name: str
+    last_command_id: Optional[str] = None
+    status: Optional[str] = "active"  # active, idle, error
+    timestamp: Optional[datetime] = None
+
+
+class HeartbeatResponse(BaseModel):
+    """Response model for heartbeat requests"""
+    success: bool
+    message: str
+    profiling_command: Optional[Dict[str, Any]] = None  # Changed from profiling_request to profiling_command
+    command_id: Optional[str] = None
+
+
+class ProfilingCommand(BaseModel):
+    """Model for combined profiling command sent to hosts"""
+    command_id: str
+    command_type: str  # start, stop
+    hostname: str
+    service_name: str
+    combined_config: Dict[str, Any]  # Combined configuration from multiple requests
+    request_ids: List[str]  # List of request IDs that make up this command
+    created_at: datetime
+    status: str  # pending, sent, completed, failed
+
+
+class CommandCompletionRequest(BaseModel):
+    """Model for reporting command completion"""
+    command_id: str
+    hostname: str
+    status: str  # completed, failed
+    execution_time: Optional[int] = None  # seconds
+    error_message: Optional[str] = None
+    results_path: Optional[str] = None  # S3 path or local path to results
 
 
 def get_time_interval_value(start_time: datetime, end_time: datetime, interval: str) -> str:
@@ -217,21 +276,3 @@ def calculate_trend_in_cpu(
     )
 
     return response
-
-
-@router.get("/html_metadata", response_model=HTMLMetadata)
-def get_html_metadata(
-    fg_params: FGParamsBaseModel = Depends(flamegraph_base_request_params),
-):
-    host_name_value = get_rql_first_eq_key(fg_params.filter, FilterTypes.HOSTNAME_KEY)
-    if not host_name_value:
-        raise HTTPException(400, detail="Must filter by hostname to get the html metadata")
-    s3_path = get_metrics_response(fg_params, lookup_for="lasthtml")
-    if not s3_path:
-        raise HTTPException(404, detail="The html metadata path not found in CH")
-    s3_dal = S3ProfileDal(logger)
-    try:
-        html_content = s3_dal.get_object(s3_path, is_gzip=True)
-    except ClientError:
-        raise HTTPException(status_code=404, detail="The html metadata file not found in S3")
-    return HTMLMetadata(content=html_content)
