@@ -789,5 +789,5 @@ def get_profiling_host_status(
                 heartbeat_timestamp=host.get("heartbeat_timestamp"),
             )
         )
-
+    
     return results

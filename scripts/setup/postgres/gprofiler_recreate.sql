@@ -782,4 +782,3 @@ create aggregate zz_hashagg(text) (
     sfunc = zz_concat,
     stype = text,
     initcond = '');
-

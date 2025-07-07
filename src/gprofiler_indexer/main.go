@@ -46,6 +46,13 @@ func main() {
 	args.ParseArgs()
 
 	logger.Infof("Starting %s", AppName)
+	
+	// Initialize optimization rules on startup
+	if err := UpsertOptimizationRules(args); err != nil {
+		logger.Warnf("Failed to initialize optimization rules: %v", err)
+		// Don't fail startup, just warn
+	}
+	
 	tasks := make(chan SQSMessage, args.Concurrency)
 	channels := RecordChannels{
 		StacksRecords:  make(chan StackRecord, args.ClickHouseStacksBatchSize),

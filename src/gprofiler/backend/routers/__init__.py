@@ -22,6 +22,7 @@ from backend.routers import (
     installations_routes,
     metrics_routes,
     minesweeper_routes,
+    optimization_routes,
     overview_routes,
     profiles_routes,
     services_routes,
@@ -39,4 +40,5 @@ router.include_router(profiles_routes.router, prefix="/v2/profiles", tags=["agen
 router.include_router(services_routes.router, prefix="/services", tags=["app"])
 router.include_router(filters_routes.router, prefix="/v1/filters", tags=["filters"])
 router.include_router(overview_routes.router, prefix="/overview", tags=["overview"])
+router.include_router(optimization_routes.router, tags=["optimization"])
 router.include_router(minesweeper_routes.router, prefix="/snapshots", tags=["snapshots"])

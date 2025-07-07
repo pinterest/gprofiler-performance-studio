@@ -21,6 +21,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/a8m/rql"
@@ -306,4 +307,131 @@ func (h Handlers) GetLastHTML(c *gin.Context) {
 	}
 	response.SetExecTime(c.GetTime("requestStartTime"))
 	c.JSON(http.StatusOK, response)
+}
+
+// OptimizationResponse represents the API response for optimization recommendations
+type OptimizationResponse struct {
+	Result []db.OptimizationRecommendation `json:"result"`
+	ExecTimeResponse
+}
+
+func (h Handlers) GetOptimizationRecommendations(c *gin.Context) {
+	// Parse query parameters
+	serviceId := c.Query("service_id")
+	technology := c.Query("technology")
+	complexity := c.Query("complexity")
+	minImpact := c.DefaultQuery("min_impact", "0")
+	limit := c.DefaultQuery("limit", "100")
+
+	// Build WHERE clause (simplified - remove date filtering for now)
+	whereConditions := []string{}
+	
+	if serviceId != "" {
+		whereConditions = append(whereConditions, fmt.Sprintf("ServiceId = '%s'", serviceId))
+	}
+	if technology != "" {
+		whereConditions = append(whereConditions, fmt.Sprintf("Technology = '%s'", technology))
+	}
+	if complexity != "" {
+		whereConditions = append(whereConditions, fmt.Sprintf("ImplementationComplexity = '%s'", complexity))
+	}
+	if minImpact != "0" {
+		whereConditions = append(whereConditions, fmt.Sprintf("RelativeResourceReductionPercentInService >= %s", minImpact))
+	}
+	
+	whereClause := ""
+	if len(whereConditions) > 0 {
+		whereClause = " WHERE " + strings.Join(whereConditions, " AND ")
+	}
+
+	// Build and execute query
+	query := fmt.Sprintf(`
+		SELECT
+			ServiceId,
+			Technology,
+			OptimizationPattern,
+			ActionableRecommendation,
+			ImplementationComplexity,
+			RuleId,
+			RuleName,
+			RuleCategory,
+			OptimizationType,
+			RuleSource,
+			toString(TopAffectedStacks) as TopAffectedStacks,
+			MinGlobalImpactPercent,
+			MaxGlobalImpactPercent,
+			PrecisionScore,
+			AccuracyScore,
+			AffectedStacks,
+			TotalSamplesInPattern,
+			RelativeResourceReductionPercentInService,
+			DollarImpact,
+			NumHosts,
+			toString(created_date) as created_date,
+			toString(updated_date) as updated_date,
+			created_by
+		FROM flamedb.optimization_pattern_summary_v2_local
+		%s
+		ORDER BY RelativeResourceReductionPercentInService DESC, ServiceId
+		LIMIT %s
+	`, whereClause, limit)
+
+	ctx := c.Request.Context()
+	
+	if fetchResponse, err := h.ChClient.FetchOptimizationRecommendations(ctx, query); err != nil {
+		log.Printf("Error fetching optimization recommendations: %v", err)
+		c.Status(http.StatusNoContent)
+		return
+	} else {
+		response := OptimizationResponse{
+			Result: fetchResponse,
+		}
+		response.SetExecTime(c.GetTime("requestStartTime"))
+		c.JSON(http.StatusOK, response)
+	}
+}
+
+func (h Handlers) GetOptimizationSummary(c *gin.Context) {
+	query := `
+		SELECT
+			count() as total_recommendations,
+			countDistinct(ServiceId) as affected_services,
+			countDistinct(Technology) as technologies_count,
+			sum(AffectedStacks) as total_affected_stacks,
+			avg(RelativeResourceReductionPercentInService) as avg_cpu_impact,
+			max(RelativeResourceReductionPercentInService) as max_cpu_impact,
+			countIf(ImplementationComplexity = 'EASY') as easy_fixes,
+			countIf(ImplementationComplexity = 'MEDIUM') as medium_fixes,
+			countIf(ImplementationComplexity = 'COMPLEX') as complex_fixes,
+			countIf(ImplementationComplexity = 'VERY_COMPLEX') as very_complex_fixes
+		FROM flamedb.optimization_pattern_summary_v2_local
+	`
+
+	ctx := c.Request.Context()
+	
+	if fetchResponse, err := h.ChClient.FetchOptimizationSummary(ctx, query); err != nil {
+		log.Printf("Error fetching optimization summary: %v", err)
+		c.Status(http.StatusNoContent)
+		return
+	} else {
+		c.JSON(http.StatusOK, fetchResponse)
+	}
+}
+
+func (h Handlers) GetOptimizationTechnologies(c *gin.Context) {
+	query := `
+		SELECT DISTINCT Technology
+		FROM flamedb.optimization_pattern_summary_v2_local
+		ORDER BY Technology
+	`
+
+	ctx := c.Request.Context()
+	
+	if fetchResponse, err := h.ChClient.FetchOptimizationTechnologies(ctx, query); err != nil {
+		log.Printf("Error fetching optimization technologies: %v", err)
+		c.Status(http.StatusNoContent)
+		return
+	} else {
+		c.JSON(http.StatusOK, fetchResponse)
+	}
 }

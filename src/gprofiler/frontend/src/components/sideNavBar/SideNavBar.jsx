@@ -24,7 +24,7 @@ import ListItemText from '@mui/material/ListItemText';
 import { Link, useLocation } from 'react-router-dom';
 
 import { GprofilerLogo, GprofilerLogoWhiteText } from '../../svg';
-import { ComparisonPageIcon, DocumentationIcon, OverviewPageIcon, ProfilesPageIcon } from '../../svg/sideMenuIcons';
+import { ComparisonPageIcon, DocumentationIcon, OverviewPageIcon, ProfilesPageIcon, OptimizationPageIcon } from '../../svg/sideMenuIcons';
 import { COLORS } from '../../theme/colors';
 import { EXTERNAL_URLS, PAGES } from '../../utils/consts';
 import { useFullScreenContext } from '../../utils/contexts';
@@ -62,6 +62,13 @@ let navigationItems = [
         to: PAGES.comparison.to,
         icon: <ComparisonPageIcon fill={COLORS.SILVER_GREY} />,
         selectedIcon: <ComparisonPageIcon />,
+    },
+    {
+        key: PAGES.optimization.key,
+        label: PAGES.optimization.label,
+        to: PAGES.optimization.to,
+        icon: <OptimizationPageIcon fill={COLORS.SILVER_GREY} />,
+        selectedIcon: <OptimizationPageIcon />,
     },
 ];
 

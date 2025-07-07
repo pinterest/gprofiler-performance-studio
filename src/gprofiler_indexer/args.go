@@ -36,6 +36,8 @@ type CLIArgs struct {
 	FrameReplaceFileName       string
 	AWSEndpoint                string
 	AWSRegion                  string
+	SkipRulesInit              bool
+	RulesConfigPath            string
 }
 
 func NewCliArgs() *CLIArgs {
@@ -50,6 +52,8 @@ func NewCliArgs() *CLIArgs {
 		ClickHouseStacksBatchSize:  10000,
 		ClickHouseMetricsBatchSize: 100,
 		FrameReplaceFileName:       ConfPrefix + "replace.yaml",
+		SkipRulesInit:              false,
+		RulesConfigPath:            "rule/optimization_rules.yaml",
 	}
 }
 
@@ -83,6 +87,10 @@ func (ca *CLIArgs) ParseArgs() {
 	flag.StringVar(&ca.FrameReplaceFileName, "replace-file", LookupEnvOrString("REPLACE_FILE",
 		ca.FrameReplaceFileName),
 		"replace.yaml")
+	flag.BoolVar(&ca.SkipRulesInit, "skip-rules-init", LookupEnvOrBool("SKIP_RULES_INIT", ca.SkipRulesInit),
+		"Skip optimization rules initialization on startup")
+	flag.StringVar(&ca.RulesConfigPath, "rules-config-path", LookupEnvOrString("RULES_CONFIG_PATH", ca.RulesConfigPath),
+		"Path to optimization rules YAML config file")
 	flag.Parse()
 
 	if ca.SQSQueue == "" && ca.InputFolder == "" {
