@@ -81,6 +81,10 @@ func main() {
 	router.GET("/api/v1/metrics/graph", h.GetMetricsGraph)
 	router.GET("/api/v1/metrics/cpu_trend", h.GetMetricsCpuTrends)
 	router.GET("/api/v1/metrics/lasthtml", h.GetLastHTML)
+	// Heartbeat-based profiling control endpoints
+	router.POST("/api/metrics/profile_request", h.CreateProfilingRequest)
+	router.POST("/api/metrics/heartbeat", h.ReceiveHeartbeat)
+	router.POST("/api/metrics/command_completion", h.CommandCompletion)
 	if config.UseTLS {
 		router.RunTLS("0.0.0.0:4433", config.CertFilePath, config.KeyFilePath)
 	} else {
