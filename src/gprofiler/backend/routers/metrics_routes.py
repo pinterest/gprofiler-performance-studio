@@ -22,6 +22,8 @@ from typing import List, Optional, Dict, Any
 
 from botocore.exceptions import ClientError
 
+from botocore.exceptions import ClientError
+
 from backend.models.filters_models import FilterTypes
 from backend.models.flamegraph_models import FGParamsBaseModel
 from backend.models.metrics_models import (
@@ -40,6 +42,7 @@ from backend.utils.request_utils import flamegraph_base_request_params, get_metr
 from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
+
 
 from gprofiler_dev import S3ProfileDal
 from gprofiler_dev.postgres.db_manager import DBManager
@@ -596,3 +599,4 @@ def report_command_completion(completion: CommandCompletionRequest):
             status_code=500,
             detail="Internal server error while processing command completion"
         )
+

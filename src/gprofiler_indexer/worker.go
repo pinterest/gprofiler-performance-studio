@@ -18,14 +18,15 @@ package main
 
 import (
 	"fmt"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	log "github.com/sirupsen/logrus"
 	"io/ioutil"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	log "github.com/sirupsen/logrus"
 )
 
 func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesWriter, wg *sync.WaitGroup) {
@@ -75,10 +76,11 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 			log.Debugf("Unable to fetch timestamp from filename %s, fallback to the current time", temp)
 			timestamp = time.Now().UTC()
 		}
-		err = pw.ParseStackFrameFile(task.ServiceId, timestamp, buf)
+		err := pw.ParseStackFrameFile(sess, task, args.S3Bucket, timestamp, buf)
 		if err != nil {
 			log.Errorf("Error while parsing stack frame file: %v", err)
 		}
+
 		if useSQS {
 			errDelete := deleteMessage(sess, task.QueueURL, task.MessageHandle)
 			if errDelete != nil {
