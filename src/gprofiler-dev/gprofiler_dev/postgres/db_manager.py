@@ -640,14 +640,20 @@ class DBManager(metaclass=Singleton):
     ) -> None:
         """Update or insert host heartbeat information using simple SQL"""
         query = """
-        INSERT INTO HostHeartbeats (hostname, ip_address, service_name, last_command_id, status, heartbeat_timestamp, updated_at)
-        VALUES (%(hostname)s, %(ip_address)s::inet, %(service_name)s, %(last_command_id)s::uuid, %(status)s::HostStatus, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        INSERT INTO HostHeartbeats (
+            hostname, ip_address, service_name, last_command_id, 
+            status, last_heartbeat, created_at, updated_at
+        ) VALUES (
+            %(hostname)s, %(ip_address)s::inet, %(service_name)s,
+            %(last_command_id)s::uuid, %(status)s::HostStatus,
+            %(last_heartbeat)s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        )
         ON CONFLICT (hostname, service_name)
         DO UPDATE SET
             ip_address = EXCLUDED.ip_address,
             last_command_id = EXCLUDED.last_command_id,
             status = EXCLUDED.status,
-            heartbeat_timestamp = CURRENT_TIMESTAMP,
+            last_heartbeat = EXCLUDED.last_heartbeat,
             updated_at = CURRENT_TIMESTAMP
         """
 
@@ -656,20 +662,36 @@ class DBManager(metaclass=Singleton):
             "ip_address": ip_address,
             "service_name": service_name,
             "last_command_id": last_command_id,
-            "status": status
+            "status": status,
+            "last_heartbeat": heartbeat_timestamp
         }
 
         self.db.execute(query, values, has_value=False)
+        return True
+
+    def get_host_heartbeat(self, hostname: str) -> Optional[Dict]:
+        """Get the latest heartbeat information for a host"""
+        query = """
+        SELECT
+            hostname, ip_address, service_name, last_command_id,
+            status, last_heartbeat, created_at, updated_at
+        FROM HostHeartbeats
+        WHERE hostname = %(hostname)s
+        """
+
+        values = {"hostname": hostname}
+        result = self.db.execute(query, values, one_value=True, return_dict=True)
+        return result if result else None
 
     def get_active_hosts(self, service_name: Optional[str] = None) -> List[Dict]:
         """Get list of active hosts, optionally filtered by service"""
         query = """
         SELECT
             hostname, ip_address, service_name, last_command_id,
-            status, heartbeat_timestamp
+            status, last_heartbeat
         FROM HostHeartbeats
         WHERE status = 'active'
-          AND heartbeat_timestamp > NOW() - INTERVAL '10 minutes'
+          AND last_heartbeat > NOW() - INTERVAL '10 minutes'
         """
 
         values = {}
@@ -677,9 +699,82 @@ class DBManager(metaclass=Singleton):
             query += " AND service_name = %(service_name)s"
             values["service_name"] = service_name
 
-        query += " ORDER BY heartbeat_timestamp DESC"
+        query += " ORDER BY last_heartbeat DESC"
 
         return self.db.execute(query, values, one_value=False, return_dict=True, fetch_all=True)
+
+    def get_all_host_heartbeats(self, limit: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+        """Get all host heartbeat records with optional pagination"""
+        query = """
+        SELECT
+            ID, hostname, ip_address, service_name, last_command_id,
+            status, last_heartbeat, created_at, updated_at
+        FROM HostHeartbeats
+        ORDER BY last_heartbeat DESC
+        """
+        
+        values = {}
+        if limit is not None:
+            query += " LIMIT %(limit)s"
+            values["limit"] = limit
+        if offset is not None:
+            query += " OFFSET %(offset)s"
+            values["offset"] = offset
+        
+        return self.db.execute(query, values, one_value=False, return_dict=True, fetch_all=True)
+    
+    def get_host_heartbeats_by_service(self, service_name: str, limit: Optional[int] = None) -> List[Dict]:
+        """Get all host heartbeat records for a specific service"""
+        query = """
+        SELECT
+            ID, hostname, ip_address, service_name, last_command_id,
+            status, last_heartbeat, created_at, updated_at
+        FROM HostHeartbeats
+        WHERE service_name = %(service_name)s
+        ORDER BY last_heartbeat DESC
+        """
+        
+        values = {"service_name": service_name}
+        if limit is not None:
+            query += " LIMIT %(limit)s"
+            values["limit"] = limit
+        
+        return self.db.execute(query, values, one_value=False, return_dict=True, fetch_all=True)
+    
+    def get_host_heartbeats_by_status(self, status: str, limit: Optional[int] = None) -> List[Dict]:
+        """Get all host heartbeat records by status"""
+        query = """
+        SELECT
+            ID, hostname, ip_address, service_name, last_command_id,
+            status, last_heartbeat, created_at, updated_at
+        FROM HostHeartbeats
+        WHERE status = %(status)s
+        ORDER BY last_heartbeat DESC
+        """
+        
+        values = {"status": status}
+        if limit is not None:
+            query += " LIMIT %(limit)s"
+            values["limit"] = limit
+        
+        return self.db.execute(query, values, one_value=False, return_dict=True, fetch_all=True)
+
+    def get_profiler_request_status(self, request_id: str) -> Optional[Dict]:
+        """Get the current status of a profiling request"""
+        query = """
+        SELECT
+            pr.request_id, pr.service_name, pr.status, pr.assigned_to_hostname,
+            pr.created_at, pr.assigned_at, pr.completed_at, pr.estimated_completion_time,
+            pe.command_id, pe.hostname as execution_hostname, pe.started_at,
+            pe.completed_at as execution_completed_at, pe.error_message
+        FROM ProfilingRequests pr
+        LEFT JOIN ProfilingExecutions pe ON pr.ID = pe.profiling_request_id
+        WHERE pr.request_id = %(request_id)s::uuid
+        """
+
+        values = {"request_id": request_id}
+        result = self.db.execute(query, values, one_value=True, return_dict=True)
+        return result if result else None
 
     def create_or_update_profiling_command(
         self,
