@@ -806,19 +806,18 @@ class DBManager(metaclass=Singleton):
         query = """
         INSERT INTO HostHeartbeats (
             hostname, ip_address, service_name, last_command_id, 
-            status, heartbeat_timestamp, created_at, updated_at
+            status, last_heartbeat, created_at, updated_at
         ) VALUES (
             %(hostname)s, %(ip_address)s::inet, %(service_name)s,
-            %(last_command_id)s::uuid, %(status)s::HostStatus, 
-            %(heartbeat_timestamp)s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            %(last_command_id)s::uuid, %(status)s::HostStatus,
+            %(last_heartbeat)s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         )
-        ON CONFLICT (hostname)
+        ON CONFLICT (hostname, service_name)
         DO UPDATE SET
             ip_address = EXCLUDED.ip_address,
-            service_name = EXCLUDED.service_name,
             last_command_id = EXCLUDED.last_command_id,
             status = EXCLUDED.status,
-            heartbeat_timestamp = EXCLUDED.heartbeat_timestamp,
+            last_heartbeat = EXCLUDED.last_heartbeat,
             updated_at = CURRENT_TIMESTAMP
         """
 
@@ -828,17 +827,18 @@ class DBManager(metaclass=Singleton):
             "service_name": service_name,
             "last_command_id": last_command_id,
             "status": status,
-            "heartbeat_timestamp": heartbeat_timestamp
+            "last_heartbeat": heartbeat_timestamp
         }
 
         self.db.execute(query, values, has_value=False)
+        return True
 
     def get_host_heartbeat(self, hostname: str) -> Optional[Dict]:
         """Get the latest heartbeat information for a host"""
         query = """
         SELECT
             hostname, ip_address, service_name, last_command_id,
-            status, heartbeat_timestamp, created_at, updated_at
+            status, last_heartbeat, created_at, updated_at
         FROM HostHeartbeats
         WHERE hostname = %(hostname)s
         """
@@ -852,10 +852,10 @@ class DBManager(metaclass=Singleton):
         query = """
         SELECT
             hostname, ip_address, service_name, last_command_id,
-            status, heartbeat_timestamp
+            status, last_heartbeat
         FROM HostHeartbeats
         WHERE status = 'active'
-          AND heartbeat_timestamp > NOW() - INTERVAL '10 minutes'
+          AND last_heartbeat > NOW() - INTERVAL '10 minutes'
         """
 
         values = {}
@@ -863,7 +863,7 @@ class DBManager(metaclass=Singleton):
             query += " AND service_name = %(service_name)s"
             values["service_name"] = service_name
 
-        query += " ORDER BY heartbeat_timestamp DESC"
+        query += " ORDER BY last_heartbeat DESC"
 
         return self.db.execute(query, values, one_value=False, return_dict=True, fetch_all=True)
 
@@ -872,9 +872,9 @@ class DBManager(metaclass=Singleton):
         query = """
         SELECT
             ID, hostname, ip_address, service_name, last_command_id,
-            status, heartbeat_timestamp, created_at, updated_at
+            status, last_heartbeat, created_at, updated_at
         FROM HostHeartbeats
-        ORDER BY heartbeat_timestamp DESC
+        ORDER BY last_heartbeat DESC
         """
         
         values = {}
@@ -892,10 +892,10 @@ class DBManager(metaclass=Singleton):
         query = """
         SELECT
             ID, hostname, ip_address, service_name, last_command_id,
-            status, heartbeat_timestamp, created_at, updated_at
+            status, last_heartbeat, created_at, updated_at
         FROM HostHeartbeats
         WHERE service_name = %(service_name)s
-        ORDER BY heartbeat_timestamp DESC
+        ORDER BY last_heartbeat DESC
         """
         
         values = {"service_name": service_name}
@@ -910,10 +910,10 @@ class DBManager(metaclass=Singleton):
         query = """
         SELECT
             ID, hostname, ip_address, service_name, last_command_id,
-            status, heartbeat_timestamp, created_at, updated_at
+            status, last_heartbeat, created_at, updated_at
         FROM HostHeartbeats
         WHERE status = %(status)s
-        ORDER BY heartbeat_timestamp DESC
+        ORDER BY last_heartbeat DESC
         """
         
         values = {"status": status}

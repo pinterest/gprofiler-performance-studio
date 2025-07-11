@@ -386,7 +386,7 @@ def create_profiling_request(profiling_request: ProfilingRequest):
                 if profiling_request.target_hostnames:
                     for hostname in profiling_request.target_hostnames:
                         db_manager.create_or_update_profiling_command(
-                            command_id=command_id,
+                            command_id=str(uuid.uuid4()) ,
                             hostname=hostname,
                             service_name=profiling_request.service_name,
                             command_type="start",
@@ -395,7 +395,7 @@ def create_profiling_request(profiling_request: ProfilingRequest):
                 else:
                     # If no specific hostnames, create command for all hosts of this service
                     db_manager.create_or_update_profiling_command(
-                        command_id=command_id,
+                        command_id=str(uuid.uuid4()) ,
                         hostname=None,  # Will be handled for all hosts of the service
                         service_name=profiling_request.service_name,
                         command_type="start",
@@ -409,7 +409,7 @@ def create_profiling_request(profiling_request: ProfilingRequest):
                         if profiling_request.stop_level == "host":
                             # Stop entire host
                             db_manager.create_stop_command_for_host(
-                                command_id=command_id,
+                                command_id=str(uuid.uuid4()) ,
                                 hostname=hostname,
                                 service_name=profiling_request.service_name,
                                 request_id=request_id
@@ -417,7 +417,7 @@ def create_profiling_request(profiling_request: ProfilingRequest):
                         else:  # process level stop
                             # Stop specific processes or modify existing commands
                             db_manager.handle_process_level_stop(
-                                command_id=command_id,
+                                command_id=str(uuid.uuid4()) ,
                                 hostname=hostname,
                                 service_name=profiling_request.service_name,
                                 pids_to_stop=profiling_request.pids,
@@ -490,14 +490,14 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
         
         try:
             # 1. Update host heartbeat information in PostgreSQL DB
-            # db_manager.upsert_host_heartbeat(
-            #     hostname=heartbeat.hostname,
-            #     ip_address=heartbeat.ip_address,
-            #     service_name=heartbeat.service_name,
-            #     last_command_id=heartbeat.last_command_id,
-            #     status=heartbeat.status,
-            #     heartbeat_timestamp=heartbeat.timestamp
-            # )
+            db_manager.upsert_host_heartbeat(
+                hostname=heartbeat.hostname,
+                ip_address=heartbeat.ip_address,
+                service_name=heartbeat.service_name,
+                last_command_id=heartbeat.last_command_id,
+                status=heartbeat.status,
+                heartbeat_timestamp=heartbeat.timestamp
+            )
             
             # 2. Check for pending profiling commands for this host/service
             pending_command = db_manager.get_pending_profiling_command(
