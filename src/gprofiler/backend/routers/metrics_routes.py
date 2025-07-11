@@ -14,6 +14,7 @@
 # limitations under the License.
 #
 
+import json
 import math
 import uuid
 from datetime import datetime, timedelta
@@ -308,7 +309,7 @@ def create_profiling_request(profiling_request: ProfilingRequest):
     
     This endpoint accepts profiling arguments in JSON format and handles both
     start and stop profiling commands. Each request generates a unique command_id
-    that agents use for idempotency - agents will only execute commands with 
+    that agents use for idempotency - agents will only execute commands with
     new command IDs they haven't seen before.
     
     START commands:
@@ -326,7 +327,7 @@ def create_profiling_request(profiling_request: ProfilingRequest):
         valid_modes = ["cpu", "allocation", "none"]
         if profiling_request.profiling_mode not in valid_modes:
             raise HTTPException(
-                status_code=400, 
+                status_code=400,
                 detail=f"Invalid profiling mode. Must be one of: {valid_modes}"
             )
         
@@ -359,31 +360,25 @@ def create_profiling_request(profiling_request: ProfilingRequest):
             }
         )
         
-        # TODO: Implement actual profiling logic here
-        # This is where you would:
-        # 1. Save the profiling request arguments to PostgreSQL DB for tracking and audit purposes
-        # 2. Create or update profiling commands for target hosts based on command type (start/stop)
-        # 3. For stop commands: handle process-level vs host-level stopping logic
-        # 4. Return a request ID for tracking
-        
         db_manager = DBManager()
         request_id = str(uuid.uuid4())
         command_id = str(uuid.uuid4())  # Generate unique command ID for agent idempotency
         
         try:
-            # Save the profiling request to database
-            db_manager.save_profiling_request(
+            # Save the profiling request to database using enhanced method
+            success = db_manager.save_profiling_request(
                 request_id=request_id,
                 service_name=profiling_request.service_name,
-                command_type=profiling_request.command_type,
                 duration=profiling_request.duration,
                 frequency=profiling_request.frequency,
                 profiling_mode=profiling_request.profiling_mode,
                 target_hostnames=profiling_request.target_hostnames,
                 pids=profiling_request.pids,
-                stop_level=profiling_request.stop_level,
                 additional_args=profiling_request.additional_args
             )
+            
+            if not success:
+                raise Exception("Failed to save profiling request to database")
             
             # Handle start vs stop commands differently
             if profiling_request.command_type == "start":
@@ -395,7 +390,7 @@ def create_profiling_request(profiling_request: ProfilingRequest):
                             hostname=hostname,
                             service_name=profiling_request.service_name,
                             command_type="start",
-                            new_request_id=request_id
+                            new_request_id=request_id,
                         )
                 else:
                     # If no specific hostnames, create command for all hosts of this service
@@ -404,7 +399,7 @@ def create_profiling_request(profiling_request: ProfilingRequest):
                         hostname=None,  # Will be handled for all hosts of the service
                         service_name=profiling_request.service_name,
                         command_type="start",
-                        new_request_id=request_id
+                        new_request_id=request_id,
                     )
             
             elif profiling_request.command_type == "stop":
@@ -491,28 +486,20 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
             }
         )
         
-        # TODO: Implement actual heartbeat and profiling command logic here
-        # This is where you would:
-        # 1. Update host heartbeat information in PostgreSQL DB
-        # 2. Check for pending profiling commands for this host/service
-        # 3. Filter commands that haven't been sent yet (not matching last_command_id)
-        # 4. Mark the profiling command as sent
-        # 5. Return the profiling command details to the host
-        
         db_manager = DBManager()
         
         try:
-            # Update host heartbeat information
-            db_manager.update_host_heartbeat(
-                hostname=heartbeat.hostname,
-                ip_address=heartbeat.ip_address,
-                service_name=heartbeat.service_name,
-                status=heartbeat.status,
-                last_command_id=heartbeat.last_command_id,
-                timestamp=heartbeat.timestamp
-            )
+            # 1. Update host heartbeat information in PostgreSQL DB
+            # db_manager.upsert_host_heartbeat(
+            #     hostname=heartbeat.hostname,
+            #     ip_address=heartbeat.ip_address,
+            #     service_name=heartbeat.service_name,
+            #     last_command_id=heartbeat.last_command_id,
+            #     status=heartbeat.status,
+            #     heartbeat_timestamp=heartbeat.timestamp
+            # )
             
-            # Check for pending profiling commands for this host
+            # 2. Check for pending profiling commands for this host/service
             pending_command = db_manager.get_pending_profiling_command(
                 hostname=heartbeat.hostname,
                 service_name=heartbeat.service_name,
@@ -520,30 +507,45 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
             )
             
             if pending_command:
-                # Mark command as sent
-                db_manager.mark_profiling_command_sent(
+                # 3. Mark command as sent
+                success = db_manager.mark_profiling_command_sent(
                     command_id=pending_command["command_id"],
                     hostname=heartbeat.hostname
                 )
                 
-                logger.info(f"Sending profiling command {pending_command['command_id']} to host {heartbeat.hostname}")
-                
-                return HeartbeatResponse(
-                    success=True,
-                    message="Heartbeat received. New profiling command available.",
-                    profiling_command={
-                        "command_type": pending_command["command_type"],
-                        "combined_config": pending_command["combined_config"]
-                    },
-                    command_id=pending_command["command_id"]
-                )
-            else:
-                return HeartbeatResponse(
-                    success=True,
-                    message="Heartbeat received. No pending profiling commands.",
-                    profiling_command=None,
-                    command_id=None
-                )
+                if success:
+                    logger.info(f"Sending profiling command {pending_command['command_id']} to host {heartbeat.hostname}")
+                    
+                    # Extract combined_config and ensure it's properly formatted
+                    combined_config = pending_command.get("combined_config", {})
+                    
+                    # If combined_config is a string (from DB), parse it
+                    if isinstance(combined_config, str):
+                        try:
+                            combined_config = json.loads(combined_config)
+                        except json.JSONDecodeError:
+                            logger.warning(f"Failed to parse combined_config for command {pending_command['command_id']}")
+                            combined_config = {}
+                    
+                    return HeartbeatResponse(
+                        success=True,
+                        message="Heartbeat received. New profiling command available.",
+                        profiling_command={
+                            "command_type": pending_command["command_type"],
+                            "combined_config": combined_config
+                        },
+                        command_id=pending_command["command_id"]
+                    )
+                else:
+                    logger.warning(f"Failed to mark command {pending_command['command_id']} as sent to host {heartbeat.hostname}")
+            
+            # No pending commands or marking failed
+            return HeartbeatResponse(
+                success=True,
+                message="Heartbeat received. No pending profiling commands.",
+                profiling_command=None,
+                command_id=None
+            )
                 
         except Exception as e:
             logger.error(f"Failed to process heartbeat for {heartbeat.hostname}: {e}", exc_info=True)
@@ -553,7 +555,7 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                 message="Heartbeat received, but failed to check for commands.",
                 profiling_command=None,
                 command_id=None
-        )
+            )
         
     except Exception as e:
         logger.error(f"Failed to process heartbeat: {str(e)}", exc_info=True)

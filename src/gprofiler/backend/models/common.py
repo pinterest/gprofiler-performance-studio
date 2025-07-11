@@ -14,18 +14,14 @@
 # limitations under the License.
 #
 
-from typing import Any, Dict
+from typing import Annotated
+from pydantic import BeforeValidator
 
 
-class ServiceName(str):
-    @classmethod
-    def __modify_schema__(cls, field_schema: Dict[str, Any]) -> None:
-        field_schema.update(type="string", format="service_name")
-
-    @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
-
-    @classmethod
-    def validate(cls, value: str) -> str:
+def validate_service_name(value: str) -> str:
+    if isinstance(value, str):
         return value[1:] if value.startswith("_") else value
+    return value
+
+
+ServiceName = Annotated[str, BeforeValidator(validate_service_name)]

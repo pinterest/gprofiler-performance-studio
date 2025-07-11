@@ -83,3 +83,7 @@ class MetricK8s(CamelModel):
     cores: Optional[int] = None
     cpu: Optional[float] = None
     memory: Optional[float] = None
+
+
+class HTMLMetadata(BaseModel):
+    content: str

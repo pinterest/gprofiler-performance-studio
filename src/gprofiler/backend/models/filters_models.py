@@ -15,7 +15,7 @@
 #
 
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from backend.models import CamelModel
 from gprofiler_dev.tags import CONTAINER_KEY, HOSTNAME_KEY, INSTANCE_TYPE_KEY, K8S_OBJ_KEY
@@ -60,24 +60,12 @@ class RQLFilter(CamelModel):
                 res.append(logic_op)
         return "__".join(res[:-1]).replace("$", "")
 
-    class Config:
-        @staticmethod
-        def schema_extra(schema: Dict[str, Any]) -> None:
-            logic_ops_value = schema["properties"]["filter"].pop("additionalProperties")
-            filter_types_value = logic_ops_value["items"].pop("additionalProperties")
-            cmp_ops_value = filter_types_value.pop("additionalProperties")
-
-            filter_types_value["properties"] = {}
-            for cmp_op in RQLCompareOperators:
-                filter_types_value["properties"][cmp_op] = cmp_ops_value
-
-            logic_ops_value["items"]["properties"] = {}
-            for filter_type in FilterTypes:
-                logic_ops_value["items"]["properties"][filter_type] = filter_types_value
-
-            schema["properties"]["filter"]["properties"] = {}
-            for logic_op in RQLLogicOperators:
-                schema["properties"]["filter"]["properties"][logic_op] = logic_ops_value
+    # TODO: Update schema_extra for Pydantic v2
+    # @classmethod
+    # def __get_pydantic_json_schema__(cls, core_schema, handler):
+    #     schema = handler(core_schema)
+    #     # Custom schema modifications would go here
+    #     return schema
 
 
 class GetRQLFilter(RQLFilter):

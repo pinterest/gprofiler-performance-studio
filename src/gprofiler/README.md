@@ -32,8 +32,8 @@ To run the backend, you need to set the following environment variables:
 - `AWS_SESSION_TOKEN`
 
 Now you can run the backend:
-```shell
-python3 -m uvicorn backend.main:app --reload --port 8000
+```shellpython3 -m uvicorn backend.main:app --reload --port 8000
+
 ```
 
 ## Running the frontend locally
