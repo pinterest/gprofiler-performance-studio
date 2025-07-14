@@ -1100,6 +1100,29 @@ class DBManager(metaclass=Singleton):
         rows_affected = self.db.execute(query, values, has_value=False)
         return rows_affected > 0
 
+    def get_profiling_command_by_id(self, command_id: str) -> Optional[Dict]:
+        """Get profiling command by command ID"""
+        query = """
+        SELECT command_id, hostname, service_name, command_type, combined_config,
+               request_ids, status, created_at, sent_at, completed_at
+        FROM ProfilingCommands
+        WHERE command_id = %(command_id)s::uuid
+        """
+
+        values = {"command_id": command_id}
+        result = self.db.execute(query, values, one_value=True, return_dict=True)
+        
+        # Parse the combined_config JSON if it exists
+        if result and result.get('combined_config'):
+            try:
+                if isinstance(result['combined_config'], str):
+                    result['combined_config'] = json.loads(result['combined_config'])
+            except json.JSONDecodeError:
+                self.db.logger.warning(f"Failed to parse combined_config for command {result.get('command_id')}")
+                result['combined_config'] = {}
+        
+        return result if result else None
+
     def update_host_heartbeat(
         self,
         hostname: str,
