@@ -39,6 +39,9 @@ from backend.utils.filters_utils import get_rql_first_eq_key, get_rql_only_for_o
 from backend.utils.request_utils import flamegraph_base_request_params, get_metrics_response, get_query_response
 from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import Response
+from pydantic import BaseModel, model_validator
+
+from gprofiler_dev import S3ProfileDal
 from gprofiler_dev.postgres.db_manager import DBManager
 
 logger = getLogger(__name__)
@@ -51,11 +54,28 @@ class ProfilingRequest(BaseModel):
     request_type: str = "start"  # start, stop
     duration: Optional[int] = 60  # seconds
     frequency: Optional[int] = 11  # Hz
-    profiling_mode: Optional[str] = "cpu"  # cpu, allocation, none
-    target_hostnames: List[str]  # Required - list of target hostnames
+    profiling_mode: Optional[Literal["cpu", "allocation", "none"]] = "cpu"  # cpu, allocation, none
+    target_hostnames: Optional[List[str]] = None
     pids: Optional[List[int]] = None
     stop_level: Optional[str] = "process"  # process, host (only relevant for stop commands)
     additional_args: Optional[Dict[str, Any]] = None
+
+    @model_validator(mode='after')
+    def validate_pids_for_process_stop(cls, model):
+        """Validate that PIDs are provided when command_type is stop and stop_level is process"""
+        if model.command_type == 'stop' and model.stop_level == 'process':
+            if not model.pids or len(model.pids) == 0:
+                raise ValueError('At least one PID must be provided when command_type is "stop" and stop_level is "process"')
+
+        # Validate the duration
+        if model.duration and model.duration <= 0:
+            raise ValueError("Duration must be a positive integer (seconds)")
+
+        # Validate the frequency
+        if model.frequency and model.frequency <= 0:
+            raise ValueError("Frequency must be a positive integer (Hz)")
+
+        return model
 
 
 class ProfilingResponse(BaseModel):
@@ -319,28 +339,6 @@ def create_profiling_request(profiling_request: ProfilingRequest):
     - Host-level stop: Stop entire profiling session for the host
     """
     try:
-        # Validate the profiling mode
-        valid_modes = ["cpu", "allocation", "none"]
-        if profiling_request.profiling_mode not in valid_modes:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid profiling mode. Must be one of: {valid_modes}"
-            )
-        
-        # Validate duration (must be positive)
-        if profiling_request.duration and profiling_request.duration <= 0:
-            raise HTTPException(
-                status_code=400,
-                detail="Duration must be a positive integer (seconds)"
-            )
-        
-        # Validate frequency (must be positive)
-        if profiling_request.frequency and profiling_request.frequency <= 0:
-            raise HTTPException(
-                status_code=400,
-                detail="Frequency must be a positive integer (Hz)"
-            )
-        
         # Log the profiling request
         logger.info(
             f"Received {profiling_request.command_type} profiling request for service: {profiling_request.service_name}",
