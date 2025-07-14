@@ -15,10 +15,10 @@
 #
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Literal, Any
 
 from backend.models import CamelModel
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 class SampleCount(BaseModel):
@@ -87,3 +87,82 @@ class MetricK8s(CamelModel):
 
 class HTMLMetadata(CamelModel):
     content: str
+
+
+class ProfilingRequest(BaseModel):
+    """Model for profiling request parameters"""
+    service_name: str
+    command_type: str = "start"  # start, stop
+    duration: Optional[int] = 60  # seconds
+    frequency: Optional[int] = 11  # Hz
+    profiling_mode: Optional[Literal["cpu", "allocation", "none"]] = "cpu"  # cpu, allocation, none
+    target_hostnames: Optional[list[str]] = None
+    pids: Optional[list[int]] = None
+    stop_level: Optional[str] = "process"  # process, host (only relevant for stop commands)
+    additional_args: Optional[dict[str, Any]] = None
+
+    @model_validator(mode='after')
+    def validate_pids_for_process_stop(cls, model):
+        """Validate that PIDs are provided when command_type is stop and stop_level is process"""
+        if model.command_type == 'stop' and model.stop_level == 'process':
+            if not model.pids or len(model.pids) == 0:
+                raise ValueError('At least one PID must be provided when command_type is "stop" and stop_level is "process"')
+
+        # Validate the duration
+        if model.duration and model.duration <= 0:
+            raise ValueError("Duration must be a positive integer (seconds)")
+
+        # Validate the frequency
+        if model.frequency and model.frequency <= 0:
+            raise ValueError("Frequency must be a positive integer (Hz)")
+
+        return model
+
+
+class ProfilingResponse(BaseModel):
+    """Response model for profiling requests"""
+    success: bool
+    message: str
+    request_id: Optional[str] = None
+    command_ids: Optional[list[str]] = None  # List of command IDs for agent idempotency
+    estimated_completion_time: Optional[datetime] = None
+
+
+class HeartbeatRequest(BaseModel):
+    """Model for host heartbeat request"""
+    ip_address: str
+    hostname: str
+    service_name: str
+    last_command_id: Optional[str] = None
+    status: Optional[str] = "active"  # active, idle, error
+    timestamp: Optional[datetime] = None
+
+
+class HeartbeatResponse(BaseModel):
+    """Response model for heartbeat requests"""
+    success: bool
+    message: str
+    profiling_command: Optional[dict[str, Any]] = None  # Changed from profiling_request to profiling_command
+    command_id: Optional[str] = None
+
+
+class ProfilingCommand(BaseModel):
+    """Model for combined profiling command sent to hosts"""
+    command_id: str
+    command_type: str  # start, stop
+    hostname: str
+    service_name: str
+    combined_config: dict[str, Any]  # Combined configuration from multiple requests
+    request_ids: list[str]  # List of request IDs that make up this command
+    created_at: datetime
+    status: str  # pending, sent, completed, failed
+
+
+class CommandCompletionRequest(BaseModel):
+    """Model for reporting command completion"""
+    command_id: str
+    hostname: str
+    status: Literal["completed", "failed"]  # completed, failed
+    execution_time: Optional[int] = None  # seconds
+    error_message: Optional[str] = None
+    results_path: Optional[str] = None  # S3 path or local path to results
