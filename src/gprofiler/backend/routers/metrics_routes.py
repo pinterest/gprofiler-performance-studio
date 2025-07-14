@@ -19,7 +19,7 @@ import math
 import uuid
 from datetime import datetime, timedelta
 from logging import getLogger
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 
 from botocore.exceptions import ClientError
 
@@ -67,7 +67,7 @@ class ProfilingResponse(BaseModel):
     success: bool
     message: str
     request_id: Optional[str] = None
-    command_id: Optional[str] = None  # Added for agent idempotency
+    command_ids: Optional[List[str]] = None  # List of command IDs for agent idempotency
     estimated_completion_time: Optional[datetime] = None
 
 
@@ -105,7 +105,7 @@ class CommandCompletionRequest(BaseModel):
     """Model for reporting command completion"""
     command_id: str
     hostname: str
-    status: str  # completed, failed
+    status: Literal["completed", "failed"]  # completed, failed
     execution_time: Optional[int] = None  # seconds
     error_message: Optional[str] = None
     results_path: Optional[str] = None  # S3 path or local path to results
@@ -362,7 +362,7 @@ def create_profiling_request(profiling_request: ProfilingRequest):
         
         db_manager = DBManager()
         request_id = str(uuid.uuid4())
-        command_id = str(uuid.uuid4())  # Generate unique command ID for agent idempotency
+        command_ids = []  # Track all command IDs created
         
         try:
             # Save the profiling request to database using enhanced method
@@ -385,8 +385,10 @@ def create_profiling_request(profiling_request: ProfilingRequest):
                 # Create profiling commands for target hosts
                 if profiling_request.target_hostnames:
                     for hostname in profiling_request.target_hostnames:
+                        command_id = str(uuid.uuid4())
+                        command_ids.append(command_id)
                         db_manager.create_or_update_profiling_command(
-                            command_id=str(uuid.uuid4()) ,
+                            command_id=command_id,
                             hostname=hostname,
                             service_name=profiling_request.service_name,
                             command_type="start",
@@ -394,8 +396,10 @@ def create_profiling_request(profiling_request: ProfilingRequest):
                         )
                 else:
                     # If no specific hostnames, create command for all hosts of this service
+                    command_id = str(uuid.uuid4())
+                    command_ids.append(command_id)
                     db_manager.create_or_update_profiling_command(
-                        command_id=str(uuid.uuid4()) ,
+                        command_id=command_id,
                         hostname=None,  # Will be handled for all hosts of the service
                         service_name=profiling_request.service_name,
                         command_type="start",
@@ -406,10 +410,12 @@ def create_profiling_request(profiling_request: ProfilingRequest):
                 # Handle stop commands
                 if profiling_request.target_hostnames:
                     for hostname in profiling_request.target_hostnames:
+                        command_id = str(uuid.uuid4())
+                        command_ids.append(command_id)
                         if profiling_request.stop_level == "host":
                             # Stop entire host
                             db_manager.create_stop_command_for_host(
-                                command_id=str(uuid.uuid4()) ,
+                                command_id=command_id,
                                 hostname=hostname,
                                 service_name=profiling_request.service_name,
                                 request_id=request_id
@@ -417,14 +423,14 @@ def create_profiling_request(profiling_request: ProfilingRequest):
                         else:  # process level stop
                             # Stop specific processes or modify existing commands
                             db_manager.handle_process_level_stop(
-                                command_id=str(uuid.uuid4()) ,
+                                command_id=command_id,
                                 hostname=hostname,
                                 service_name=profiling_request.service_name,
                                 pids_to_stop=profiling_request.pids,
                                 request_id=request_id
                             )
             
-            logger.info(f"Profiling request {request_id} ({profiling_request.command_type}) saved and commands processed. Command ID: {command_id}")
+            logger.info(f"Profiling request {request_id} ({profiling_request.command_type}) saved and commands processed. Command IDs: {command_ids}")
             
         except Exception as e:
             logger.error(f"Failed to save profiling request: {e}", exc_info=True)
@@ -438,11 +444,17 @@ def create_profiling_request(profiling_request: ProfilingRequest):
         if profiling_request.command_type == "start":
             completion_time = datetime.now() + timedelta(seconds=profiling_request.duration or 60)
         
+        # Create appropriate message based on number of commands
+        if len(command_ids) == 1:
+            message = f"{profiling_request.command_type.capitalize()} profiling request submitted successfully for service '{profiling_request.service_name}'"
+        else:
+            message = f"{profiling_request.command_type.capitalize()} profiling request submitted successfully for service '{profiling_request.service_name}' across {len(command_ids)} hosts"
+        
         return ProfilingResponse(
             success=True,
-            message=f"{profiling_request.command_type.capitalize()} profiling request submitted successfully for service '{profiling_request.service_name}'",
+            message=message,
             request_id=request_id,
-            command_id=command_id,
+            command_ids=command_ids,
             estimated_completion_time=completion_time
         )
         
@@ -507,11 +519,32 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
             )
             
             if pending_command:
-                # 3. Mark command as sent
+                # 3. Mark command as sent and update related request statuses
                 success = db_manager.mark_profiling_command_sent(
                     command_id=pending_command["command_id"],
                     hostname=heartbeat.hostname
                 )
+                
+                # 4. Mark related profiling requests as assigned
+                if success and pending_command.get("request_ids"):
+                    request_ids = pending_command["request_ids"]
+                    # Handle both string and list formats from database
+                    if isinstance(request_ids, str):
+                        try:
+                            request_ids = json.loads(request_ids) if request_ids.startswith('[') else [request_ids]
+                        except json.JSONDecodeError:
+                            logger.warning(f"Failed to parse request_ids for command {pending_command['command_id']}")
+                            request_ids = []
+                    
+                    for request_id in request_ids:
+                        try:
+                            db_manager.mark_profiling_request_assigned(
+                                request_id=request_id,
+                                command_id=pending_command["command_id"],
+                                hostname=heartbeat.hostname
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to mark request {request_id} as assigned: {e}")
                 
                 if success:
                     logger.info(f"Sending profiling command {pending_command['command_id']} to host {heartbeat.hostname}")
@@ -599,6 +632,38 @@ def report_command_completion(completion: CommandCompletionRequest):
             error_message=completion.error_message,
             results_path=completion.results_path
         )
+        
+        # Update related profiling requests status
+        try:
+            # Get the command to find related request IDs
+            command_info = db_manager.get_profiling_command_by_id(completion.command_id)
+            if command_info and command_info.get("request_ids"):
+                request_ids = command_info["request_ids"]
+                # Handle both string and list formats from database
+                if isinstance(request_ids, str):
+                    try:
+                        request_ids = json.loads(request_ids) if request_ids.startswith('[') else [request_ids]
+                    except json.JSONDecodeError:
+                        logger.warning(f"Failed to parse request_ids for command {completion.command_id}")
+                        request_ids = []
+                
+                for request_id in request_ids:
+                    try:
+                        # Map command status to request status
+                        request_status = "completed" if completion.status == "completed" else "failed"
+                        completed_at = datetime.now() if completion.status in ["completed", "failed"] else None
+                        
+                        db_manager.update_profiling_request_status(
+                            request_id=request_id,
+                            status=request_status,
+                            completed_at=completed_at,
+                            error_message=completion.error_message
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to update status for request {request_id}: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to update related profiling requests for command {completion.command_id}: {e}")
+            # Don't fail the entire operation if request status update fails
         
         return {
             "success": True,
