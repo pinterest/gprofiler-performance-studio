@@ -49,8 +49,8 @@ services:
       - POSTGRES_PASSWORD=$POSTGRES_PASSWORD
       - POSTGRES_DB=$POSTGRES_DB
 # for debug
-#    ports:
-#      - "54321:5432"
+    ports:
+     - "54321:5432"
     volumes:
       - db_postgres:/var/lib/postgresql/data
       - ../scripts/setup/postgres/gprofiler_recreate.sql:/docker-entrypoint-initdb.d/create_scheme.sql
@@ -82,6 +82,7 @@ services:
       - AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
       - AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
       - AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN
+      - AWS_DEFAULT_REGION=$AWS_REGION
 # for debug
 #    ports:
 #      - "8888:80"

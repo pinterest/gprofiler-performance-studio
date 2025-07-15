@@ -14,7 +14,7 @@
 # limitations under the License.
 #
 
-from hashlib import md5
+import hashlib
 from itertools import takewhile
 from typing import Dict, List, Optional, Tuple
 
@@ -60,7 +60,7 @@ class FilterTags:
 
 
 def get_hash_filter_tag(filter_tag):
-    return md5(filter_tag.encode("utf-8")).hexdigest()
+    return hashlib.new('md5', filter_tag.encode("utf-8"), usedforsecurity=False).hexdigest()
 
 
 def is_base(input_str: str, base: int) -> bool:

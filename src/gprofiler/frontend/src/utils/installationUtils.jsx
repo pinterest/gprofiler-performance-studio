@@ -262,7 +262,7 @@ export const getDataprocSteps = ({
                     <Link
                         sx={{ color: 'black.main' }}
                         target='_blank'
-                        href='https://github.com/Granulate/gprofiler/blob/master/deploy/dataproc/gprofiler_initialization_action.sh'>
+                        href='https://github.com/intel/gprofiler/blob/master/deploy/dataproc/gprofiler_initialization_action.sh'>
                         initialization action script
                     </Link>
                 </>

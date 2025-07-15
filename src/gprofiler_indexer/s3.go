@@ -20,13 +20,14 @@ import (
 	"bytes"
 	"compress/gzip"
 	"fmt"
+	"io"
+	"strings"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	log "github.com/sirupsen/logrus"
-	"io"
-	"strings"
 )
 
 func GetFileFromS3(sess *session.Session, bucketName string, filename string) ([]byte, error) {
@@ -64,4 +65,27 @@ func GetFileFromS3(sess *session.Session, bucketName string, filename string) ([
 		return data, err
 	}
 	return buff.Bytes(), nil
+}
+
+func PutFileToS3(sess *session.Session, bucketName string, filename string, data []byte) error {
+	var body io.Reader
+	var contentEncoding *string
+
+	contentEncoding = aws.String("gzip")
+	body = bytes.NewReader(data)
+
+	uploader := s3manager.NewUploader(sess)
+	_, err := uploader.Upload(&s3manager.UploadInput{
+		Bucket:          aws.String(bucketName),
+		Key:             aws.String(filename),
+		Body:            body,
+		ContentEncoding: contentEncoding,
+	})
+	if err != nil {
+		log.Errorf("failed to upload file %s to bucket %s: %v", filename, bucketName, err)
+		return err
+	}
+
+	log.Debugf("successfully uploaded %s to bucket %s", filename, bucketName)
+	return nil
 }
