@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Optional, Literal, Any
 
 from backend.models import CamelModel
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class SampleCount(BaseModel):
@@ -91,18 +91,22 @@ class HTMLMetadata(CamelModel):
 
 class ProfilingRequest(BaseModel):
     """Model for profiling request parameters"""
-    service_name: str
-    command_type: str = "start"  # start, stop
-    duration: Optional[int] = 60  # seconds
-    frequency: Optional[int] = 11  # Hz
-    profiling_mode: Optional[Literal["cpu", "allocation", "none"]] = "cpu"  # cpu, allocation, none
-    target_hostnames: Optional[list[str]] = None
-    pids: Optional[list[int]] = None
-    stop_level: Optional[str] = "process"  # process, host (only relevant for stop commands)
-    additional_args: Optional[dict[str, Any]] = None
+    service_name: str = Field(..., description='Name of the service to profile')
+    command_type: Literal["start", "stop"] = Field("start", description='The command to run') # maybe add more commands in the future
+    duration: Optional[int] = Field(60, description='Duration of the profiling in seconds (default is 60 seconds)')
+    frequency: Optional[int] = Field(11, description='Frequency of profiling in Hz (default is 11 Hz)')
+    profiling_mode: Optional[Literal["cpu", "allocation", "none"]] = Field(
+        "cpu", description='Profiling mode to use (default is "cpu")'
+    )
+    target_hostnames: Optional[list[str]] = Field(None, description='List of hostnames to target for profiling')
+    pids: Optional[list[int]] = Field(None, description='List of PIDs to profile (required for stop command with process level)')
+    stop_level: Optional[Literal['process', 'host']] = Field("process", description='Stop level (process or host)')
+    additional_args: Optional[dict[str, Any]] = Field(
+        None, description='Additional arguments for profiling (e.g., custom flags or options)'
+    )
 
     @model_validator(mode='after')
-    def validate_pids_for_process_stop(cls, model):
+    def validate_pids_for_process_stop(cls, model: 'ProfilingRequest') -> 'ProfilingRequest':
         """Validate that PIDs are provided when command_type is stop and stop_level is process"""
         if model.command_type == 'stop' and model.stop_level == 'process':
             if not model.pids or len(model.pids) == 0:
@@ -121,11 +125,13 @@ class ProfilingRequest(BaseModel):
 
 class ProfilingResponse(BaseModel):
     """Response model for profiling requests"""
-    success: bool
-    message: str
-    request_id: Optional[str] = None
-    command_ids: Optional[list[str]] = None  # List of command IDs for agent idempotency
-    estimated_completion_time: Optional[datetime] = None
+    success: bool = Field(..., description='Wheather the profiling response was successfull or not')
+    message: str = Field(..., description='Message describing the result of the profiling request')
+    request_id: Optional[str] = Field(None, description='Unique identifier for the profiling request')
+    command_ids: Optional[list[str]] = Field(None, description='List of command IDs associated with the profiling request')
+    estimated_completion_time: Optional[datetime] = Field(
+        None, description='Estimated time of completion for the profiling request'
+    )
 
 
 class HeartbeatRequest(BaseModel):
