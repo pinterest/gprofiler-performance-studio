@@ -92,7 +92,7 @@ class HTMLMetadata(CamelModel):
 class ProfilingRequest(BaseModel):
     """Model for profiling request parameters"""
     service_name: str = Field(..., description='Name of the service to profile')
-    command_type: Literal["start", "stop"] = Field("start", description='The command to run') # maybe add more commands in the future
+    request_type: Literal["start", "stop"] = Field("start", description='The overall type of the request') # maybe add more types in the future
     duration: Optional[int] = Field(60, description='Duration of the profiling in seconds (default is 60 seconds)')
     frequency: Optional[int] = Field(11, description='Frequency of profiling in Hz (default is 11 Hz)')
     profiling_mode: Optional[Literal["cpu", "allocation", "none"]] = Field(
@@ -107,10 +107,10 @@ class ProfilingRequest(BaseModel):
 
     @model_validator(mode='after')
     def validate_pids_for_process_stop(cls, model: 'ProfilingRequest') -> 'ProfilingRequest':
-        """Validate that PIDs are provided when command_type is stop and stop_level is process"""
-        if model.command_type == 'stop' and model.stop_level == 'process':
+        """Validate that PIDs are provided when request_type is stop and stop_level is process"""
+        if model.request_type == 'stop' and model.stop_level == 'process':
             if not model.pids or len(model.pids) == 0:
-                raise ValueError('At least one PID must be provided when command_type is "stop" and stop_level is "process"')
+                raise ValueError('At least one PID must be provided when request_type is "stop" and stop_level is "process"')
 
         # Validate the duration
         if model.duration and model.duration <= 0:
