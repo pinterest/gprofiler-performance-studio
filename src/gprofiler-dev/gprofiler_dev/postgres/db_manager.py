@@ -714,12 +714,16 @@ class DBManager(metaclass=Singleton):
     ) -> bool:
         """Mark a profiling request as assigned to a host using pure SQL"""
         query = """
-        UPDATE ProfilingRequests
-        SET status = 'assigned',
-            assigned_to_hostname = %(hostname)s,
-            assigned_at = CURRENT_TIMESTAMP
-        WHERE request_id = %(request_id)s::uuid
-          AND status = 'pending'
+        WITH updated_rows AS (
+            UPDATE ProfilingRequests
+            SET status = 'assigned',
+                assigned_to_hostname = %(hostname)s,
+                assigned_at = CURRENT_TIMESTAMP
+            WHERE request_id = %(request_id)s::uuid
+            AND status = 'pending'
+            RETURNING 1
+        )
+        SELECT COUNT(*) FROM updated_rows
         """
 
         values = {
@@ -727,7 +731,7 @@ class DBManager(metaclass=Singleton):
             "hostname": hostname
         }
 
-        rows_affected = self.db.execute(query, values, has_value=False)
+        rows_affected = self.db.execute(query, values)
         
         # Also create execution record
         if rows_affected > 0:
@@ -736,7 +740,7 @@ class DBManager(metaclass=Singleton):
                 profiling_request_id, command_id, hostname, status, started_at
             ) VALUES (
                 (SELECT ID FROM ProfilingRequests WHERE request_id = %(request_id)s::uuid),
-                %(command_id)s::uuid, %(hostname)s, 'in_progress', CURRENT_TIMESTAMP
+                %(command_id)s::uuid, %(hostname)s, 'assigned', CURRENT_TIMESTAMP
             )
             """
             exec_values = {
@@ -757,10 +761,14 @@ class DBManager(metaclass=Singleton):
     ) -> bool:
         """Update the status of a profiling request"""
         query = """
-        UPDATE ProfilingRequests
-        SET status = %(status)s::ProfilingRequestStatus,
-            completed_at = %(completed_at)s
-        WHERE request_id = %(request_id)s::uuid
+        WITH updated_rows AS (
+            UPDATE ProfilingRequests
+            SET status = %(status)s::ProfilingRequestStatus,
+                completed_at = %(completed_at)s
+            WHERE request_id = %(request_id)s::uuid
+            RETURNING 1
+        )
+        SELECT COUNT(*) FROM updated_rows
         """
 
         values = {
@@ -769,7 +777,7 @@ class DBManager(metaclass=Singleton):
             "completed_at": completed_at
         }
 
-        rows_affected = self.db.execute(query, values, has_value=False)
+        rows_affected = self.db.execute(query, values)
 
         # Also update execution record if exists
         if rows_affected > 0:
