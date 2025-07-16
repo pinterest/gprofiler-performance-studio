@@ -629,7 +629,144 @@ class DBManager(metaclass=Singleton):
             "additional_args": json.dumps(additional_args) if additional_args else None
         }
         
-        rows_affected = self.db.execute(query, values, has_value=False)
+        self.db.execute(query, values, has_value=False)
+        return True
+
+    def get_pending_profiling_request(
+        self,
+        hostname: str,
+        service_name: str,
+        exclude_command_id: Optional[str] = None
+    ) -> Optional[Dict]:
+        """Get pending profiling request for a specific host/service using pure SQL"""
+        query = """
+        SELECT 
+            pr.request_id,
+            pr.service_name,
+            pr.duration,
+            pr.frequency,
+            pr.profiling_mode,
+            pr.target_hostnames,
+            pr.pids,
+            pr.additional_args,
+            pr.status,
+            pr.created_at,
+            pr.estimated_completion_time
+        FROM ProfilingRequests pr
+        WHERE pr.service_name = %(service_name)s
+          AND pr.status = 'pending'
+          AND (
+              pr.target_hostnames IS NULL 
+              OR %(hostname)s = ANY(pr.target_hostnames)
+          )
+        """
+
+        values = {
+            "hostname": hostname,
+            "service_name": service_name
+        }
+
+        if exclude_command_id:
+            query += " AND pr.request_id != %(exclude_command_id)s::uuid"
+            values["exclude_command_id"] = exclude_command_id
+
+        query += " ORDER BY pr.created_at ASC LIMIT 1"
+
+        result = self.db.execute(query, values, one_value=True, return_dict=True)
+        return result if result else None
+
+    def mark_profiling_request_assigned(
+        self,
+        request_id: str,
+        command_id: str,
+        hostname: str
+    ) -> bool:
+        """Mark a profiling request as assigned to a host using pure SQL"""
+        query = """
+        WITH updated_rows AS (
+            UPDATE ProfilingRequests
+            SET status = 'assigned',
+                assigned_to_hostname = %(hostname)s,
+                assigned_at = CURRENT_TIMESTAMP
+            WHERE request_id = %(request_id)s::uuid
+            AND status = 'pending'
+            RETURNING 1
+        )
+        SELECT COUNT(*) FROM updated_rows
+        """
+
+        values = {
+            "request_id": request_id,
+            "hostname": hostname
+        }
+
+        rows_affected = self.db.execute(query, values)
+        
+        # Also create execution record
+        if rows_affected > 0:
+            exec_query = """
+            INSERT INTO ProfilingExecutions (
+                profiling_request_id, command_id, hostname, status, started_at
+            ) VALUES (
+                (SELECT ID FROM ProfilingRequests WHERE request_id = %(request_id)s::uuid),
+                %(command_id)s::uuid, %(hostname)s, 'assigned', CURRENT_TIMESTAMP
+            )
+            """
+            exec_values = {
+                "request_id": request_id,
+                "command_id": command_id,
+                "hostname": hostname
+            }
+            self.db.execute(exec_query, exec_values, has_value=False)
+        
+        return rows_affected > 0
+
+    def update_profiling_request_status(
+        self,
+        request_id: str,
+        status: str,
+        completed_at: Optional[datetime] = None,
+        error_message: Optional[str] = None
+    ) -> bool:
+        """Update the status of a profiling request"""
+        query = """
+        WITH updated_rows AS (
+            UPDATE ProfilingRequests
+            SET status = %(status)s::ProfilingRequestStatus,
+                completed_at = %(completed_at)s
+            WHERE request_id = %(request_id)s::uuid
+            RETURNING 1
+        )
+        SELECT COUNT(*) FROM updated_rows
+        """
+
+        values = {
+            "request_id": request_id,
+            "status": status,
+            "completed_at": completed_at
+        }
+
+        rows_affected = self.db.execute(query, values)
+
+        # Also update execution record if exists
+        if rows_affected > 0:
+            exec_query = """
+            UPDATE ProfilingExecutions
+            SET status = %(status)s::ProfilingRequestStatus,
+                completed_at = %(completed_at)s,
+                error_message = %(error_message)s
+            WHERE profiling_request_id = (
+                SELECT ID FROM ProfilingRequests WHERE request_id = %(request_id)s::uuid
+            )
+            """
+            exec_values = {
+                "request_id": request_id,
+                "status": status,
+                "completed_at": completed_at,
+                "error_message": error_message
+            }
+            self.db.execute(exec_query, exec_values, has_value=False)
+
         return rows_affected > 0
 
     def upsert_host_heartbeat(
