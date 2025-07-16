@@ -268,9 +268,9 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
     try:
         # Log the profiling request
         logger.info(
-            f"Received {profiling_request.command_type} profiling request for service: {profiling_request.service_name}",
+            f"Received {profiling_request.request_type} profiling request for service: {profiling_request.service_name}",
             extra={
-                "command_type": profiling_request.command_type,
+                "request_type": profiling_request.request_type,
                 "service_name": profiling_request.service_name,
                 "duration": profiling_request.duration,
                 "frequency": profiling_request.frequency,
@@ -289,6 +289,7 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
             # Save the profiling request to database using enhanced method
             success = db_manager.save_profiling_request(
                 request_id=request_id,
+                request_type=profiling_request.request_type,
                 service_name=profiling_request.service_name,
                 duration=profiling_request.duration,
                 frequency=profiling_request.frequency,
@@ -302,7 +303,7 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
                 raise Exception("Failed to save profiling request to database")
             
             # Handle start vs stop commands differently
-            if profiling_request.command_type == "start":
+            if profiling_request.request_type == "start":
                 # Create profiling commands for target hosts
                 if profiling_request.target_hostnames:
                     for hostname in profiling_request.target_hostnames:
@@ -327,7 +328,7 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
                         new_request_id=request_id,
                     )
             
-            elif profiling_request.command_type == "stop":
+            elif profiling_request.request_type == "stop":
                 # Handle stop commands
                 if profiling_request.target_hostnames:
                     for hostname in profiling_request.target_hostnames:
@@ -351,7 +352,7 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
                                 request_id=request_id
                             )
             
-            logger.info(f"Profiling request {request_id} ({profiling_request.command_type}) saved and commands processed. Command IDs: {command_ids}")
+            logger.info(f"Profiling request {request_id} ({profiling_request.request_type}) saved and commands processed. Command IDs: {command_ids}")
             
         except Exception as e:
             logger.error(f"Failed to save profiling request: {e}", exc_info=True)
@@ -362,14 +363,14 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
         
         # Calculate estimated completion time (only for start commands)
         completion_time = None
-        if profiling_request.command_type == "start":
+        if profiling_request.request_type == "start":
             completion_time = datetime.now() + timedelta(seconds=profiling_request.duration or 60)
         
         # Create appropriate message based on number of commands
         if len(command_ids) == 1:
-            message = f"{profiling_request.command_type.capitalize()} profiling request submitted successfully for service '{profiling_request.service_name}'"
+            message = f"{profiling_request.request_type.capitalize()} profiling request submitted successfully for service '{profiling_request.service_name}'"
         else:
-            message = f"{profiling_request.command_type.capitalize()} profiling request submitted successfully for service '{profiling_request.service_name}' across {len(command_ids)} hosts"
+            message = f"{profiling_request.request_type.capitalize()} profiling request submitted successfully for service '{profiling_request.service_name}' across {len(command_ids)} hosts"
         
         return ProfilingResponse(
             success=True,

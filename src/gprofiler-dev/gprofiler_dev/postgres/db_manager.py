@@ -628,6 +628,7 @@ class DBManager(metaclass=Singleton):
     def save_profiling_request(
         self,
         request_id: str,
+        request_type: str,
         service_name: str,
         duration: Optional[int] = 60,
         frequency: Optional[int] = 11,
@@ -636,19 +637,20 @@ class DBManager(metaclass=Singleton):
         pids: Optional[List[int]] = None,
         additional_args: Optional[Dict] = None
     ) -> bool:
-        """Save a profiling request (without command_type - that belongs to ProfilingCommands)"""
+        """Save a profiling request (without request_type - that belongs to ProfilingCommands)"""
         query = """
         INSERT INTO ProfilingRequests (
-            request_id, service_name, duration, frequency, profiling_mode,
+            request_id, request_type, service_name, duration, frequency, profiling_mode,
             target_hostnames, pids, additional_args
         ) VALUES (
-            %(request_id)s::uuid, %(service_name)s, %(duration)s, %(frequency)s, 
+            %(request_id)s::uuid, %(request_type)s, %(service_name)s, %(duration)s, %(frequency)s, 
             %(profiling_mode)s::ProfilingMode, %(target_hostnames)s, %(pids)s, %(additional_args)s
         )
         """
         
         values = {
             "request_id": request_id,
+            "request_type": request_type,
             "service_name": service_name,
             "duration": duration,
             "frequency": frequency,
@@ -806,18 +808,18 @@ class DBManager(metaclass=Singleton):
         query = """
         INSERT INTO HostHeartbeats (
             hostname, ip_address, service_name, last_command_id, 
-            status, last_heartbeat, created_at, updated_at
+            status, heartbeat_timestamp, created_at, updated_at
         ) VALUES (
             %(hostname)s, %(ip_address)s::inet, %(service_name)s,
             %(last_command_id)s::uuid, %(status)s::HostStatus,
-            %(last_heartbeat)s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            %(heartbeat_timestamp)s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         )
         ON CONFLICT (hostname, service_name)
         DO UPDATE SET
             ip_address = EXCLUDED.ip_address,
             last_command_id = EXCLUDED.last_command_id,
             status = EXCLUDED.status,
-            last_heartbeat = EXCLUDED.last_heartbeat,
+            heartbeat_timestamp = EXCLUDED.heartbeat_timestamp,
             updated_at = CURRENT_TIMESTAMP
         """
 
@@ -827,7 +829,7 @@ class DBManager(metaclass=Singleton):
             "service_name": service_name,
             "last_command_id": last_command_id,
             "status": status,
-            "last_heartbeat": heartbeat_timestamp
+            "heartbeat_timestamp": heartbeat_timestamp
         }
 
         self.db.execute(query, values, has_value=False)
@@ -838,7 +840,7 @@ class DBManager(metaclass=Singleton):
         query = """
         SELECT
             hostname, ip_address, service_name, last_command_id,
-            status, last_heartbeat, created_at, updated_at
+            status, heartbeat_timestamp, created_at, updated_at
         FROM HostHeartbeats
         WHERE hostname = %(hostname)s
         """
@@ -852,10 +854,10 @@ class DBManager(metaclass=Singleton):
         query = """
         SELECT
             hostname, ip_address, service_name, last_command_id,
-            status, last_heartbeat
+            status, heartbeat_timestamp
         FROM HostHeartbeats
         WHERE status = 'active'
-          AND last_heartbeat > NOW() - INTERVAL '10 minutes'
+          AND heartbeat_timestamp > NOW() - INTERVAL '10 minutes'
         """
 
         values = {}
@@ -863,7 +865,7 @@ class DBManager(metaclass=Singleton):
             query += " AND service_name = %(service_name)s"
             values["service_name"] = service_name
 
-        query += " ORDER BY last_heartbeat DESC"
+        query += " ORDER BY heartbeat_timestamp DESC"
 
         return self.db.execute(query, values, one_value=False, return_dict=True, fetch_all=True)
 
@@ -872,9 +874,9 @@ class DBManager(metaclass=Singleton):
         query = """
         SELECT
             ID, hostname, ip_address, service_name, last_command_id,
-            status, last_heartbeat, created_at, updated_at
+            status, heartbeat_timestamp, created_at, updated_at
         FROM HostHeartbeats
-        ORDER BY last_heartbeat DESC
+        ORDER BY heartbeat_timestamp DESC
         """
         
         values = {}
@@ -892,10 +894,10 @@ class DBManager(metaclass=Singleton):
         query = """
         SELECT
             ID, hostname, ip_address, service_name, last_command_id,
-            status, last_heartbeat, created_at, updated_at
+            status, heartbeat_timestamp, created_at, updated_at
         FROM HostHeartbeats
         WHERE service_name = %(service_name)s
-        ORDER BY last_heartbeat DESC
+        ORDER BY heartbeat_timestamp DESC
         """
         
         values = {"service_name": service_name}
@@ -910,10 +912,10 @@ class DBManager(metaclass=Singleton):
         query = """
         SELECT
             ID, hostname, ip_address, service_name, last_command_id,
-            status, last_heartbeat, created_at, updated_at
+            status, heartbeat_timestamp, created_at, updated_at
         FROM HostHeartbeats
         WHERE status = %(status)s
-        ORDER BY last_heartbeat DESC
+        ORDER BY heartbeat_timestamp DESC
         """
         
         values = {"status": status}

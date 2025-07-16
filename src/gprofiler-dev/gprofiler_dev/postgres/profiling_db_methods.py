@@ -106,7 +106,7 @@ class ProfilingDBMethods:
             FROM HostHeartbeats 
             WHERE service_name = %s 
             AND status = 'active' 
-            AND last_heartbeat > CURRENT_TIMESTAMP - INTERVAL '5 minutes'
+            AND heartbeat_timestamp > CURRENT_TIMESTAMP - INTERVAL '5 minutes'
         """
         
         try:
@@ -373,14 +373,14 @@ class ProfilingDBMethods:
     ):
         """Update host heartbeat information"""
         query = """
-            INSERT INTO HostHeartbeats (hostname, ip_address, service_name, status, last_command_id, last_heartbeat)
+            INSERT INTO HostHeartbeats (hostname, ip_address, service_name, status, last_command_id, heartbeat_timestamp)
             VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (hostname, service_name)
             DO UPDATE SET
                 ip_address = EXCLUDED.ip_address,
                 status = EXCLUDED.status,
                 last_command_id = EXCLUDED.last_command_id,
-                last_heartbeat = EXCLUDED.last_heartbeat,
+                heartbeat_timestamp = EXCLUDED.heartbeat_timestamp,
                 updated_at = CURRENT_TIMESTAMP
         """
         
