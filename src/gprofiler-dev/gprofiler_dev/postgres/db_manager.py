@@ -924,9 +924,25 @@ class DBManager(metaclass=Singleton):
         new_request_id: str
     ) -> bool:
         """Create or update a profiling command for a host with command_type support"""
-        # Get the new request details to build combined_config
-        new_request = self._get_profiling_request_details(new_request_id)
-        if not new_request:
+        if hostname is None:
+            active_hosts = self.get_active_hosts(service_name)
+            success = True
+            for host in active_hosts:
+                result = self.create_or_update_profiling_command(
+                    command_id, host["hostname"], service_name, command_type, new_request_id, stop_level
+                )
+                success = success and result
+            return success
+        
+        # Get the request details to build combined_config
+        request_query = """
+        SELECT duration, frequency, profiling_mode, pids, additional_args
+        FROM ProfilingRequests
+        WHERE request_id = %(request_id)s::uuid
+        """
+        request_result = self.db.execute(request_query, {"request_id": new_request_id}, one_value=True, return_dict=True)
+        
+        if not request_result:
             return False
             
         # Check if there's an existing command for this host/service
