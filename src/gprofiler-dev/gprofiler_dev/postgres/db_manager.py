@@ -102,6 +102,9 @@ class DBManager(metaclass=Singleton):
         self.deployments: Dict[Tuple[int, str], int] = {}
         self.instance_runs = LRUCache(INSTANCE_RUNS_LRU_CACHE_LIMIT)
         self.profiler_processes = LRUCache(PROFILER_PROCESSES_LRU_CACHE_LIMIT)
+        
+        # Cache for host-pid mappings (temporary solution)
+        self.request_host_pid_mappings: Dict[str, Dict[str, List[int]]] = {}
 
         self.last_seen_updates: Dict[str : time.time] = defaultdict(
             lambda: time.time() - (LAST_SEEN_UPDATES_INTERVAL_MINUTES + 1) * 60
@@ -599,19 +602,23 @@ class DBManager(metaclass=Singleton):
         profiling_mode: Optional[str] = "cpu",
         target_hostnames: Optional[List[str]] = None,
         pids: Optional[List[int]] = None,
-        stop_level: Optional[str] = "process",
+        host_pid_mapping: Optional[Dict[str, List[int]]] = None,
         additional_args: Optional[Dict] = None
     ) -> bool:
-        """Save a profiling request with request_type and stop_level support"""
+        """Save a profiling request with support for host-to-PID mapping"""
+        # Store additional_args WITHOUT host_pid_mapping (keep that separate)
+        clean_additional_args = additional_args.copy() if additional_args else {}
+        
+        # Store host_pid_mapping separately in a dedicated field if we add one,
+        # for now, we'll handle it during command creation to avoid polluting additional_args
+        
         query = """
         INSERT INTO ProfilingRequests (
             request_id, service_name, request_type, duration, frequency, profiling_mode,
             target_hostnames, pids, stop_level, additional_args, service_id, updated_at
         ) VALUES (
-            %(request_id)s::uuid, %(service_name)s, %(request_type)s, %(duration)s, %(frequency)s, 
-            %(profiling_mode)s::ProfilingMode, %(target_hostnames)s, %(pids)s, %(stop_level)s,
-            %(additional_args)s, (SELECT ID FROM Services WHERE name = %(service_name)s LIMIT 1),
-            CURRENT_TIMESTAMP
+            %(request_id)s::uuid, %(request_type)s, %(service_name)s, %(duration)s, %(frequency)s,
+            %(profiling_mode)s::ProfilingMode, %(target_hostnames)s, %(pids)s, %(additional_args)s
         )
         """
         
@@ -625,12 +632,25 @@ class DBManager(metaclass=Singleton):
             "profiling_mode": profiling_mode,
             "target_hostnames": target_hostnames,
             "pids": pids,
-            "stop_level": stop_level,
-            "additional_args": json.dumps(additional_args) if additional_args else None
+            "additional_args": json.dumps(clean_additional_args) if clean_additional_args else None
         }
         
         self.db.execute(query, values, has_value=False)
+        
+        # Store host_pid_mapping in a separate table or handle it during command creation
+        if host_pid_mapping:
+            self._store_host_pid_mapping(request_id, host_pid_mapping)
+        
         return True
+
+    def _store_host_pid_mapping(self, request_id: str, host_pid_mapping: Dict[str, List[int]]) -> None:
+        """Store host-to-PID mapping separately from additional_args"""
+        # Store in memory cache for this session
+        self.request_host_pid_mappings[request_id] = host_pid_mapping
+
+    def _get_host_pid_mapping(self, request_id: str) -> Dict[str, List[int]]:
+        """Get host-to-PID mapping for a request"""
+        return self.request_host_pid_mappings.get(request_id, {})
 
     def get_pending_profiling_request(
         self,
@@ -702,22 +722,26 @@ class DBManager(metaclass=Singleton):
 
         rows_affected = self.db.execute(query, values)
         
-        # Also create execution record
-        if rows_affected > 0:
-            exec_query = """
-            INSERT INTO ProfilingExecutions (
-                profiling_request_id, command_id, hostname, status, started_at
-            ) VALUES (
-                (SELECT ID FROM ProfilingRequests WHERE request_id = %(request_id)s::uuid),
-                %(command_id)s::uuid, %(hostname)s, 'assigned', CURRENT_TIMESTAMP
-            )
-            """
-            exec_values = {
-                "request_id": request_id,
-                "command_id": command_id,
-                "hostname": hostname
-            }
-            self.db.execute(exec_query, exec_values, has_value=False)
+        # Create execution record if it doesn't exist (key should be command_id + hostname)
+        exec_query = """
+        INSERT INTO ProfilingExecutions (
+            profiling_request_id, command_id, hostname, status, started_at
+        )
+        SELECT
+            (SELECT ID FROM ProfilingRequests WHERE request_id = %(request_id)s::uuid),
+            %(command_id)s::uuid, %(hostname)s, 'assigned', CURRENT_TIMESTAMP
+        WHERE NOT EXISTS (
+            SELECT 1 FROM ProfilingExecutions
+            WHERE command_id = %(command_id)s::uuid
+            AND hostname = %(hostname)s
+        )
+        """
+        exec_values = {
+            "request_id": request_id,
+            "command_id": command_id,
+            "hostname": hostname
+        }
+        self.db.execute(exec_query, exec_values, has_value=False)
         
         return rows_affected > 0
 
@@ -728,7 +752,7 @@ class DBManager(metaclass=Singleton):
         completed_at: Optional[datetime] = None,
         error_message: Optional[str] = None
     ) -> bool:
-        """Update the status of a profiling request"""
+        """Update the status of a profiling request (does not update execution records)"""
         query = """
         WITH updated_rows AS (
             UPDATE ProfilingRequests
@@ -747,27 +771,42 @@ class DBManager(metaclass=Singleton):
         }
 
         rows_affected = self.db.execute(query, values)
-
-        # Also update execution record if exists
-        if rows_affected > 0:
-            exec_query = """
-            UPDATE ProfilingExecutions
-            SET status = %(status)s::ProfilingRequestStatus,
-                completed_at = %(completed_at)s,
-                error_message = %(error_message)s
-            WHERE profiling_request_id = (
-                SELECT ID FROM ProfilingRequests WHERE request_id = %(request_id)s::uuid
-            )
-            """
-            exec_values = {
-                "request_id": request_id,
-                "status": status,
-                "completed_at": completed_at,
-                "error_message": error_message
-            }
-            self.db.execute(exec_query, exec_values, has_value=False)
-
         return rows_affected > 0
+
+    def update_profiling_execution_status(
+        self,
+        command_id: str,
+        hostname: str,
+        status: str,
+        completed_at: Optional[datetime] = None,
+        error_message: Optional[str] = None,
+        execution_time: Optional[int] = None,
+        results_path: Optional[str] = None
+    ) -> bool:
+        """Update the status of a specific profiling execution by command_id and hostname"""
+        exec_query = """
+        UPDATE ProfilingExecutions
+        SET status = %(status)s::ProfilingRequestStatus,
+            completed_at = %(completed_at)s,
+            error_message = %(error_message)s,
+            execution_time = %(execution_time)s,
+            results_path = %(results_path)s
+        WHERE command_id = %(command_id)s::uuid
+        AND hostname = %(hostname)s
+        """
+        
+        exec_values = {
+            "command_id": command_id,
+            "hostname": hostname,
+            "status": status,
+            "completed_at": completed_at,
+            "error_message": error_message,
+            "execution_time": execution_time,
+            "results_path": results_path
+        }
+        
+        self.db.execute(exec_query, exec_values, has_value=False)
+        return True
 
     def upsert_host_heartbeat(
         self,
@@ -944,14 +983,48 @@ class DBManager(metaclass=Singleton):
         
         if not request_result:
             return False
-            
-        # Check if there's an existing command for this host/service
-        existing_command = self.get_current_profiling_command(hostname, service_name)
         
-        combined_config = {}
-        request_ids = [new_request_id]
+        # Get host-specific PIDs from our dedicated storage
+        host_pid_mapping = self._get_host_pid_mapping(new_request_id)
+        host_specific_pids = host_pid_mapping.get(hostname, []) if host_pid_mapping else []
         
-        if existing_command and existing_command.get("status") == "pending":
+        # Build base configuration from new request
+        new_config = {
+            "command_type": command_type,
+            "duration": request_result["duration"],
+            "frequency": request_result["frequency"],
+            "profiling_mode": request_result["profiling_mode"],
+            "additional_args": request_result["additional_args"]  # This should now be clean
+        }
+        
+        # Add stop_level if provided
+        if stop_level:
+            new_config["stop_level"] = stop_level
+        
+        # Use host-specific PIDs if available, otherwise fall back to global PIDs
+        if host_specific_pids:
+            new_config["pids"] = host_specific_pids
+        elif request_result["pids"]:
+            new_config["pids"] = request_result["pids"]
+        
+        # Use proper upsert with ON CONFLICT to handle race conditions
+        # First, check if there's an existing command to merge with
+        existing_command_query = """
+        SELECT command_id, combined_config, request_ids 
+        FROM ProfilingCommands 
+        WHERE hostname = %(hostname)s 
+          AND service_name = %(service_name)s 
+          AND status = 'pending'
+        """
+        
+        existing_command = self.db.execute(
+            existing_command_query, 
+            {"hostname": hostname, "service_name": service_name}, 
+            one_value=True, 
+            return_dict=True
+        )
+        
+        if existing_command:
             # Merge with existing command
             existing_config = existing_command.get("combined_config", {})
             existing_request_ids = existing_command.get("request_ids", [])
@@ -996,12 +1069,58 @@ class DBManager(metaclass=Singleton):
             "service_name": service_name,
             "command_type": command_type,
             "new_request_id": new_request_id,
-            "request_ids": request_ids,
-            "combined_config": json.dumps(combined_config)
+            "final_config": json.dumps(final_config)
         }
         
-        rows_affected = self.db.execute(query, values, has_value=False)
-        return rows_affected > 0
+        self.db.execute(upsert_query, values, has_value=False)
+        return True
+
+    def _merge_profiling_configs(self, existing_config: Dict, new_config: Dict) -> Dict:
+        """Merge two profiling configurations, combining parameters appropriately"""
+        # Handle case where existing_config might be None or empty
+        if not existing_config:
+            existing_config = {}
+        
+        merged = existing_config.copy()
+        
+        # Always use the latest command_type
+        merged["command_type"] = new_config["command_type"]
+        
+        # For duration, use the maximum (longer duration wins)
+        if new_config.get("duration") and existing_config.get("duration"):
+            merged["duration"] = max(new_config["duration"], existing_config["duration"])
+        elif new_config.get("duration"):
+            merged["duration"] = new_config["duration"]
+        
+        # For frequency, use the maximum (higher frequency wins)
+        if new_config.get("frequency") and existing_config.get("frequency"):
+            merged["frequency"] = max(new_config["frequency"], existing_config["frequency"])
+        elif new_config.get("frequency"):
+            merged["frequency"] = new_config["frequency"]
+        
+        # For profiling mode, use the latest one
+        if new_config.get("profiling_mode"):
+            merged["profiling_mode"] = new_config["profiling_mode"]
+        
+        # For PIDs, combine them (remove duplicates)
+        existing_pids = set(existing_config.get("pids", []))
+        new_pids = set(new_config.get("pids", []))
+        combined_pids = list(existing_pids | new_pids)
+        if combined_pids:
+            merged["pids"] = combined_pids
+        
+        # For additional_args, merge the dictionaries (they should be clean now)
+        if new_config.get("additional_args"):
+            if existing_config.get("additional_args"):
+                merged["additional_args"] = {**existing_config["additional_args"], **new_config["additional_args"]}
+            else:
+                merged["additional_args"] = new_config["additional_args"]
+        
+        # For stop_level, use the latest one
+        if new_config.get("stop_level"):
+            merged["stop_level"] = new_config["stop_level"]
+        
+        return merged
 
     def create_stop_command_for_host(
         self,
