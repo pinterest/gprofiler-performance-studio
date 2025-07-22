@@ -92,14 +92,17 @@ class HTMLMetadata(BaseModel):
 class ProfilingRequest(BaseModel):
     """Model for profiling request parameters"""
     service_name: str = Field(..., description='Name of the service to profile')
-    request_type: Literal["start", "stop"] = Field("start", description='The overall type of the request') # maybe add more types in the future
+    request_type: Literal["start", "stop"] = Field("start", description='The overall type of the request')  # maybe add more types in the future
     duration: Optional[int] = Field(60, description='Duration of the profiling in seconds (default is 60 seconds)')
     frequency: Optional[int] = Field(11, description='Frequency of profiling in Hz (default is 11 Hz)')
     profiling_mode: Optional[Literal["cpu", "allocation", "none"]] = Field(
         "cpu", description='Profiling mode to use (default is "cpu")'
     )
     target_hostnames: Optional[list[str]] = Field(None, description='List of hostnames to target for profiling')
-    pids: Optional[list[int]] = Field(None, description='List of PIDs to profile (required for stop command with process level)')
+    pids: Optional[list[int]] = Field(None, description='List of PIDs to profile (deprecated - use host_pid_mapping)')
+    host_pid_mapping: Optional[dict[str, list[int]]] = Field(
+        None, description='Mapping of hostname to list of PIDs for that host'
+    )
     stop_level: Optional[Literal['process', 'host']] = Field("process", description='Stop level (process or host)')
     additional_args: Optional[dict[str, Any]] = Field(
         None, description='Additional arguments for profiling (e.g., custom flags or options)'
@@ -109,8 +112,23 @@ class ProfilingRequest(BaseModel):
     def validate_pids_for_process_stop(cls, model: 'ProfilingRequest') -> 'ProfilingRequest':
         """Validate that PIDs are provided when request_type is stop and stop_level is process"""
         if model.request_type == 'stop' and model.stop_level == 'process':
-            if not model.pids or len(model.pids) == 0:
+            # Check if PIDs are provided either via pids field or host_pid_mapping
+            has_pids = (model.pids and len(model.pids) > 0) or (
+                model.host_pid_mapping and any(pids for pids in model.host_pid_mapping.values())
+            )
+            if not has_pids:
                 raise ValueError('At least one PID must be provided when request_type is "stop" and stop_level is "process"')
+
+        # Validate that both pids and host_pid_mapping are not provided at the same time
+        if model.pids and model.host_pid_mapping:
+            raise ValueError('Cannot provide both "pids" and "host_pid_mapping" - use "host_pid_mapping" for better host-to-PID association')
+
+        # If target_hostnames is provided with host_pid_mapping, ensure hostnames match
+        if model.target_hostnames and model.host_pid_mapping:
+            mapping_hosts = set(model.host_pid_mapping.keys())
+            target_hosts = set(model.target_hostnames)
+            if not mapping_hosts.issubset(target_hosts):
+                raise ValueError('All hostnames in host_pid_mapping must be included in target_hostnames')
 
         # Validate the duration
         if model.duration and model.duration <= 0:
@@ -166,9 +184,9 @@ class ProfilingCommand(BaseModel):
 
 class CommandCompletionRequest(BaseModel):
     """Model for reporting command completion"""
-    command_id: str
-    hostname: str
-    status: Literal["completed", "failed"]  # completed, failed
-    execution_time: Optional[int] = None  # seconds
-    error_message: Optional[str] = None
-    results_path: Optional[str] = None  # S3 path or local path to results
+    command_id: str = Field(..., description='Unique identifier for the command')
+    hostname: str = Field(..., description='Hostname of the machine where the command was executed')
+    status: Literal["completed", "failed"] = Field(..., description='Status of the command completion')
+    execution_time: Optional[int] = Field(None, description='Execution time of the command in seconds')
+    error_message: Optional[str] = Field(None, description='Error message if the command failed')
+    results_path: Optional[str] = Field(None, description='S3 path or local path to results')
