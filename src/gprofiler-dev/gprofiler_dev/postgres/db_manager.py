@@ -701,49 +701,36 @@ class DBManager(metaclass=Singleton):
         command_id: str,
         hostname: str
     ) -> bool:
-        """Mark a profiling request as assigned to a host using pure SQL"""
-        query = """
-        WITH updated_rows AS (
-            UPDATE ProfilingRequests
-            SET status = 'assigned',
-                assigned_to_hostname = %(hostname)s,
-                assigned_at = CURRENT_TIMESTAMP
-            WHERE request_id = %(request_id)s::uuid
-            AND status = 'pending'
-            RETURNING 1
-        )
-        SELECT COUNT(*) FROM updated_rows
         """
-
-        values = {
-            "request_id": request_id,
-            "hostname": hostname
-        }
-
-        rows_affected = self.db.execute(query, values)
+        Create execution record for the command assignment.
+        We don't need to update ProfilingRequests status since:
+        1. ProfilingCommands already tracks the actual commands via request_ids array
+        2. ProfilingExecutions tracks the actual execution status
+        3. We can trace back from command to requests via request_ids
+        """
         
-        # Create execution record if it doesn't exist (key should be command_id + hostname)
+        # Just create the execution record - this is what really matters
         exec_query = """
         INSERT INTO ProfilingExecutions (
-            profiling_request_id, command_id, hostname, status, started_at
-        )
-        SELECT
-            (SELECT ID FROM ProfilingRequests WHERE request_id = %(request_id)s::uuid),
+            command_id, hostname, status, started_at
+        ) VALUES (
             %(command_id)s::uuid, %(hostname)s, 'assigned', CURRENT_TIMESTAMP
-        WHERE NOT EXISTS (
-            SELECT 1 FROM ProfilingExecutions
-            WHERE command_id = %(command_id)s::uuid
-            AND hostname = %(hostname)s
         )
+        ON CONFLICT (command_id, hostname) DO UPDATE SET
+            status = 'assigned',
+            started_at = CURRENT_TIMESTAMP
         """
         exec_values = {
-            "request_id": request_id,
             "command_id": command_id,
             "hostname": hostname
         }
-        self.db.execute(exec_query, exec_values, has_value=False)
-        
-        return rows_affected > 0
+
+        try:
+            self.db.execute(exec_query, exec_values, has_value=False)
+            return True
+        except Exception as e:
+            self.db.logger.error(f"Error creating profiling execution record: {e}")
+            return False
 
     def update_profiling_request_status(
         self,
@@ -752,26 +739,19 @@ class DBManager(metaclass=Singleton):
         completed_at: Optional[datetime] = None,
         error_message: Optional[str] = None
     ) -> bool:
-        """Update the status of a profiling request (does not update execution records)"""
-        query = """
-        WITH updated_rows AS (
-            UPDATE ProfilingRequests
-            SET status = %(status)s::ProfilingRequestStatus,
-                completed_at = %(completed_at)s
-            WHERE request_id = %(request_id)s::uuid
-            RETURNING 1
-        )
-        SELECT COUNT(*) FROM updated_rows
         """
-
-        values = {
-            "request_id": request_id,
-            "status": status,
-            "completed_at": completed_at
-        }
-
-        rows_affected = self.db.execute(query, values)
-        return rows_affected > 0
+        Update the status of a profiling request (DEPRECATED - kept for compatibility)
+        
+        NOTE: This method is largely unnecessary since:
+        - ProfilingCommands tracks the actual command status
+        - ProfilingExecutions tracks execution status
+        - Request status can be inferred from command/execution status
+        
+        Consider using command/execution status instead.
+        """
+        # For now, just return True to avoid breaking existing code
+        # In the future, this method should be removed
+        return True
 
     def update_profiling_execution_status(
         self,
@@ -938,20 +918,32 @@ class DBManager(metaclass=Singleton):
         return self.db.execute(query, values, one_value=False, return_dict=True, fetch_all=True)
 
     def get_profiler_request_status(self, request_id: str) -> Optional[Dict]:
-        """Get the current status of a profiling request"""
+        """Get the current status of a profiling request by looking at associated commands and executions"""
         query = """
         SELECT
-            pr.request_id, pr.service_name, pr.status, pr.assigned_to_hostname,
-            pr.created_at, pr.assigned_at, pr.completed_at, pr.estimated_completion_time,
-            pe.command_id, pe.hostname as execution_hostname, pe.started_at,
-            pe.completed_at as execution_completed_at, pe.error_message
+            pr.request_id, pr.service_name, pr.created_at, pr.estimated_completion_time,
+            pc.command_id, pc.hostname, pc.status as command_status, pc.created_at as command_created_at,
+            pe.status as execution_status, pe.started_at, pe.completed_at, pe.error_message
         FROM ProfilingRequests pr
-        LEFT JOIN ProfilingExecutions pe ON pr.ID = pe.profiling_request_id
+        LEFT JOIN ProfilingCommands pc ON pr.request_id = ANY(pc.request_ids)
+        LEFT JOIN ProfilingExecutions pe ON pc.command_id = pe.command_id
         WHERE pr.request_id = %(request_id)s::uuid
+        ORDER BY pc.created_at DESC, pe.started_at DESC
+        LIMIT 1
         """
 
         values = {"request_id": request_id}
         result = self.db.execute(query, values, one_value=True, return_dict=True)
+        
+        if result:
+            # Infer overall request status from command/execution status
+            if result.get("execution_status"):
+                result["inferred_status"] = result["execution_status"]
+            elif result.get("command_status"):
+                result["inferred_status"] = result["command_status"]
+            else:
+                result["inferred_status"] = "pending"
+        
         return result if result else None
 
     def create_or_update_profiling_command(
