@@ -1454,31 +1454,8 @@ class DBManager(metaclass=Singleton):
         
         if execution_status != "assigned":
             return False, f"Command {command_id} for host {hostname} is in status '{execution_status}', expected 'assigned'"
-        
+
         return True, ""
-
-    def validate_command_exists_for_host(self, command_id: str, hostname: str) -> bool:
-        """
-        Validate if a command_id exists for a specific hostname in the ProfilingCommands table.
-        Returns True if the command exists for the host, False otherwise.
-        
-        Note: This method is deprecated in favor of validate_command_completion_eligibility
-        for command completion scenarios that require status validation.
-        """
-        query = """
-        SELECT 1
-        FROM ProfilingCommands
-        WHERE command_id = %(command_id)s::uuid
-          AND hostname = %(hostname)s
-        """
-
-        values = {
-            "command_id": command_id,
-            "hostname": hostname
-        }
-
-        result = self.db.execute(query, values, one_value=True)
-        return result is not None
 
     def update_host_heartbeat(
         self,
