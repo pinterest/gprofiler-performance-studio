@@ -14,23 +14,22 @@
 # limitations under the License.
 #
 
-version: "3.6"
 services:
   # ---
   db_clickhouse:
     image: clickhouse/clickhouse-server:22.8
-    profiles: ["with-clickhouse"]
+    profiles: ["with-clickhouse", "with-all"]
     container_name: gprofiler-ps-clickhouse
     restart: always
+    # Uncomment the following lines to expose ClickHouse ports
+    # ports:
+    #  - "8123:8123"
+    #  - "9000:9000"
+    #  - "9009:9009"
     ulimits:
       nofile:
         soft: 262144
         hard: 262144
-# for debug
-#    ports:
-#     - "8123:8123"
-#     - "9000:9000"
-#     - "9009:9009"
     environment:
      - CLICKHOUSE_USER=$CLICKHOUSE_USER
      - CLICKHOUSE_PASSWORD=$CLICKHOUSE_PASSWORD
@@ -42,16 +41,16 @@ services:
   # ---
   db_postgres:
     image: postgres:15.1
-    profiles: ["with-postgres"]
+    profiles: ["with-postgres", "with-all"]
     container_name: gprofiler-ps-postgres
     restart: always
+    # Uncomment the following lines to expose Postgres ports
+    # ports:
+    #   - "5432:5432"
     environment:
       - POSTGRES_USER=$POSTGRES_USER
       - POSTGRES_PASSWORD=$POSTGRES_PASSWORD
       - POSTGRES_DB=$POSTGRES_DB
-# for debug
-    ports:
-     - "54321:5432"
     volumes:
       - db_postgres:/var/lib/postgresql/data
       - ../scripts/setup/postgres/gprofiler_recreate.sql:/docker-entrypoint-initdb.d/create_scheme.sql
@@ -61,9 +60,12 @@ services:
     build:
       context: ../src
       dockerfile: gprofiler/Dockerfile
-    profiles: ["with-webapp"]
+    profiles: ["with-webapp", "with-all"]
     container_name: gprofiler-ps-webapp
     restart: always
+    # Uncomment the following lines to expose webapp ports
+    # ports:
+    #   - "80:80"
     environment:
       - BUCKET_NAME=$BUCKET_NAME
       - QUERY_API_BASE_URL=https://ch-rest-service:4433
@@ -85,18 +87,18 @@ services:
       - AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
       - AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN
       - AWS_DEFAULT_REGION=$AWS_REGION
-# for debug
-    ports:
-      - "8888:80"
 
   # ---
   ch-rest-service:
     build:
       context: ../src/gprofiler_flamedb_rest
       dockerfile: Dockerfile
-    profiles: ["with-ch-rest-service"]
+    profiles: ["with-ch-rest-service", "with-all"]
     container_name: gprofiler-ps-ch-rest-service
     restart: always
+    # Uncomment the following lines to expose ClickHouse REST service ports
+    # ports:
+    #   - "8080:8080"
     environment:
       - CLICKHOUSE_ADDR=${CLICKHOUSE_HOST}:9000?username=${CLICKHOUSE_USER}&password=${CLICKHOUSE_PASSWORD}
       - CLICKHOUSE_STACKS_TABLE=flamedb.samples
@@ -115,15 +117,19 @@ services:
       retries: 10
       start_period: 20s
 
+
   # ---
   agents-logs-backend:
     user: "888:888"
     build:
       context: ../src
       dockerfile: gprofiler_logging/Dockerfile
-    profiles: ["with-agents-logs-backend"]
+    profiles: ["with-agents-logs-backend", "with-all"]
     container_name: gprofiler-ps-agents-logs-backend
     restart: always
+    # Uncomment the following lines to expose agents logs backend ports
+    # ports:
+    #   - "80:80"
     environment:
       - APP_LOG_FILE_PATH=$AGENTS_LOGS_APP_LOG_FILE_PATH
       - ENV=open
@@ -142,7 +148,7 @@ services:
     build:
       context: ../deploy/periodic_tasks
       dockerfile: Dockerfile
-    profiles: ["with-periodic-tasks"]
+    profiles: ["with-periodic-tasks", "with-all"]
     container_name: gprofiler-ps-periodic-tasks
     restart: always
     environment:
@@ -161,7 +167,7 @@ services:
     build:
       context: ../src/gprofiler_indexer
       dockerfile: Dockerfile
-    profiles: ["with-ch-indexer"]
+    profiles: ["with-ch-indexer", "with-all"]
     container_name: gprofiler-ps-ch-indexer
     restart: always
     environment:
@@ -181,15 +187,17 @@ services:
       - AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
       - AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
       - AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN
+
   #---
   nginx-load-balancer:
     image: nginx:1.23.3
-    profiles: ["with-nginx-load-balancer"]
+    profiles: ["with-nginx-load-balancer", "with-all"]
     container_name: gprofiler-ps-nginx-load-balancer
     restart: always
-    ports:
-      - "8082:80"
-      - "4433:443"
+    # Uncomment the following lines to expose Nginx load balancer ports
+    # ports:
+    #   - "80:80"
+    #   - "443:443"
     volumes:
       - ../deploy/https_nginx.conf:/etc/nginx/nginx.conf
       - ../deploy/.htpasswd:/etc/nginx/.htpasswd
@@ -203,19 +211,28 @@ services:
     build:
       context: ../src/tests
       dockerfile: Dockerfile
-    entrypoint: ["python", "run_tests.py", "--test-path", "integration/"]
+    entrypoint: ["sh", "-c", "sleep 5 && python run_tests.py --test-path integration/"]
     container_name: gprofiler-tester
+    # Uncomment the following line to run the tester in host network mode.
+    # This is useful for testing services running on the same host (but not managed by this docker compose file)
+    # without the need of extra network configuration
+    # network_mode: "host"
     stdin_open: true
     tty: true
-    depends_on:
-      - webapp
-      - db_clickhouse
-      - db_postgres
-      - nginx-load-balancer
-      - ch-indexer
-      - periodic-tasks
-      - ch-rest-service
-      - agents-logs-backend
+    # The following lines are commented out to avoid dependency errors when
+    # selecting different profile arrangements.
+    # If you know want to use this functionality, uncomment the lines below.
+    # Just make sure that the uncommented services will be available with the selected profiles
+    # when running docker compose.
+    # depends_on:
+    #   - webapp
+    #   - db_clickhouse
+    #   - db_postgres
+    #   - nginx-load-balancer
+    #   - ch-indexer
+    #   - periodic-tasks
+    #   - ch-rest-service
+    #   - agents-logs-backend
     environment:
       - TEST_BACKEND=$TEST_BACKEND
       - TEST_DB=$TEST_DB
