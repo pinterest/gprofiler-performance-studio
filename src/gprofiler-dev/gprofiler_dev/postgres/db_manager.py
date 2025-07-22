@@ -1422,6 +1422,64 @@ class DBManager(metaclass=Singleton):
         
         return result if result else None
 
+    def validate_command_completion_eligibility(self, command_id: str, hostname: str) -> tuple[bool, str]:
+        """
+        Validate if a command can be completed for a specific hostname.
+        Checks both that the command exists and that the execution is in 'assigned' status.
+        Returns (is_valid: bool, error_message: str).
+        """
+        query = """
+        SELECT
+            pc.command_id,
+            pe.status as execution_status
+        FROM ProfilingCommands pc
+        LEFT JOIN ProfilingExecutions pe ON pc.command_id = pe.command_id AND pe.hostname = %(hostname)s
+        WHERE pc.command_id = %(command_id)s::uuid
+          AND pc.hostname = %(hostname)s
+        """
+
+        values = {
+            "command_id": command_id,
+            "hostname": hostname
+        }
+        
+        result = self.db.execute(query, values, one_value=True, return_dict=True)
+        
+        if result is None:
+            return False, f"Command {command_id} not found for host {hostname}"
+        
+        execution_status = result.get("execution_status")
+        if execution_status is None:
+            return False, f"No execution record found for command {command_id} on host {hostname}"
+        
+        if execution_status != "assigned":
+            return False, f"Command {command_id} for host {hostname} is in status '{execution_status}', expected 'assigned'"
+        
+        return True, ""
+
+    def validate_command_exists_for_host(self, command_id: str, hostname: str) -> bool:
+        """
+        Validate if a command_id exists for a specific hostname in the ProfilingCommands table.
+        Returns True if the command exists for the host, False otherwise.
+        
+        Note: This method is deprecated in favor of validate_command_completion_eligibility
+        for command completion scenarios that require status validation.
+        """
+        query = """
+        SELECT 1
+        FROM ProfilingCommands
+        WHERE command_id = %(command_id)s::uuid
+          AND hostname = %(hostname)s
+        """
+
+        values = {
+            "command_id": command_id,
+            "hostname": hostname
+        }
+
+        result = self.db.execute(query, values, one_value=True)
+        return result is not None
+
     def update_host_heartbeat(
         self,
         hostname: str,
