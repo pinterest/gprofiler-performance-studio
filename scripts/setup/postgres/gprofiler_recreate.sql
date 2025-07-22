@@ -339,7 +339,10 @@ CREATE TABLE ProfilingExecutions (
     error_message text NULL,
     results_path text NULL,
     created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    
+    -- Adding the constraint that db_manager.py expects for ON CONFLICT
+    CONSTRAINT "unique_profiling_execution" UNIQUE (command_id, hostname)
 );
 
 -- Essential indexes for profiling executions
