@@ -560,8 +560,9 @@ def report_command_completion(completion: CommandCompletionRequest):
     
     This endpoint:
     1. Receives command completion status from hosts
-    2. Updates command status in PostgreSQL DB
-    3. Updates related profiling requests status
+    2. Validates that the command exists for the specific host
+    3. Updates command status in PostgreSQL DB
+    4. Updates related profiling requests status
     """
     try:
         db_manager = DBManager()
@@ -577,7 +578,20 @@ def report_command_completion(completion: CommandCompletionRequest):
                 "error_message": completion.error_message
             }
         )
-        
+
+        # Validate that the command can be completed (exists and is in assigned status)
+        is_valid, error_message = db_manager.validate_command_completion_eligibility(
+            completion.command_id, completion.hostname
+        )
+        if not is_valid:
+            logger.warning(
+                f"Command completion validation failed: {error_message}"
+            )
+            return {
+                "success": False,
+                "message": error_message
+            }
+
         # Update command status
         db_manager.update_profiling_command_status(
             command_id=completion.command_id,
