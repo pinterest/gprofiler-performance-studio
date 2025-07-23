@@ -92,7 +92,7 @@ class HTMLMetadata(CamelModel):
 class ProfilingRequest(BaseModel):
     """Model for profiling request parameters"""
     service_name: str = Field(..., description='Name of the service to profile')
-    request_type: Literal["start", "stop"] = Field("start", description='The overall type of the request')  # maybe add more types in the future
+    request_type: Literal["start", "stop"] = Field(..., description='The overall type of the request')  # maybe add more types in the future
     duration: Optional[int] = Field(60, description='Duration of the profiling in seconds (default is 60 seconds)')
     frequency: Optional[int] = Field(11, description='Frequency of profiling in Hz (default is 11 Hz)')
     profiling_mode: Optional[Literal["cpu", "allocation", "none"]] = Field(

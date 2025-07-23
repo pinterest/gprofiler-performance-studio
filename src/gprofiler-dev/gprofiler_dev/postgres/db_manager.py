@@ -1121,7 +1121,8 @@ class DBManager(metaclass=Singleton):
         command_id: str,
         hostname: str,
         service_name: str,
-        request_id: str
+        request_id: str,
+        stop_level: str = "host"
     ) -> bool:
         """Create a stop command for an entire host"""
         query = """
@@ -1131,7 +1132,7 @@ class DBManager(metaclass=Singleton):
         ) VALUES (
             %(command_id)s::uuid, %(hostname)s, %(service_name)s, 'stop',
             ARRAY[%(request_id)s::uuid], 
-            '{"stop_level": "host"}'::jsonb,
+            %(combined_config)s::jsonb,
             'pending', CURRENT_TIMESTAMP
         )
         ON CONFLICT (hostname, service_name)
@@ -1139,20 +1140,23 @@ class DBManager(metaclass=Singleton):
             command_id = %(command_id)s::uuid,
             command_type = 'stop',
             request_ids = array_append(ProfilingCommands.request_ids, %(request_id)s::uuid),
-            combined_config = '{"stop_level": "host"}'::jsonb,
+            combined_config = %(combined_config)s::jsonb,
             status = 'pending',
             created_at = CURRENT_TIMESTAMP
         """
+        
+        combined_config = {"stop_level": stop_level}
         
         values = {
             "command_id": command_id,
             "hostname": hostname,
             "service_name": service_name,
-            "request_id": request_id
+            "request_id": request_id,
+            "combined_config": json.dumps(combined_config)
         }
         
-        rows_affected = self.db.execute(query, values, has_value=False)
-        return rows_affected > 0
+        self.db.execute(query, values, has_value=False)
+        return True
 
     def handle_process_level_stop(
         self,
