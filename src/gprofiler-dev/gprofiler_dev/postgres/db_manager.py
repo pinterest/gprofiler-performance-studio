@@ -951,10 +951,11 @@ class DBManager(metaclass=Singleton):
     def create_or_update_profiling_command(
         self,
         command_id: str,
-        hostname: str,
+        hostname: Optional[str],
         service_name: str,
         command_type: str,
-        new_request_id: str
+        new_request_id: str,
+        stop_level: Optional[str] = None
     ) -> bool:
         """Create or update a profiling command for a host with command_type support"""
         if hostname is None:
@@ -1020,39 +1021,38 @@ class DBManager(metaclass=Singleton):
         
         if existing_command:
             # Merge with existing command
-            existing_config = existing_command.get("combined_config", {})
-            existing_request_ids = existing_command.get("request_ids", [])
+            existing_config = existing_command["combined_config"]
+            if isinstance(existing_config, str):
+                try:
+                    existing_config = json.loads(existing_config)
+                except json.JSONDecodeError:
+                    existing_config = {}
+            elif existing_config is None:
+                existing_config = {}
             
-            # Merge request IDs
-            request_ids = existing_request_ids + [new_request_id]
-            
-            # Build combined config by merging all requests
-            combined_config = self._build_combined_config(request_ids, hostname, service_name)
+            # Merge configurations
+            merged_config = self._merge_profiling_configs(existing_config, new_config)
+            final_config = merged_config
         else:
-            # Create new combined config from single request
-            combined_config = {
-                "duration": new_request.get("duration", 60),
-                "frequency": new_request.get("frequency", 11),
-                "profiling_mode": new_request.get("profiling_mode", "cpu")
-            }
-            
-            if new_request.get("pids"):
-                combined_config["pids"] = ",".join(map(str, new_request["pids"]))
+            # No existing command, use new config as-is
+            final_config = new_config
         
-        # For specific hostname, create/update command
-        query = """
+        # Use INSERT ... ON CONFLICT for atomic upsert
+        upsert_query = """
         INSERT INTO ProfilingCommands (
-            command_id, hostname, service_name, command_type, request_ids, combined_config, status, created_at
+            command_id, hostname, service_name, command_type, request_ids, 
+            combined_config, status, created_at
         ) VALUES (
             %(command_id)s::uuid, %(hostname)s, %(service_name)s, %(command_type)s,
-            %(request_ids)s, %(combined_config)s::jsonb, 'pending', CURRENT_TIMESTAMP
+            ARRAY[%(new_request_id)s::uuid], %(final_config)s::jsonb,
+            'pending', CURRENT_TIMESTAMP
         )
-        ON CONFLICT (hostname, service_name) 
+        ON CONFLICT (hostname, service_name)
         DO UPDATE SET
             command_id = %(command_id)s::uuid,
             command_type = %(command_type)s,
-            request_ids = %(request_ids)s,
-            combined_config = %(combined_config)s::jsonb,
+            request_ids = array_append(ProfilingCommands.request_ids, %(new_request_id)s::uuid),
+            combined_config = %(final_config)s::jsonb,
             status = 'pending',
             created_at = CURRENT_TIMESTAMP
         """
