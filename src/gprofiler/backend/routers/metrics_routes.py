@@ -19,7 +19,7 @@ import math
 import uuid
 from datetime import datetime, timedelta
 from logging import getLogger
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
 
 from botocore.exceptions import ClientError
 
@@ -275,19 +275,22 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
                 "duration": profiling_request.duration,
                 "frequency": profiling_request.frequency,
                 "mode": profiling_request.profiling_mode,
-                "target_hostnames": profiling_request.target_hostnames,
-                "pids": profiling_request.pids,
-                "host_pid_mapping": profiling_request.host_pid_mapping,
+                "target_hosts": profiling_request.target_hosts,
                 "stop_level": profiling_request.stop_level
             }
         )
 
-        
         db_manager = DBManager()
         request_id = str(uuid.uuid4())
         command_ids = []  # Track all command IDs created
-        
+
         try:
+            # Convert target_hosts to legacy format for database compatibility
+            target_hostnames = list(profiling_request.target_hosts.keys()) if profiling_request.target_hosts else None
+            host_pid_mapping = {
+                hostname: pids for hostname, pids in profiling_request.target_hosts.items() if pids
+            } if profiling_request.target_hosts else None
+
             # Save the profiling request to database using enhanced method
             success = db_manager.save_profiling_request(
                 request_id=request_id,
@@ -296,26 +299,24 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
                 duration=profiling_request.duration,
                 frequency=profiling_request.frequency,
                 profiling_mode=profiling_request.profiling_mode,
-                target_hostnames=profiling_request.target_hostnames,
-                pids=profiling_request.pids,
-                host_pid_mapping=profiling_request.host_pid_mapping,
+                target_hostnames=target_hostnames,
+                pids=None,  # Deprecated field, always None
+                host_pid_mapping=host_pid_mapping,
                 additional_args=profiling_request.additional_args
             )
 
             if not success:
                 raise Exception("Failed to save profiling request to database")
-            
+
             # Handle start vs stop commands differently
             if profiling_request.request_type == "start":
                 # Create profiling commands for target hosts
                 target_hosts = []
-                
-                # Determine target hosts based on host_pid_mapping or target_hostnames
-                if profiling_request.host_pid_mapping:
-                    target_hosts = list(profiling_request.host_pid_mapping.keys())
-                elif profiling_request.target_hostnames:
-                    target_hosts = profiling_request.target_hostnames
-                
+
+                # Determine target hosts from target_hosts mapping
+                if profiling_request.target_hosts:
+                    target_hosts = list(profiling_request.target_hosts.keys())
+
                 if target_hosts:
                     # Create commands for specific hosts
                     for hostname in target_hosts:
@@ -339,22 +340,20 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
                         command_type="start",
                         new_request_id=request_id,
                     )
-            
+
             elif profiling_request.request_type == "stop":
                 # Handle stop commands with host-to-PID associations
                 target_hosts = []
-                
+
                 # Determine target hosts for stop commands
-                if profiling_request.host_pid_mapping:
-                    target_hosts = list(profiling_request.host_pid_mapping.keys())
-                elif profiling_request.target_hostnames:
-                    target_hosts = profiling_request.target_hostnames
-                
+                if profiling_request.target_hosts:
+                    target_hosts = list(profiling_request.target_hosts.keys())
+
                 if target_hosts:
                     for hostname in target_hosts:
                         command_id = str(uuid.uuid4())
                         command_ids.append(command_id)
-                        
+
                         if profiling_request.stop_level == "host":
                             # Stop entire host
                             db_manager.create_stop_command_for_host(
@@ -364,13 +363,11 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
                                 request_id=request_id
                             )
                         else:  # process level stop
-                            # Get PIDs for this specific host (either from host_pid_mapping or global pids)
+                            # Get PIDs for this specific host from target_hosts mapping
                             host_pids = None
-                            if profiling_request.host_pid_mapping and hostname in profiling_request.host_pid_mapping:
-                                host_pids = profiling_request.host_pid_mapping[hostname]
-                            elif profiling_request.pids:
-                                host_pids = profiling_request.pids
-                            
+                            if profiling_request.target_hosts and hostname in profiling_request.target_hosts:
+                                host_pids = profiling_request.target_hosts[hostname]
+
                             # Stop specific processes for this host
                             db_manager.handle_process_level_stop(
                                 command_id=command_id,

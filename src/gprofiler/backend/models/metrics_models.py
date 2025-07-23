@@ -98,10 +98,8 @@ class ProfilingRequest(BaseModel):
     profiling_mode: Optional[Literal["cpu", "allocation", "none"]] = Field(
         "cpu", description='Profiling mode to use (default is "cpu")'
     )
-    target_hostnames: Optional[list[str]] = Field(None, description='List of hostnames to target for profiling')
-    pids: Optional[list[int]] = Field(None, description='List of PIDs to profile (deprecated - use host_pid_mapping)')
-    host_pid_mapping: Optional[dict[str, list[int]]] = Field(
-        None, description='Mapping of hostname to list of PIDs for that host'
+    target_hosts: Optional[dict[str, Optional[list[int]]]] = Field(
+        None, description='Mapping of hostname to optional list of PIDs for that host. If PIDs are not specified for a host, profiling will target all processes on that host.'
     )
     stop_level: Optional[Literal['process', 'host']] = Field("process", description='Stop level (process or host)')
     additional_args: Optional[dict[str, Any]] = Field(
@@ -109,26 +107,16 @@ class ProfilingRequest(BaseModel):
     )
 
     @model_validator(mode='after')
-    def validate_pids_for_process_stop(cls, model: 'ProfilingRequest') -> 'ProfilingRequest':
+    def validate_profile_request(cls, model: 'ProfilingRequest') -> 'ProfilingRequest':
         """Validate that PIDs are provided when request_type is stop and stop_level is process"""
         if model.request_type == 'stop' and model.stop_level == 'process':
-            # Check if PIDs are provided either via pids field or host_pid_mapping
-            has_pids = (model.pids and len(model.pids) > 0) or (
-                model.host_pid_mapping and any(pids for pids in model.host_pid_mapping.values())
+            # Check if PIDs are provided in target_hosts mapping
+            has_pids = (
+                model.target_hosts and
+                any(pids for pids in model.target_hosts.values() if pids)
             )
             if not has_pids:
                 raise ValueError('At least one PID must be provided when request_type is "stop" and stop_level is "process"')
-
-        # Validate that both pids and host_pid_mapping are not provided at the same time
-        if model.pids and model.host_pid_mapping:
-            raise ValueError('Cannot provide both "pids" and "host_pid_mapping" - use "host_pid_mapping" for better host-to-PID association')
-
-        # If target_hostnames is provided with host_pid_mapping, ensure hostnames match
-        if model.target_hostnames and model.host_pid_mapping:
-            mapping_hosts = set(model.host_pid_mapping.keys())
-            target_hosts = set(model.target_hostnames)
-            if not mapping_hosts.issubset(target_hosts):
-                raise ValueError('All hostnames in host_pid_mapping must be included in target_hostnames')
 
         # Validate the duration
         if model.duration and model.duration <= 0:
