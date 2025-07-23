@@ -1151,8 +1151,8 @@ class DBManager(metaclass=Singleton):
             "request_id": request_id
         }
         
-        rows_affected = self.db.execute(query, values, has_value=False)
-        return rows_affected > 0
+        self.db.execute(query, values, has_value=False)
+        return True
 
     def handle_process_level_stop(
         self,
@@ -1166,7 +1166,7 @@ class DBManager(metaclass=Singleton):
         """Handle process-level stop logic with PID management"""
         if not pids_to_stop:
             # If no PIDs specified, treat as host-level stop
-            return self.create_stop_command_for_host(command_id, hostname, service_name, request_id, "host")
+            return self.create_stop_command_for_host(command_id, hostname, service_name, request_id)
 
         # Get current command for this host to check existing PIDs
         current_command = self.get_current_profiling_command(hostname, service_name)
@@ -1180,7 +1180,7 @@ class DBManager(metaclass=Singleton):
 
                 if len(remaining_pids) <= 1:
                     # Convert to host-level stop if only one or no PIDs remain
-                    return self.create_stop_command_for_host(command_id, hostname, service_name, request_id, "host")
+                    return self.create_stop_command_for_host(command_id, hostname, service_name, request_id)
                 else:
                     # Update command with remaining PIDs
                     query = """
