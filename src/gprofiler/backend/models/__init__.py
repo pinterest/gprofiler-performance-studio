@@ -1,3 +1,4 @@
+
 #
 # Copyright (C) 2023 Intel Corporation
 #
@@ -15,10 +16,11 @@
 #
 
 from humps import camelize
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class CamelModel(BaseModel):
-    class Config:
-        alias_generator = camelize
-        allow_population_by_field_name = True
+    model_config = ConfigDict(
+        alias_generator=camelize,
+        populate_by_name=True
+    )

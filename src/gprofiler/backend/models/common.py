@@ -14,18 +14,30 @@
 # limitations under the License.
 #
 
-from typing import Any, Dict
+from typing import Any
+
+from pydantic import GetJsonSchemaHandler
+from pydantic.json_schema import JsonSchemaValue
+from pydantic_core import core_schema
 
 
 class ServiceName(str):
     @classmethod
-    def __modify_schema__(cls, field_schema: Dict[str, Any]) -> None:
-        field_schema.update(type="string", format="service_name")
+    def __get_pydantic_json_schema__(
+        cls, schema: core_schema.CoreSchema, handler: GetJsonSchemaHandler
+    ) -> JsonSchemaValue:
+        json_schema = handler(schema)
+        json_schema.update(type="string", format="service_name")
+        return json_schema
 
     @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler) -> core_schema.CoreSchema:
+        return core_schema.with_info_after_validator_function(
+            cls._validate,
+            core_schema.str_schema(),
+        )
 
     @classmethod
-    def validate(cls, value: str) -> str:
-        return value[1:] if value.startswith("_") else value
+    def _validate(cls, value: str, _info) -> "ServiceName":
+        validated_value = value[1:] if value.startswith("_") else value
+        return cls(validated_value)

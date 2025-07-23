@@ -596,7 +596,6 @@ class DBManager(metaclass=Singleton):
         request_id: str,
         request_type: str,
         service_name: str,
-        command_type: str,  # Keep the parameter name for backward compatibility
         duration: Optional[int] = 60,
         frequency: Optional[int] = 11,
         profiling_mode: Optional[str] = "cpu",
@@ -614,8 +613,8 @@ class DBManager(metaclass=Singleton):
         
         query = """
         INSERT INTO ProfilingRequests (
-            request_id, service_name, request_type, duration, frequency, profiling_mode,
-            target_hostnames, pids, stop_level, additional_args, service_id, updated_at
+            request_id, request_type, service_name, duration, frequency, profiling_mode,
+            target_hostnames, pids, additional_args
         ) VALUES (
             %(request_id)s::uuid, %(request_type)s, %(service_name)s, %(duration)s, %(frequency)s,
             %(profiling_mode)s::ProfilingMode, %(target_hostnames)s, %(pids)s, %(additional_args)s
@@ -626,7 +625,6 @@ class DBManager(metaclass=Singleton):
             "request_id": request_id,
             "request_type": request_type,
             "service_name": service_name,
-            "request_type": command_type,  # Map command_type to request_type
             "duration": duration,
             "frequency": frequency,
             "profiling_mode": profiling_mode,
@@ -794,9 +792,13 @@ class DBManager(metaclass=Singleton):
         ip_address: str,
         service_name: str,
         last_command_id: Optional[str] = None,
-        status: str = "active"
+        status: str = "active",
+        heartbeat_timestamp: Optional[datetime] = None
     ) -> None:
-        """Update or insert host heartbeat information using simple SQL"""
+        """Update or insert host heartbeat information using pure SQL"""
+        if heartbeat_timestamp is None:
+            heartbeat_timestamp = datetime.now()
+            
         query = """
         INSERT INTO HostHeartbeats (
             hostname, ip_address, service_name, last_command_id, 
@@ -1158,53 +1160,54 @@ class DBManager(metaclass=Singleton):
         hostname: str,
         service_name: str,
         pids_to_stop: Optional[List[int]],
-        request_id: str
+        request_id: str,
+        stop_level: str = "process"
     ) -> bool:
         """Handle process-level stop logic with PID management"""
         if not pids_to_stop:
             # If no PIDs specified, treat as host-level stop
-            return self.create_stop_command_for_host(command_id, hostname, service_name, request_id)
-        
+            return self.create_stop_command_for_host(command_id, hostname, service_name, request_id, "host")
+
         # Get current command for this host to check existing PIDs
         current_command = self.get_current_profiling_command(hostname, service_name)
-        
+
         if current_command and current_command.get("command_type") == "start":
-            current_pids_str = current_command.get("combined_config", {}).get("pids", "")
-            
-            if current_pids_str:
-                # Parse the comma-separated PIDs string
-                current_pids = [int(pid.strip()) for pid in current_pids_str.split(",") if pid.strip()]
-                
+            current_pids = current_command.get("combined_config", {}).get("pids", [])
+
+            if current_pids:
                 # Remove specified PIDs from current command
                 remaining_pids = [pid for pid in current_pids if pid not in pids_to_stop]
-                
+
                 if len(remaining_pids) <= 1:
                     # Convert to host-level stop if only one or no PIDs remain
-                    return self.create_stop_command_for_host(command_id, hostname, service_name, request_id)
+                    return self.create_stop_command_for_host(command_id, hostname, service_name, request_id, "host")
                 else:
-                    # Update command with remaining PIDs as comma-separated string
-                    remaining_pids_str = ",".join(map(str, remaining_pids))
+                    # Update command with remaining PIDs
                     query = """
                     UPDATE ProfilingCommands 
                     SET command_id = %(command_id)s::uuid,
-                        combined_config = jsonb_set(combined_config, '{pids}', %(remaining_pids)s::jsonb),
+                        combined_config = jsonb_set(
+                            jsonb_set(combined_config, '{pids}', %(remaining_pids)s::jsonb),
+                            '{stop_level}', %(stop_level)s::jsonb
+                        ),
                         request_ids = array_append(request_ids, %(request_id)s::uuid),
                         status = 'pending',
                         created_at = CURRENT_TIMESTAMP
                     WHERE hostname = %(hostname)s AND service_name = %(service_name)s
                     """
-                    
+
                     values = {
                         "command_id": command_id,
                         "hostname": hostname,
                         "service_name": service_name,
                         "request_id": request_id,
-                        "remaining_pids": json.dumps(remaining_pids_str)
+                        "remaining_pids": json.dumps(remaining_pids),
+                        "stop_level": json.dumps(stop_level)
                     }
-                    
-                    rows_affected = self.db.execute(query, values, has_value=False)
-                    return rows_affected > 0
-        
+
+                    self.db.execute(query, values, has_value=False)
+                    return True
+
         # Default: create stop command with specific PIDs
         query = """
         INSERT INTO ProfilingCommands (
@@ -1227,8 +1230,8 @@ class DBManager(metaclass=Singleton):
         """
         
         combined_config = {
-            "stop_level": "process",
-            "pids": ",".join(map(str, pids_to_stop))
+            "stop_level": stop_level,
+            "pids": pids_to_stop
         }
         
         values = {
@@ -1238,9 +1241,9 @@ class DBManager(metaclass=Singleton):
             "request_id": request_id,
             "combined_config": json.dumps(combined_config)
         }
-        
-        rows_affected = self.db.execute(query, values, has_value=False)
-        return rows_affected > 0
+
+        self.db.execute(query, values, has_value=False)
+        return True
 
     def get_current_profiling_command(self, hostname: str, service_name: str) -> Optional[Dict]:
         """Get the current profiling command for a host/service"""
@@ -1274,49 +1277,30 @@ class DBManager(metaclass=Singleton):
           AND service_name = %(service_name)s
           AND status = 'pending'
         """
-        
+
         values = {
             "hostname": hostname,
             "service_name": service_name
         }
-        
+
         if exclude_command_id:
             query += " AND command_id != %(exclude_command_id)s::uuid"
             values["exclude_command_id"] = exclude_command_id
-        
+
         query += " ORDER BY created_at DESC LIMIT 1"
-        
+
         result = self.db.execute(query, values, one_value=True, return_dict=True)
         
-        if not result:
-            return None
-            
-        # Ensure combined_config has the correct structure and merged PIDs
-        combined_config = result.get("combined_config", {})
+        # Parse the combined_config JSON if it exists
+        if result and result.get('combined_config'):
+            try:
+                if isinstance(result['combined_config'], str):
+                    result['combined_config'] = json.loads(result['combined_config'])
+            except json.JSONDecodeError:
+                self.db.logger.warning(f"Failed to parse combined_config for command {result.get('command_id')}")
+                result['combined_config'] = {}
         
-        # If combined_config is empty or missing required fields, rebuild it
-        if not combined_config or not all(k in combined_config for k in ["duration", "frequency", "profiling_mode"]):
-            request_ids = result.get("request_ids", [])
-            combined_config = self._build_combined_config(request_ids, hostname, service_name)
-            
-            # Update the command with the rebuilt combined_config
-            if combined_config:
-                update_query = """
-                UPDATE ProfilingCommands
-                SET combined_config = %(combined_config)s::jsonb
-                WHERE command_id = %(command_id)s::uuid AND hostname = %(hostname)s
-                """
-                
-                update_values = {
-                    "command_id": str(result["command_id"]),
-                    "hostname": hostname,
-                    "combined_config": json.dumps(combined_config)
-                }
-                
-                self.db.execute(update_query, update_values, has_value=False)
-                result["combined_config"] = combined_config
-        
-        return result
+        return result if result else None
 
     def mark_profiling_command_sent(self, command_id: str, hostname: str) -> bool:
         """Mark a profiling command as sent to a host"""
@@ -1325,14 +1309,14 @@ class DBManager(metaclass=Singleton):
         SET status = 'sent', sent_at = CURRENT_TIMESTAMP
         WHERE command_id = %(command_id)s::uuid AND hostname = %(hostname)s
         """
-        
+
         values = {
             "command_id": command_id,
             "hostname": hostname
         }
-        
-        rows_affected = self.db.execute(query, values, has_value=False)
-        return rows_affected > 0
+
+        self.db.execute(query, values, has_value=False)
+        return True
     
     def update_profiling_command_status(
         self,
