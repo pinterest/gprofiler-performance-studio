@@ -17,7 +17,7 @@ BACKEND_PASSWORD = os.getenv("BACKEND_PASSWORD", "tester123")
 POSTGRES_USER = os.getenv("POSTGRES_USER", "performance_studio")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "performance_studio_password")
 POSTGRES_DB = os.getenv("POSTGRES_DB", "performance_studio")
-POSTGRES_PORT = os.getenv("POSTGRES_PORT", 54321)
+POSTGRES_PORT = os.getenv("POSTGRES_PORT", 5432)
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
 
 """

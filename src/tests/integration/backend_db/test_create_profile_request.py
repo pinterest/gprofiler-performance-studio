@@ -137,7 +137,11 @@ def valid_start_request_data_single_host_stop_level_process_single_process(
         "frequency": 11,
         "profiling_mode": "cpu",
         "target_hostnames": [test_hostname],
-        "pids": [1234],  # Example PID for process-level profiling
+        "host_pid_mapping": {
+            test_hostname: [
+                1234,
+            ],
+        },
         "stop_level": "process",
         "additional_args": {"test": True, "environment": "integration_test"},
     }
@@ -152,7 +156,11 @@ def valid_stop_request_data_single_host_stop_level_process_single_process(
         "service_name": test_service_name,
         "request_type": "stop",
         "target_hostnames": [test_hostname],
-        "pids": [1234],  # Example PID for process-level profiling
+        "host_pid_mapping": {
+            test_hostname: [
+                1234,
+            ],
+        },
         "stop_level": "process",
     }
 
@@ -169,7 +177,12 @@ def valid_start_request_data_single_host_stop_level_process_multi_process(
         "frequency": 11,
         "profiling_mode": "cpu",
         "target_hostnames": [test_hostname],
-        "pids": [1234, 5678],  # Example PIDs for process-level profiling
+        "host_pid_mapping": {
+            test_hostname: [
+                1234,
+                5678,
+            ],
+        },
         "stop_level": "process",
         "additional_args": {"test": True, "environment": "integration_test"},
     }
@@ -184,7 +197,12 @@ def valid_stop_request_data_single_host_stop_level_process_multi_process(
         "service_name": test_service_name,
         "request_type": "stop",
         "target_hostnames": [test_hostname],
-        "pids": [1234, 5678],  # Example PIDs for process-level profiling
+        "host_pid_mapping": {
+            test_hostname: [
+                1234,
+                5678,
+            ],
+        },
         "stop_level": "process",
     }
 
@@ -759,12 +777,6 @@ class TestProfileRequestIntegration:
             ]
         )
         assert (
-            db_request["pids"]
-            == valid_start_request_data_single_host_stop_level_process_single_process[
-                "pids"
-            ]
-        )
-        assert (
             db_request["stop_level"]
             == valid_start_request_data_single_host_stop_level_process_single_process[
                 "stop_level"
@@ -833,7 +845,9 @@ class TestProfileRequestIntegration:
                 assert (
                     combined_config.get("pids")
                     == valid_start_request_data_single_host_stop_level_process_single_process[
-                        "pids"
+                        "host_pid_mapping"
+                    ][
+                        test_hostname
                     ]
                 )
 
@@ -883,8 +897,8 @@ class TestProfileRequestIntegration:
         assert (
             profiling_command["combined_config"]["pids"]
             == valid_start_request_data_single_host_stop_level_process_single_process[
-                "pids"
-            ]
+                "host_pid_mapping"
+            ][test_hostname]
         )
 
         # Step 6: Send another heartbeat with last_command_id to simulate acknowledgment
@@ -906,7 +920,7 @@ class TestProfileRequestIntegration:
         ), "Should not receive the same command after acknowledgment"
 
         print(
-            f"✅ End-to-end process-level start integration test passed: Request {request_id} with PID {valid_start_request_data_single_host_stop_level_process_single_process['pids']} created, command delivered via heartbeat, and acknowledged"
+            f"✅ End-to-end process-level start integration test passed: Request {request_id} with PID {valid_start_request_data_single_host_stop_level_process_single_process['host_pid_mapping'][test_hostname]} created, command delivered via heartbeat, and acknowledged"
         )
 
     @pytest.mark.order(4)
@@ -973,12 +987,7 @@ class TestProfileRequestIntegration:
                 "target_hostnames"
             ]
         )
-        assert (
-            db_request["pids"]
-            == valid_stop_request_data_single_host_stop_level_process_single_process[
-                "pids"
-            ]
-        )
+
         assert (
             db_request["stop_level"]
             == valid_stop_request_data_single_host_stop_level_process_single_process[
@@ -1012,7 +1021,9 @@ class TestProfileRequestIntegration:
                     assert (
                         combined_config.get("pids")
                         == valid_stop_request_data_single_host_stop_level_process_single_process[
-                            "pids"
+                            "host_pid_mapping"
+                        ][
+                            test_hostname
                         ]
                     )
                     assert (
@@ -1169,12 +1180,6 @@ class TestProfileRequestIntegration:
             ]
         )
         assert (
-            db_request["pids"]
-            == valid_start_request_data_single_host_stop_level_process_multi_process[
-                "pids"
-            ]
-        )
-        assert (
             db_request["stop_level"]
             == valid_start_request_data_single_host_stop_level_process_multi_process[
                 "stop_level"
@@ -1243,15 +1248,25 @@ class TestProfileRequestIntegration:
                 assert (
                     combined_config.get("pids")
                     == valid_start_request_data_single_host_stop_level_process_multi_process[
-                        "pids"
+                        "host_pid_mapping"
+                    ][
+                        test_hostname
                     ]
                 )
 
                 # Verify multiple PIDs are correctly stored
-                expected_pids = valid_start_request_data_single_host_stop_level_process_multi_process["pids"]
-                assert len(combined_config.get("pids", [])) == len(expected_pids), f"Expected {len(expected_pids)} PIDs, got {len(combined_config.get('pids', []))}"
+                expected_pids = valid_start_request_data_single_host_stop_level_process_multi_process[
+                    "host_pid_mapping"
+                ][
+                    test_hostname
+                ]
+                assert len(combined_config.get("pids", [])) == len(
+                    expected_pids
+                ), f"Expected {len(expected_pids)} PIDs, got {len(combined_config.get('pids', []))}"
                 for pid in expected_pids:
-                    assert pid in combined_config.get("pids", []), f"PID {pid} not found in command config"
+                    assert pid in combined_config.get(
+                        "pids", []
+                    ), f"PID {pid} not found in command config"
 
                 break
 
@@ -1299,14 +1314,20 @@ class TestProfileRequestIntegration:
         assert (
             profiling_command["combined_config"]["pids"]
             == valid_start_request_data_single_host_stop_level_process_multi_process[
-                "pids"
-            ]
+                "host_pid_mapping"
+            ][test_hostname]
         )
 
         # Verify multiple PIDs in delivered command
         delivered_pids = profiling_command["combined_config"]["pids"]
-        expected_pids = valid_start_request_data_single_host_stop_level_process_multi_process["pids"]
-        assert len(delivered_pids) == len(expected_pids), f"Expected {len(expected_pids)} PIDs in delivered command, got {len(delivered_pids)}"
+        expected_pids = (
+            valid_start_request_data_single_host_stop_level_process_multi_process[
+                "host_pid_mapping"
+            ][test_hostname]
+        )
+        assert len(delivered_pids) == len(
+            expected_pids
+        ), f"Expected {len(expected_pids)} PIDs in delivered command, got {len(delivered_pids)}"
         for pid in expected_pids:
             assert pid in delivered_pids, f"PID {pid} not found in delivered command"
 
@@ -1329,7 +1350,7 @@ class TestProfileRequestIntegration:
         ), "Should not receive the same command after acknowledgment"
 
         print(
-            f"✅ End-to-end multi-process start integration test passed: Request {request_id} with PIDs {valid_start_request_data_single_host_stop_level_process_multi_process['pids']} created, command delivered via heartbeat, and acknowledged"
+            f"✅ End-to-end multi-process start integration test passed: Request {request_id} with PIDs {valid_start_request_data_single_host_stop_level_process_multi_process['host_pid_mapping'][test_hostname]} created, command delivered via heartbeat, and acknowledged"
         )
 
     @pytest.mark.order(6)
@@ -1337,6 +1358,9 @@ class TestProfileRequestIntegration:
         self,
         profile_request_url: str,
         heartbeat_url: str,
+        valid_start_request_data_single_host_stop_level_process_multi_process: Dict[
+            str, Any
+        ],
         valid_stop_request_data_single_host_stop_level_process_multi_process: Dict[
             str, Any
         ],
@@ -1397,12 +1421,6 @@ class TestProfileRequestIntegration:
             ]
         )
         assert (
-            db_request["pids"]
-            == valid_stop_request_data_single_host_stop_level_process_multi_process[
-                "pids"
-            ]
-        )
-        assert (
             db_request["stop_level"]
             == valid_stop_request_data_single_host_stop_level_process_multi_process[
                 "stop_level"
@@ -1411,11 +1429,18 @@ class TestProfileRequestIntegration:
         assert db_request["status"] == "pending"
 
         # Verify multiple PIDs are correctly stored in database
-        expected_pids = valid_stop_request_data_single_host_stop_level_process_multi_process["pids"]
-        stored_pids = db_request["pids"]
-        assert len(stored_pids) == len(expected_pids), f"Expected {len(expected_pids)} PIDs in database, got {len(stored_pids)}"
-        for pid in expected_pids:
-            assert pid in stored_pids, f"PID {pid} not found in database"
+        expected_pids = [
+            pid
+            for pid in valid_start_request_data_single_host_stop_level_process_multi_process[
+                "host_pid_mapping"
+            ][
+                test_hostname
+            ]
+            if pid
+            not in valid_stop_request_data_single_host_stop_level_process_multi_process[
+                "host_pid_mapping"
+            ][test_hostname]
+        ]
 
         # Step 3: Verify ProfilingCommands table entries for stop command
         db_commands = get_profiling_commands_from_db(
@@ -1442,7 +1467,9 @@ class TestProfileRequestIntegration:
                     assert (
                         combined_config.get("pids")
                         == valid_stop_request_data_single_host_stop_level_process_multi_process[
-                            "pids"
+                            "host_pid_mapping"
+                        ][
+                            test_hostname
                         ]
                     )
                     assert (
@@ -1454,9 +1481,13 @@ class TestProfileRequestIntegration:
 
                     # Verify multiple PIDs in command config
                     command_pids = combined_config.get("pids", [])
-                    assert len(command_pids) == len(expected_pids), f"Expected {len(expected_pids)} PIDs in command, got {len(command_pids)}"
+                    assert len(command_pids) == len(
+                        expected_pids
+                    ), f"Expected {len(expected_pids)} PIDs in command, got {len(command_pids)}"
                     for pid in expected_pids:
-                        assert pid in command_pids, f"PID {pid} not found in command config"
+                        assert (
+                            pid in command_pids
+                        ), f"PID {pid} not found in command config"
                     break
 
             assert (
@@ -1499,10 +1530,16 @@ class TestProfileRequestIntegration:
 
         # Verify multiple PIDs in delivered stop command
         delivered_pids = profiling_command["combined_config"]["pids"]
-        expected_pids = valid_stop_request_data_single_host_stop_level_process_multi_process["pids"]
-        assert len(delivered_pids) == len(expected_pids), f"Expected {len(expected_pids)} PIDs in delivered stop command, got {len(delivered_pids)}"
+        expected_pids = (
+            valid_stop_request_data_single_host_stop_level_process_multi_process["pids"]
+        )
+        assert len(delivered_pids) == len(
+            expected_pids
+        ), f"Expected {len(expected_pids)} PIDs in delivered stop command, got {len(delivered_pids)}"
         for pid in expected_pids:
-            assert pid in delivered_pids, f"PID {pid} not found in delivered stop command"
+            assert (
+                pid in delivered_pids
+            ), f"PID {pid} not found in delivered stop command"
 
         # Step 6: Send acknowledgment heartbeat
         print("🔄 Sending acknowledgment heartbeat for multi-process stop command...")
