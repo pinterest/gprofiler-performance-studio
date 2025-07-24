@@ -106,7 +106,9 @@ def valid_start_request_data_single_host_stop_level_host(
         "duration": 60,
         "frequency": 11,
         "profiling_mode": "cpu",
-        "target_hostnames": [test_hostname],
+        "target_hosts": {
+            test_hostname: None,
+        },
         "stop_level": "host",
         "additional_args": {"test": True, "environment": "integration_test"},
     }
@@ -120,7 +122,9 @@ def valid_stop_request_data_single_host_stop_level_host(
     return {
         "service_name": test_service_name,
         "request_type": "stop",
-        "target_hostnames": [test_hostname],
+        "target_hosts": {
+            test_hostname: None,
+        },
         "stop_level": "host",
     }
 
@@ -136,12 +140,9 @@ def valid_start_request_data_single_host_stop_level_process_single_process(
         "duration": 60,
         "frequency": 11,
         "profiling_mode": "cpu",
-        "target_hostnames": [test_hostname],
-        "host_pid_mapping": {
-            test_hostname: [
-                1234,
-            ],
-        },
+        "target_hosts": {
+            test_hostname: [1234],
+        },  # Single PID for process-level profiling
         "stop_level": "process",
         "additional_args": {"test": True, "environment": "integration_test"},
     }
@@ -155,11 +156,8 @@ def valid_stop_request_data_single_host_stop_level_process_single_process(
     return {
         "service_name": test_service_name,
         "request_type": "stop",
-        "target_hostnames": [test_hostname],
-        "host_pid_mapping": {
-            test_hostname: [
-                1234,
-            ],
+        "target_hosts": {
+            test_hostname: [1234],  # Single PID for process-level stop
         },
         "stop_level": "process",
     }
@@ -176,12 +174,8 @@ def valid_start_request_data_single_host_stop_level_process_multi_process(
         "duration": 60,
         "frequency": 11,
         "profiling_mode": "cpu",
-        "target_hostnames": [test_hostname],
-        "host_pid_mapping": {
-            test_hostname: [
-                1234,
-                5678,
-            ],
+        "target_hosts": {
+            test_hostname: [1234, 5678],  # Multiple PIDs for process-level profiling
         },
         "stop_level": "process",
         "additional_args": {"test": True, "environment": "integration_test"},
@@ -196,12 +190,8 @@ def valid_stop_request_data_single_host_stop_level_process_multi_process(
     return {
         "service_name": test_service_name,
         "request_type": "stop",
-        "target_hostnames": [test_hostname],
-        "host_pid_mapping": {
-            test_hostname: [
-                1234,
-                5678,
-            ],
+        "target_hosts": {
+            test_hostname: [1234, 5678],  # Multiple PIDs for process-level stop
         },
         "stop_level": "process",
     }
@@ -442,7 +432,9 @@ class TestProfileRequestIntegration:
         )
         assert (
             db_request["target_hostnames"]
-            == valid_start_request_data_single_host_stop_level_host["target_hostnames"]
+            == valid_start_request_data_single_host_stop_level_host[
+                "target_hosts"
+            ].keys()
         )
         assert db_request["status"] == "pending"
 
@@ -615,7 +607,9 @@ class TestProfileRequestIntegration:
         )
         assert (
             db_request["target_hostnames"]
-            == valid_stop_request_data_single_host_stop_level_host["target_hostnames"]
+            == valid_stop_request_data_single_host_stop_level_host[
+                "target_hosts"
+            ].keys()
         )
         assert db_request["status"] == "pending"
 
@@ -773,8 +767,8 @@ class TestProfileRequestIntegration:
         assert (
             db_request["target_hostnames"]
             == valid_start_request_data_single_host_stop_level_process_single_process[
-                "target_hostnames"
-            ]
+                "target_hosts"
+            ].keys()
         )
         assert (
             db_request["stop_level"]
@@ -845,7 +839,7 @@ class TestProfileRequestIntegration:
                 assert (
                     combined_config.get("pids")
                     == valid_start_request_data_single_host_stop_level_process_single_process[
-                        "host_pid_mapping"
+                        "target_hosts"
                     ][
                         test_hostname
                     ]
@@ -897,7 +891,7 @@ class TestProfileRequestIntegration:
         assert (
             profiling_command["combined_config"]["pids"]
             == valid_start_request_data_single_host_stop_level_process_single_process[
-                "host_pid_mapping"
+                "target_hosts"
             ][test_hostname]
         )
 
@@ -984,8 +978,8 @@ class TestProfileRequestIntegration:
         assert (
             db_request["target_hostnames"]
             == valid_stop_request_data_single_host_stop_level_process_single_process[
-                "target_hostnames"
-            ]
+                "target_hosts"
+            ].keys()
         )
 
         assert (
@@ -1021,7 +1015,7 @@ class TestProfileRequestIntegration:
                     assert (
                         combined_config.get("pids")
                         == valid_stop_request_data_single_host_stop_level_process_single_process[
-                            "host_pid_mapping"
+                            "target_hosts"
                         ][
                             test_hostname
                         ]
@@ -1176,8 +1170,8 @@ class TestProfileRequestIntegration:
         assert (
             db_request["target_hostnames"]
             == valid_start_request_data_single_host_stop_level_process_multi_process[
-                "target_hostnames"
-            ]
+                "target_hosts"
+            ].keys()
         )
         assert (
             db_request["stop_level"]
@@ -1248,7 +1242,7 @@ class TestProfileRequestIntegration:
                 assert (
                     combined_config.get("pids")
                     == valid_start_request_data_single_host_stop_level_process_multi_process[
-                        "host_pid_mapping"
+                        "target_hosts"
                     ][
                         test_hostname
                     ]
@@ -1256,7 +1250,7 @@ class TestProfileRequestIntegration:
 
                 # Verify multiple PIDs are correctly stored
                 expected_pids = valid_start_request_data_single_host_stop_level_process_multi_process[
-                    "host_pid_mapping"
+                    "target_hosts"
                 ][
                     test_hostname
                 ]
@@ -1314,7 +1308,7 @@ class TestProfileRequestIntegration:
         assert (
             profiling_command["combined_config"]["pids"]
             == valid_start_request_data_single_host_stop_level_process_multi_process[
-                "host_pid_mapping"
+                "target_hosts"
             ][test_hostname]
         )
 
@@ -1322,7 +1316,7 @@ class TestProfileRequestIntegration:
         delivered_pids = profiling_command["combined_config"]["pids"]
         expected_pids = (
             valid_start_request_data_single_host_stop_level_process_multi_process[
-                "host_pid_mapping"
+                "target_hosts"
             ][test_hostname]
         )
         assert len(delivered_pids) == len(
@@ -1417,8 +1411,8 @@ class TestProfileRequestIntegration:
         assert (
             db_request["target_hostnames"]
             == valid_stop_request_data_single_host_stop_level_process_multi_process[
-                "target_hostnames"
-            ]
+                "target_hosts"
+            ].keys()
         )
         assert (
             db_request["stop_level"]
@@ -1432,13 +1426,13 @@ class TestProfileRequestIntegration:
         expected_pids = [
             pid
             for pid in valid_start_request_data_single_host_stop_level_process_multi_process[
-                "host_pid_mapping"
+                "target_hosts"
             ][
                 test_hostname
             ]
             if pid
             not in valid_stop_request_data_single_host_stop_level_process_multi_process[
-                "host_pid_mapping"
+                "target_hosts"
             ][test_hostname]
         ]
 
@@ -1467,7 +1461,7 @@ class TestProfileRequestIntegration:
                     assert (
                         combined_config.get("pids")
                         == valid_stop_request_data_single_host_stop_level_process_multi_process[
-                            "host_pid_mapping"
+                            "target_hosts"
                         ][
                             test_hostname
                         ]
