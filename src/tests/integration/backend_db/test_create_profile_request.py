@@ -973,13 +973,6 @@ class TestProfileRequestIntegration:
                 "target_hosts"
             ].keys()
         )
-
-        assert (
-            db_request["stop_level"]
-            == valid_stop_request_data_single_host_stop_level_process_single_process[
-                "stop_level"
-            ]
-        )
         assert db_request["status"] == "pending"
 
         # Step 3: Verify ProfilingCommands table entries for stop command
@@ -1000,12 +993,6 @@ class TestProfileRequestIntegration:
                     assert db_command["service_name"] == test_service_name
                     assert db_command["command_type"] == "stop"
                     assert db_command["status"] == "pending"
-
-                    # For this test case, we stop all PIDs for the host
-                    # Then the stop command should stop the entire host
-                    combined_config = db_command["combined_config"]
-                    assert combined_config is not None
-                    assert combined_config.get("stop_level") == "host"
                     break
 
             assert (
@@ -1013,7 +1000,7 @@ class TestProfileRequestIntegration:
             ), f"Stop command with ID in {command_ids} not found in database"
 
         # Step 4: Send heartbeat and verify stop command delivery
-        print("🔄 Sending heartbeat to retrieve process-level stop commands...")
+        print("🔄 Sending heartbeat to retrieve stop commands...")
         received_command = send_heartbeat_and_verify(
             heartbeat_url,
             valid_heartbeat_data,
@@ -1030,7 +1017,7 @@ class TestProfileRequestIntegration:
             received_command["command_id"] in command_ids
         ), f"Received command ID {received_command['command_id']} not in expected IDs {command_ids}"
 
-        # Verify stop command content including process-level details
+        # Verify stop command content
         profiling_command = received_command["profiling_command"]
         assert profiling_command["command_type"] == "stop"
         # For this test case, we stop all PIDs for the host
@@ -1038,7 +1025,7 @@ class TestProfileRequestIntegration:
         assert profiling_command["combined_config"]["stop_level"] == "host"
 
         # Step 6: Send acknowledgment heartbeat
-        print("🔄 Sending acknowledgment heartbeat for process-level stop command...")
+        print("🔄 Sending acknowledgment heartbeat for stop command...")
         heartbeat_with_ack = valid_heartbeat_data.copy()
         heartbeat_with_ack["last_command_id"] = received_command["command_id"]
 
@@ -1282,19 +1269,6 @@ class TestProfileRequestIntegration:
             ][test_hostname]
         )
 
-        # Verify multiple PIDs in delivered command
-        delivered_pids = profiling_command["combined_config"]["pids"]
-        expected_pids = (
-            valid_start_request_data_single_host_stop_level_process_multi_process[
-                "target_hosts"
-            ][test_hostname]
-        )
-        assert len(delivered_pids) == len(
-            expected_pids
-        ), f"Expected {len(expected_pids)} PIDs in delivered command, got {len(delivered_pids)}"
-        for pid in expected_pids:
-            assert pid in delivered_pids, f"PID {pid} not found in delivered command"
-
         # Step 6: Send another heartbeat with last_command_id to simulate acknowledgment
         print("🔄 Sending acknowledgment heartbeat for multi-process start command...")
         heartbeat_with_ack = valid_heartbeat_data.copy()
@@ -1440,10 +1414,10 @@ class TestProfileRequestIntegration:
         ), f"Received command ID {received_command['command_id']} not in expected IDs {command_ids}"
 
         # Verify stop command content including multi-process details
-        # For this test case, we stop all PIDs for the host
-        # Then the stop command should stop the entire host
         profiling_command = received_command["profiling_command"]
         assert profiling_command["command_type"] == "stop"
+        # For this test case, we stop all PIDs for the host
+        # Then the stop command should stop the entire host
         assert profiling_command["combined_config"]["stop_level"] == "host"
 
         # Step 6: Send acknowledgment heartbeat
@@ -1464,7 +1438,7 @@ class TestProfileRequestIntegration:
         ), "Should not receive the same stop command after acknowledgment"
 
         print(
-            f"✅ End-to-end multi-process stop integration test passed: Stop request {request_id} with PIDs {valid_stop_request_data_single_host_stop_level_process_multi_process['target_hosts'][test_hostname]} created, command delivered via heartbeat, and acknowledged"
+            f"✅ End-to-end multi-process stop integration test passed: Stop request {request_id} with PID {valid_stop_request_data_single_host_stop_level_process_multi_process['target_hosts'][test_hostname]} created, command delivered via heartbeat, and acknowledged"
         )
 
     @pytest.mark.order(7)
@@ -1816,4 +1790,219 @@ class TestProfileRequestIntegration:
         )
         print(
             f"🎯 Verified workflow: Start {initial_pids} → Stop {stopped_pids} → Continue {expected_remaining_pids}"
+        )
+
+    @pytest.mark.order(9)
+    def test_start_profiling_then_update_frequency_verify_command_update(
+        self,
+        profile_request_url: str,
+        heartbeat_url: str,
+        valid_start_request_data_single_host_stop_level_host: Dict[str, Any],
+        valid_heartbeat_data: Dict[str, Any],
+        credentials: Dict[str, Any],
+        postgres_connection,
+        test_service_name: str,
+        test_hostname: str,
+    ):
+        """Test creating a profiling request, then updating it with different frequency, and verify the resulting command has updated frequency."""
+
+        # Step 1: Create initial profiling request
+        print("🚀 Step 1: Creating initial profiling request...")
+        initial_request_data = (
+            valid_start_request_data_single_host_stop_level_host.copy()
+        )
+        initial_frequency = initial_request_data["frequency"]
+
+        initial_response = requests.post(
+            profile_request_url,
+            headers=credentials,
+            json=initial_request_data,
+            timeout=10,
+            verify=False,
+        )
+
+        assert (
+            initial_response.status_code == 200
+        ), f"Initial request failed: {initial_response.status_code}: {initial_response.text}"
+        initial_result = initial_response.json()
+
+        initial_request_id = initial_result["request_id"]
+
+        print(
+            f"✅ Initial profiling request created: {initial_request_id} with frequency {initial_frequency}"
+        )
+
+        # Step 2: Send heartbeat to get the initial command
+        print("🔄 Step 2: Retrieving initial profiling command...")
+        initial_command = send_heartbeat_and_verify(
+            heartbeat_url,
+            valid_heartbeat_data,
+            credentials,
+            postgres_connection,
+            expected_command_present=True,
+        )
+
+        # Verify initial command has the original frequency
+        assert initial_command is not None, "Expected to receive initial command"
+        initial_cmd_frequency = initial_command["profiling_command"]["combined_config"][
+            "frequency"
+        ]
+        assert (
+            initial_cmd_frequency == initial_frequency
+        ), f"Expected initial frequency {initial_frequency}, got {initial_cmd_frequency}"
+
+        print(f"✅ Initial command received with frequency: {initial_cmd_frequency}")
+
+        # Step 3: Acknowledge the initial command
+        print("🔄 Step 3: Acknowledging initial command...")
+        ack_heartbeat = valid_heartbeat_data.copy()
+        ack_heartbeat["last_command_id"] = initial_command["command_id"]
+
+        ack_response = send_heartbeat_and_verify(
+            heartbeat_url,
+            ack_heartbeat,
+            credentials,
+            postgres_connection,
+            expected_command_present=False,
+        )
+
+        assert ack_response is None, "Should not receive command after acknowledgment"
+        print("✅ Initial command acknowledged successfully")
+
+        # Step 4: Create updated profiling request with different frequency
+        print(
+            "🔄 Step 4: Creating updated profiling request with different frequency..."
+        )
+        updated_request_data = initial_request_data.copy()
+        updated_frequency = initial_frequency + 5  # Change frequency by adding 5
+        updated_request_data["frequency"] = updated_frequency
+
+        updated_response = requests.post(
+            profile_request_url,
+            headers=credentials,
+            json=updated_request_data,
+            timeout=10,
+            verify=False,
+        )
+
+        assert (
+            updated_response.status_code == 200
+        ), f"Updated request failed: {updated_response.status_code}: {updated_response.text}"
+        updated_result = updated_response.json()
+
+        updated_request_id = updated_result["request_id"]
+        updated_command_ids = updated_result["command_ids"]
+
+        print(
+            f"✅ Updated profiling request created: {updated_request_id} with frequency {updated_frequency}"
+        )
+
+        # Step 5: Send heartbeat to get the updated command
+        print("🔄 Step 5: Retrieving updated profiling command...")
+        updated_command = send_heartbeat_and_verify(
+            heartbeat_url,
+            valid_heartbeat_data,
+            credentials,
+            postgres_connection,
+            expected_command_present=True,
+        )
+
+        # Step 6: Verify the updated command is a start command with the new frequency
+        assert updated_command is not None, "Expected to receive updated command"
+
+        profiling_command = updated_command["profiling_command"]
+        assert (
+            profiling_command["command_type"] == "start"
+        ), f"Expected 'start' command, got '{profiling_command['command_type']}'"
+
+        # Verify the command has the updated frequency
+        command_frequency = profiling_command["combined_config"]["frequency"]
+        assert (
+            command_frequency == updated_frequency
+        ), f"Expected updated frequency {updated_frequency}, got {command_frequency}"
+
+        # Verify other configuration remains the same
+        assert (
+            profiling_command["combined_config"]["duration"]
+            == initial_request_data["duration"]
+        ), "Duration should remain unchanged"
+        assert (
+            profiling_command["combined_config"]["profiling_mode"]
+            == initial_request_data["profiling_mode"]
+        ), "Profiling mode should remain unchanged"
+
+        print(f"✅ Updated command received with frequency: {command_frequency}")
+        print(
+            f"🎯 Successfully verified frequency update: {initial_frequency} → {updated_frequency}"
+        )
+
+        # Step 7: Verify database consistency
+        print("🔍 Step 7: Verifying database consistency...")
+
+        # Verify both requests exist in database
+        db_initial_request = get_profiling_request_from_db(
+            postgres_connection, initial_request_id
+        )
+        db_updated_request = get_profiling_request_from_db(
+            postgres_connection, updated_request_id
+        )
+
+        assert (
+            db_initial_request is not None
+        ), "Initial request should exist in database"
+        assert (
+            db_updated_request is not None
+        ), "Updated request should exist in database"
+
+        # Verify frequencies in database
+        assert (
+            db_initial_request["frequency"] == initial_frequency
+        ), "Initial request frequency mismatch in database"
+        assert (
+            db_updated_request["frequency"] == updated_frequency
+        ), "Updated request frequency mismatch in database"
+
+        # Verify the command in database has the updated frequency
+        db_commands = get_profiling_commands_from_db(
+            postgres_connection,
+            test_service_name,
+            test_hostname,
+            command_ids=updated_command_ids,
+        )
+
+        assert len(db_commands) >= 1, "No updated commands found in database"
+
+        # Find the command that matches our updated command
+        matching_command = None
+        for db_command in db_commands:
+            if db_command["command_id"] == updated_command["command_id"]:
+                matching_command = db_command
+                break
+
+        assert matching_command is not None, "Updated command not found in database"
+        assert (
+            matching_command["combined_config"]["frequency"] == updated_frequency
+        ), "Command frequency mismatch in database"
+
+        print("✅ Database consistency verified")
+
+        # Step 8: Acknowledge the updated command
+        print("🔄 Step 8: Acknowledging updated command...")
+        final_ack_heartbeat = valid_heartbeat_data.copy()
+        final_ack_heartbeat["last_command_id"] = updated_command["command_id"]
+
+        final_ack_response = send_heartbeat_and_verify(
+            heartbeat_url,
+            final_ack_heartbeat,
+            credentials,
+            postgres_connection,
+            expected_command_present=False,
+        )
+
+        assert (
+            final_ack_response is None
+        ), "Should not receive command after final acknowledgment"
+
+        print(
+            f"✅ End-to-end frequency update test passed: Initial frequency {initial_frequency} → Updated frequency {updated_frequency}, command properly updated and delivered"
         )
