@@ -1182,8 +1182,8 @@ class DBManager(metaclass=Singleton):
                 # Remove specified PIDs from current command
                 remaining_pids = [pid for pid in current_pids if pid not in pids_to_stop]
 
-                if len(remaining_pids) <= 1:
-                    # Convert to host-level stop if only one or no PIDs remain
+                if len(remaining_pids) < 1:
+                    # Convert to host-level stop if no PIDs remain
                     return self.create_stop_command_for_host(command_id, hostname, service_name, request_id)
                 else:
                     # Update command with remaining PIDs
