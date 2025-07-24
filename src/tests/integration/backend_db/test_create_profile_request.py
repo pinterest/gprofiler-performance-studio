@@ -1415,6 +1415,7 @@ class TestProfileRequestIntegration:
                     combined_config = db_command["combined_config"]
                     assert combined_config is not None
                     assert combined_config.get("stop_level") == "host"
+                    break
 
             assert (
                 stop_command_found
@@ -1464,4 +1465,355 @@ class TestProfileRequestIntegration:
 
         print(
             f"✅ End-to-end multi-process stop integration test passed: Stop request {request_id} with PIDs {valid_stop_request_data_single_host_stop_level_process_multi_process['target_hosts'][test_hostname]} created, command delivered via heartbeat, and acknowledged"
+        )
+
+    @pytest.mark.order(7)
+    def test_start_multi_process_then_stop_single_process_verify_remaining_pids(
+        self,
+        profile_request_url: str,
+        heartbeat_url: str,
+        valid_start_request_data_single_host_stop_level_process_multi_process: Dict[
+            str, Any
+        ],
+        valid_stop_request_data_single_host_stop_level_process_single_process: Dict[
+            str, Any
+        ],
+        valid_heartbeat_data: Dict[str, Any],
+        credentials: Dict[str, Any],
+        postgres_connection,
+        test_service_name: str,
+        test_hostname: str,
+    ):
+        """Test starting multi-process profiling, then stopping single process, and verify remaining PIDs continue profiling."""
+
+        # Step 1: Start profiling multiple PIDs
+        print("🚀 Step 1: Starting profiling for multiple PIDs...")
+        start_response = requests.post(
+            profile_request_url,
+            headers=credentials,
+            json=valid_start_request_data_single_host_stop_level_process_multi_process,
+            timeout=10,
+            verify=False,
+        )
+
+        assert (
+            start_response.status_code == 200
+        ), f"Start request failed: {start_response.status_code}: {start_response.text}"
+        start_result = start_response.json()
+
+        start_request_id = start_result["request_id"]
+
+        print(f"✅ Multi-process start request created: {start_request_id}")
+
+        # Step 2: Send heartbeat to get the initial start command
+        print("🔄 Step 2: Retrieving initial multi-process start command...")
+        initial_command = send_heartbeat_and_verify(
+            heartbeat_url,
+            valid_heartbeat_data,
+            credentials,
+            postgres_connection,
+            expected_command_present=True,
+        )
+
+        # Verify initial command has multiple PIDs
+        assert initial_command is not None, "Expected to receive initial start command"
+        initial_pids = initial_command["profiling_command"]["combined_config"]["pids"]
+        expected_initial_pids = (
+            valid_start_request_data_single_host_stop_level_process_multi_process[
+                "target_hosts"
+            ][test_hostname]
+        )
+
+        assert len(initial_pids) == len(
+            expected_initial_pids
+        ), f"Expected {len(expected_initial_pids)} initial PIDs, got {len(initial_pids)}"
+        for pid in expected_initial_pids:
+            assert pid in initial_pids, f"PID {pid} not found in initial command"
+
+        print(f"✅ Initial start command received with PIDs: {initial_pids}")
+
+        # Step 3: Acknowledge the initial command
+        print("🔄 Step 3: Acknowledging initial multi-process start command...")
+        ack_heartbeat = valid_heartbeat_data.copy()
+        ack_heartbeat["last_command_id"] = initial_command["command_id"]
+
+        ack_response = send_heartbeat_and_verify(
+            heartbeat_url,
+            ack_heartbeat,
+            credentials,
+            postgres_connection,
+            expected_command_present=False,
+        )
+
+        assert ack_response is None, "Should not receive command after acknowledgment"
+        print("✅ Initial command acknowledged successfully")
+
+        # Step 4: Stop profiling for single PID
+        print("🛑 Step 4: Stopping profiling for single PID...")
+        stop_response = requests.post(
+            profile_request_url,
+            headers=credentials,
+            json=valid_stop_request_data_single_host_stop_level_process_single_process,
+            timeout=10,
+            verify=False,
+        )
+
+        assert (
+            stop_response.status_code == 200
+        ), f"Stop request failed: {stop_response.status_code}: {stop_response.text}"
+        stop_result = stop_response.json()
+
+        stop_request_id = stop_result["request_id"]
+
+        print(f"✅ Single-process stop request created: {stop_request_id}")
+
+        # Step 5: Send heartbeat to get the resulting command (should be start with remaining PIDs)
+        print("🔄 Step 5: Retrieving command after stopping single PID...")
+        resulting_command = send_heartbeat_and_verify(
+            heartbeat_url,
+            valid_heartbeat_data,
+            credentials,
+            postgres_connection,
+            expected_command_present=True,
+        )
+
+        # Step 6: Verify the resulting command is a start command with remaining PIDs
+        assert resulting_command is not None, "Expected to receive resulting command"
+
+        profiling_command = resulting_command["profiling_command"]
+        assert (
+            profiling_command["command_type"] == "start"
+        ), f"Expected 'start' command, got '{profiling_command['command_type']}'"
+
+        # Calculate expected remaining PIDs
+        stopped_pids = (
+            valid_stop_request_data_single_host_stop_level_process_single_process[
+                "target_hosts"
+            ][test_hostname]
+        )
+        remaining_pids = [
+            pid for pid in expected_initial_pids if pid not in stopped_pids
+        ]
+
+        # Verify remaining PIDs in the command
+        command_pids = profiling_command["combined_config"]["pids"]
+        assert len(command_pids) == len(
+            remaining_pids
+        ), f"Expected {len(remaining_pids)} remaining PIDs, got {len(command_pids)}"
+
+        for pid in remaining_pids:
+            assert pid in command_pids, f"Remaining PID {pid} not found in command"
+
+        for pid in stopped_pids:
+            assert (
+                pid not in command_pids
+            ), f"Stopped PID {pid} should not be in command"
+
+        print(f"✅ Resulting start command has correct remaining PIDs: {command_pids}")
+        print(
+            f"🎯 Successfully verified differential PID management: Started {expected_initial_pids}, stopped {stopped_pids}, remaining {remaining_pids}"
+        )
+
+        # Step 7: Acknowledge the resulting command
+        print("🔄 Step 7: Acknowledging resulting command...")
+        final_ack_heartbeat = valid_heartbeat_data.copy()
+        final_ack_heartbeat["last_command_id"] = resulting_command["command_id"]
+
+        final_ack_response = send_heartbeat_and_verify(
+            heartbeat_url,
+            final_ack_heartbeat,
+            credentials,
+            postgres_connection,
+            expected_command_present=False,
+        )
+
+        assert (
+            final_ack_response is None
+        ), "Should not receive command after final acknowledgment"
+
+        print(
+            f"✅ End-to-end differential PID management test passed: Started PIDs {expected_initial_pids}, stopped PIDs {stopped_pids}, remaining PIDs {remaining_pids} continue profiling"
+        )
+
+    @pytest.mark.order(8)
+    def test_start_multi_process_then_stop_single_process_database_consistency(
+        self,
+        profile_request_url: str,
+        heartbeat_url: str,
+        valid_start_request_data_single_host_stop_level_process_multi_process: Dict[
+            str, Any
+        ],
+        valid_stop_request_data_single_host_stop_level_process_single_process: Dict[
+            str, Any
+        ],
+        valid_heartbeat_data: Dict[str, Any],
+        credentials: Dict[str, Any],
+        postgres_connection,
+        test_service_name: str,
+        test_hostname: str,
+    ):
+        """Test database consistency when starting multi-process profiling then stopping single process."""
+
+        # Step 1: Create start request for multiple PIDs
+        print("🚀 Step 1: Creating start request for multiple PIDs...")
+        start_response = requests.post(
+            profile_request_url,
+            headers=credentials,
+            json=valid_start_request_data_single_host_stop_level_process_multi_process,
+            timeout=10,
+            verify=False,
+        )
+
+        assert start_response.status_code == 200
+        start_result = start_response.json()
+        start_request_id = start_result["request_id"]
+
+        # Verify start request in database
+        db_start_request = get_profiling_request_from_db(
+            postgres_connection, start_request_id
+        )
+        assert db_start_request is not None
+        assert db_start_request["request_type"] == "start"
+        assert db_start_request["target_hostnames"] == [test_hostname]
+
+        print(f"✅ Start request verified in database: {start_request_id}")
+
+        # Step 2: Get initial start command via heartbeat
+        print("🔄 Step 2: Getting initial start command...")
+        initial_command = send_heartbeat_and_verify(
+            heartbeat_url,
+            valid_heartbeat_data,
+            credentials,
+            postgres_connection,
+            expected_command_present=True,
+        )
+
+        # Acknowledge initial command
+        ack_heartbeat = valid_heartbeat_data.copy()
+        ack_heartbeat["last_command_id"] = initial_command["command_id"]
+        send_heartbeat_and_verify(
+            heartbeat_url,
+            ack_heartbeat,
+            credentials,
+            postgres_connection,
+            expected_command_present=False,
+        )
+
+        # Step 3: Create stop request for single PID
+        print("🛑 Step 3: Creating stop request for single PID...")
+        stop_response = requests.post(
+            profile_request_url,
+            headers=credentials,
+            json=valid_stop_request_data_single_host_stop_level_process_single_process,
+            timeout=10,
+            verify=False,
+        )
+
+        assert stop_response.status_code == 200
+        stop_result = stop_response.json()
+        stop_request_id = stop_result["request_id"]
+
+        # Step 4: Verify database entries for both requests
+        print("🔍 Step 4: Verifying database consistency...")
+
+        # Verify stop request in database
+        db_stop_request = get_profiling_request_from_db(
+            postgres_connection, stop_request_id
+        )
+        assert db_stop_request is not None
+        assert db_stop_request["request_type"] == "stop"
+        assert db_stop_request["target_hostnames"] == [test_hostname]
+
+        # Verify ProfilingCommands table has correct entries
+        db_commands = get_profiling_commands_from_db(
+            postgres_connection, test_service_name, test_hostname
+        )
+
+        # Should have at least one command entry for the resulting state
+        assert len(db_commands) >= 1, "No commands found in database"
+
+        # Find the most recent command (should be start with remaining PIDs)
+        most_recent_command = db_commands[0]  # Commands are ordered by created_at DESC
+
+        # Step 5: Get the resulting command via heartbeat and verify database consistency
+        print(
+            "🔄 Step 5: Getting resulting command and verifying database consistency..."
+        )
+        resulting_command = send_heartbeat_and_verify(
+            heartbeat_url,
+            valid_heartbeat_data,
+            credentials,
+            postgres_connection,
+            expected_command_present=True,
+        )
+
+        # Verify command consistency between database and heartbeat response
+        assert resulting_command["command_id"] == most_recent_command["command_id"]
+        assert (
+            resulting_command["profiling_command"]["command_type"]
+            == most_recent_command["command_type"]
+        )
+
+        # Verify PID consistency
+        heartbeat_pids = resulting_command["profiling_command"]["combined_config"][
+            "pids"
+        ]
+        db_pids = most_recent_command["combined_config"]["pids"]
+
+        assert (
+            heartbeat_pids == db_pids
+        ), f"PID mismatch: heartbeat={heartbeat_pids}, database={db_pids}"
+
+        # Calculate and verify expected remaining PIDs
+        initial_pids = (
+            valid_start_request_data_single_host_stop_level_process_multi_process[
+                "target_hosts"
+            ][test_hostname]
+        )
+        stopped_pids = (
+            valid_stop_request_data_single_host_stop_level_process_single_process[
+                "target_hosts"
+            ][test_hostname]
+        )
+        expected_remaining_pids = [
+            pid for pid in initial_pids if pid not in stopped_pids
+        ]
+
+        assert set(heartbeat_pids) == set(
+            expected_remaining_pids
+        ), f"Expected remaining PIDs {expected_remaining_pids}, got {heartbeat_pids}"
+
+        # Step 6: Verify HostHeartbeats table entries
+        print("🔍 Step 6: Verifying heartbeat history in database...")
+        heartbeat_entries = get_host_heartbeats_from_db(
+            postgres_connection, test_hostname, test_service_name
+        )
+
+        # Should have multiple heartbeat entries from our test
+        assert (
+            len(heartbeat_entries) == 1
+        ), f"Expected one heartbeat entry, got {len(heartbeat_entries)}"
+
+        # Verify latest heartbeat entry
+        latest_heartbeat = heartbeat_entries[0]
+        assert latest_heartbeat["hostname"] == test_hostname
+        assert latest_heartbeat["service_name"] == test_service_name
+        assert latest_heartbeat["status"] == "active"
+
+        # Final acknowledgment
+        final_ack_heartbeat = valid_heartbeat_data.copy()
+        final_ack_heartbeat["last_command_id"] = resulting_command["command_id"]
+        send_heartbeat_and_verify(
+            heartbeat_url,
+            final_ack_heartbeat,
+            credentials,
+            postgres_connection,
+            expected_command_present=False,
+        )
+
+        print(
+            "✅ Database consistency test passed: All database tables (ProfilingRequests, ProfilingCommands, HostHeartbeats) maintain consistency throughout differential PID management workflow"
+        )
+        print(
+            f"🎯 Verified workflow: Start {initial_pids} → Stop {stopped_pids} → Continue {expected_remaining_pids}"
         )
