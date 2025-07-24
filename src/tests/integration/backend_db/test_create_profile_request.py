@@ -1001,23 +1001,11 @@ class TestProfileRequestIntegration:
                     assert db_command["command_type"] == "stop"
                     assert db_command["status"] == "pending"
 
-                    # Verify process-level stop command details
+                    # For this test case, we stop all PIDs for the host
+                    # Then the stop command should stop the entire host
                     combined_config = db_command["combined_config"]
                     assert combined_config is not None
-                    assert (
-                        combined_config.get("pids")
-                        == valid_stop_request_data_single_host_stop_level_process_single_process[
-                            "target_hosts"
-                        ][
-                            test_hostname
-                        ]
-                    )
-                    assert (
-                        combined_config.get("stop_level")
-                        == valid_stop_request_data_single_host_stop_level_process_single_process[
-                            "stop_level"
-                        ]
-                    )
+                    assert combined_config.get("stop_level") == "host"
                     break
 
             assert (
@@ -1045,18 +1033,9 @@ class TestProfileRequestIntegration:
         # Verify stop command content including process-level details
         profiling_command = received_command["profiling_command"]
         assert profiling_command["command_type"] == "stop"
-        assert (
-            profiling_command["combined_config"]["stop_level"]
-            == valid_stop_request_data_single_host_stop_level_process_single_process[
-                "stop_level"
-            ]
-        )
-        assert (
-            profiling_command["combined_config"]["pids"]
-            == valid_stop_request_data_single_host_stop_level_process_single_process[
-                "pids"
-            ]
-        )
+        # For this test case, we stop all PIDs for the host
+        # Then the stop command should stop the entire host
+        assert profiling_command["combined_config"]["stop_level"] == "host"
 
         # Step 6: Send acknowledgment heartbeat
         print("🔄 Sending acknowledgment heartbeat for process-level stop command...")
@@ -1412,20 +1391,6 @@ class TestProfileRequestIntegration:
         )
         assert db_request["status"] == "pending"
 
-        # Verify multiple PIDs are correctly stored in database
-        expected_pids = [
-            pid
-            for pid in valid_start_request_data_single_host_stop_level_process_multi_process[
-                "target_hosts"
-            ][
-                test_hostname
-            ]
-            if pid
-            not in valid_stop_request_data_single_host_stop_level_process_multi_process[
-                "target_hosts"
-            ][test_hostname]
-        ]
-
         # Step 3: Verify ProfilingCommands table entries for stop command
         db_commands = get_profiling_commands_from_db(
             postgres_connection, test_service_name, test_hostname
@@ -1445,34 +1410,11 @@ class TestProfileRequestIntegration:
                     assert db_command["command_type"] == "stop"
                     assert db_command["status"] == "pending"
 
-                    # Verify multi-process stop command details
+                    # For this test case, we stop all PIDs for the host
+                    # Then the stop command should stop the entire host
                     combined_config = db_command["combined_config"]
                     assert combined_config is not None
-                    assert (
-                        combined_config.get("pids")
-                        == valid_stop_request_data_single_host_stop_level_process_multi_process[
-                            "target_hosts"
-                        ][
-                            test_hostname
-                        ]
-                    )
-                    assert (
-                        combined_config.get("stop_level")
-                        == valid_stop_request_data_single_host_stop_level_process_multi_process[
-                            "stop_level"
-                        ]
-                    )
-
-                    # Verify multiple PIDs in command config
-                    command_pids = combined_config.get("pids", [])
-                    assert len(command_pids) == len(
-                        expected_pids
-                    ), f"Expected {len(expected_pids)} PIDs in command, got {len(command_pids)}"
-                    for pid in expected_pids:
-                        assert (
-                            pid in command_pids
-                        ), f"PID {pid} not found in command config"
-                    break
+                    assert combined_config.get("stop_level") == "host"
 
             assert (
                 stop_command_found
@@ -1497,35 +1439,11 @@ class TestProfileRequestIntegration:
         ), f"Received command ID {received_command['command_id']} not in expected IDs {command_ids}"
 
         # Verify stop command content including multi-process details
+        # For this test case, we stop all PIDs for the host
+        # Then the stop command should stop the entire host
         profiling_command = received_command["profiling_command"]
         assert profiling_command["command_type"] == "stop"
-        assert (
-            profiling_command["combined_config"]["stop_level"]
-            == valid_stop_request_data_single_host_stop_level_process_multi_process[
-                "stop_level"
-            ]
-        )
-        assert (
-            profiling_command["combined_config"]["pids"]
-            == valid_stop_request_data_single_host_stop_level_process_multi_process[
-                "target-hosts"
-            ][test_hostname]
-        )
-
-        # Verify multiple PIDs in delivered stop command
-        delivered_pids = profiling_command["combined_config"]["pids"]
-        expected_pids = (
-            valid_stop_request_data_single_host_stop_level_process_multi_process[
-                "target-hosts"
-            ][test_hostname]
-        )
-        assert len(delivered_pids) == len(
-            expected_pids
-        ), f"Expected {len(expected_pids)} PIDs in delivered stop command, got {len(delivered_pids)}"
-        for pid in expected_pids:
-            assert (
-                pid in delivered_pids
-            ), f"PID {pid} not found in delivered stop command"
+        assert profiling_command["combined_config"]["stop_level"] == "host"
 
         # Step 6: Send acknowledgment heartbeat
         print("🔄 Sending acknowledgment heartbeat for multi-process stop command...")
