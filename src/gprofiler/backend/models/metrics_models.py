@@ -117,6 +117,15 @@ class ProfilingRequest(BaseModel):
             )
             if not has_pids:
                 raise ValueError('At least one PID must be provided when request_type is "stop" and stop_level is "process"')
+        
+        # Validate if a process id is provided when request_type is stop and stop_level is host, if so raises
+        if model.request_type == 'stop' and model.stop_level == 'host':
+            has_pids = (
+                model.target_hosts and
+                any(pids for pids in model.target_hosts.values() if pids is not None)
+            )
+            if has_pids:
+                raise ValueError('No PIDs should be provided when request_type is "stop" and stop_level is "host"')
 
         # Validate the duration
         if model.duration and model.duration <= 0:

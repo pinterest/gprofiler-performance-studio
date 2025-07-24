@@ -658,7 +658,7 @@ class DBManager(metaclass=Singleton):
     ) -> Optional[Dict]:
         """Get pending profiling request for a specific host/service using pure SQL"""
         query = """
-        SELECT 
+        SELECT
             pr.request_id,
             pr.service_name,
             pr.duration,
@@ -674,7 +674,7 @@ class DBManager(metaclass=Singleton):
         WHERE pr.service_name = %(service_name)s
           AND pr.status = 'pending'
           AND (
-              pr.target_hostnames IS NULL 
+              pr.target_hostnames IS NULL
               OR %(hostname)s = ANY(pr.target_hostnames)
           )
         """
