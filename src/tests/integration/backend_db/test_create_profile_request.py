@@ -430,11 +430,8 @@ class TestProfileRequestIntegration:
             db_request["profiling_mode"]
             == valid_start_request_data_single_host_stop_level_host["profiling_mode"]
         )
-        assert (
-            db_request["target_hostnames"]
-            == valid_start_request_data_single_host_stop_level_host[
-                "target_hosts"
-            ].keys()
+        assert db_request["target_hostnames"] == list(
+            valid_start_request_data_single_host_stop_level_host["target_hosts"].keys()
         )
         assert db_request["status"] == "pending"
 
@@ -605,11 +602,8 @@ class TestProfileRequestIntegration:
             db_request["request_type"]
             == valid_stop_request_data_single_host_stop_level_host["request_type"]
         )
-        assert (
-            db_request["target_hostnames"]
-            == valid_stop_request_data_single_host_stop_level_host[
-                "target_hosts"
-            ].keys()
+        assert db_request["target_hostnames"] == list(
+            valid_stop_request_data_single_host_stop_level_host["target_hosts"].keys()
         )
         assert db_request["status"] == "pending"
 
@@ -764,9 +758,8 @@ class TestProfileRequestIntegration:
                 "profiling_mode"
             ]
         )
-        assert (
-            db_request["target_hostnames"]
-            == valid_start_request_data_single_host_stop_level_process_single_process[
+        assert db_request["target_hostnames"] == list(
+            valid_start_request_data_single_host_stop_level_process_single_process[
                 "target_hosts"
             ].keys()
         )
@@ -914,7 +907,7 @@ class TestProfileRequestIntegration:
         ), "Should not receive the same command after acknowledgment"
 
         print(
-            f"✅ End-to-end process-level start integration test passed: Request {request_id} with PID {valid_start_request_data_single_host_stop_level_process_single_process['host_pid_mapping'][test_hostname]} created, command delivered via heartbeat, and acknowledged"
+            f"✅ End-to-end process-level start integration test passed: Request {request_id} with PID {valid_start_request_data_single_host_stop_level_process_single_process['target_hosts'][test_hostname]} created, command delivered via heartbeat, and acknowledged"
         )
 
     @pytest.mark.order(4)
@@ -975,9 +968,8 @@ class TestProfileRequestIntegration:
                 "request_type"
             ]
         )
-        assert (
-            db_request["target_hostnames"]
-            == valid_stop_request_data_single_host_stop_level_process_single_process[
+        assert db_request["target_hostnames"] == list(
+            valid_stop_request_data_single_host_stop_level_process_single_process[
                 "target_hosts"
             ].keys()
         )
@@ -1084,7 +1076,7 @@ class TestProfileRequestIntegration:
         ), "Should not receive the same stop command after acknowledgment"
 
         print(
-            f"✅ End-to-end process-level stop integration test passed: Stop request {request_id} with PID {valid_stop_request_data_single_host_stop_level_process_single_process['pids']} created, command delivered via heartbeat, and acknowledged"
+            f"✅ End-to-end process-level stop integration test passed: Stop request {request_id} with PID {valid_stop_request_data_single_host_stop_level_process_single_process['target_hosts'][test_hostname]} created, command delivered via heartbeat, and acknowledged"
         )
 
     @pytest.mark.order(5)
@@ -1167,9 +1159,8 @@ class TestProfileRequestIntegration:
                 "profiling_mode"
             ]
         )
-        assert (
-            db_request["target_hostnames"]
-            == valid_start_request_data_single_host_stop_level_process_multi_process[
+        assert db_request["target_hostnames"] == list(
+            valid_start_request_data_single_host_stop_level_process_multi_process[
                 "target_hosts"
             ].keys()
         )
@@ -1344,7 +1335,7 @@ class TestProfileRequestIntegration:
         ), "Should not receive the same command after acknowledgment"
 
         print(
-            f"✅ End-to-end multi-process start integration test passed: Request {request_id} with PIDs {valid_start_request_data_single_host_stop_level_process_multi_process['host_pid_mapping'][test_hostname]} created, command delivered via heartbeat, and acknowledged"
+            f"✅ End-to-end multi-process start integration test passed: Request {request_id} with PIDs {valid_start_request_data_single_host_stop_level_process_multi_process['target_hosts'][test_hostname]} created, command delivered via heartbeat, and acknowledged"
         )
 
     @pytest.mark.order(6)
@@ -1408,9 +1399,8 @@ class TestProfileRequestIntegration:
                 "request_type"
             ]
         )
-        assert (
-            db_request["target_hostnames"]
-            == valid_stop_request_data_single_host_stop_level_process_multi_process[
+        assert db_request["target_hostnames"] == list(
+            valid_stop_request_data_single_host_stop_level_process_multi_process[
                 "target_hosts"
             ].keys()
         )
@@ -1518,14 +1508,16 @@ class TestProfileRequestIntegration:
         assert (
             profiling_command["combined_config"]["pids"]
             == valid_stop_request_data_single_host_stop_level_process_multi_process[
-                "pids"
-            ]
+                "target-hosts"
+            ][test_hostname]
         )
 
         # Verify multiple PIDs in delivered stop command
         delivered_pids = profiling_command["combined_config"]["pids"]
         expected_pids = (
-            valid_stop_request_data_single_host_stop_level_process_multi_process["pids"]
+            valid_stop_request_data_single_host_stop_level_process_multi_process[
+                "target-hosts"
+            ][test_hostname]
         )
         assert len(delivered_pids) == len(
             expected_pids
@@ -1553,5 +1545,5 @@ class TestProfileRequestIntegration:
         ), "Should not receive the same stop command after acknowledgment"
 
         print(
-            f"✅ End-to-end multi-process stop integration test passed: Stop request {request_id} with PIDs {valid_stop_request_data_single_host_stop_level_process_multi_process['pids']} created, command delivered via heartbeat, and acknowledged"
+            f"✅ End-to-end multi-process stop integration test passed: Stop request {request_id} with PIDs {valid_stop_request_data_single_host_stop_level_process_multi_process['target_hosts'][test_hostname]} created, command delivered via heartbeat, and acknowledged"
         )
