@@ -331,7 +331,7 @@ CREATE TABLE ProfilingExecutions (
     ID bigserial PRIMARY KEY,
     command_id uuid NOT NULL,
     hostname text NOT NULL,
-    profiling_request_id bigint NOT NULL CONSTRAINT "fk_profiling_execution_request" REFERENCES ProfilingRequests(ID),
+    profiling_request_id uuid NOT NULL CONSTRAINT "fk_profiling_execution_request" REFERENCES ProfilingRequests(request_id),
     status ProfilingRequestStatus NOT NULL DEFAULT 'pending',
     started_at timestamp NULL,
     completed_at timestamp NULL,

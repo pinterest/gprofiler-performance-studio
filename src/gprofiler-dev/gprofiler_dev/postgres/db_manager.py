@@ -710,17 +710,19 @@ class DBManager(metaclass=Singleton):
         # Just create the execution record - this is what really matters
         exec_query = """
         INSERT INTO ProfilingExecutions (
-            command_id, hostname, status, started_at
+            command_id, hostname, profiling_request_id, status, started_at
         ) VALUES (
-            %(command_id)s::uuid, %(hostname)s, 'assigned', CURRENT_TIMESTAMP
+            %(command_id)s::uuid, %(hostname)s, %(request_id)s::uuid, 'assigned', CURRENT_TIMESTAMP
         )
         ON CONFLICT (command_id, hostname) DO UPDATE SET
+            profiling_request_id = %(request_id)s::uuid,
             status = 'assigned',
             started_at = CURRENT_TIMESTAMP
         """
         exec_values = {
             "command_id": command_id,
-            "hostname": hostname
+            "hostname": hostname,
+            "request_id": request_id
         }
 
         try:
@@ -1167,11 +1169,6 @@ class DBManager(metaclass=Singleton):
         request_id: str,
         stop_level: str = "process"
     ) -> bool:
-        """Handle process-level stop logic with PID management"""
-        if not pids_to_stop:
-            # If no PIDs specified, treat as host-level stop
-            return self.create_stop_command_for_host(command_id, hostname, service_name, request_id)
-
         # Get current command for this host to check existing PIDs
         current_command = self.get_current_profiling_command(hostname, service_name)
 
@@ -1304,6 +1301,21 @@ class DBManager(metaclass=Singleton):
                 self.db.logger.warning(f"Failed to parse combined_config for command {result.get('command_id')}")
                 result['combined_config'] = {}
         
+        # Parse the request_ids array if it exists
+        if result and result.get('request_ids'):
+            try:
+                if isinstance(result['request_ids'], str):
+                    # PostgreSQL array format: {uuid1,uuid2,uuid3}
+                    # Remove braces and split by comma
+                    request_ids_str = result['request_ids'].strip('{}')
+                    if request_ids_str:
+                        result['request_ids'] = [uuid.strip() for uuid in request_ids_str.split(',')]
+                    else:
+                        result['request_ids'] = []
+            except Exception:
+                self.db.logger.warning(f"Failed to parse request_ids for command {result.get('command_id')}")
+                result['request_ids'] = []
+
         return result if result else None
 
     def mark_profiling_command_sent(self, command_id: str, hostname: str) -> bool:
@@ -1351,8 +1363,8 @@ class DBManager(metaclass=Singleton):
             "results_path": results_path
         }
         
-        rows_affected = self.db.execute(query, values, has_value=False)
-        return rows_affected > 0
+        self.db.execute(query, values, has_value=False)
+        return True
 
     def get_profiling_command_by_id(self, command_id: str) -> Optional[Dict]:
         """Get profiling command by command ID"""
