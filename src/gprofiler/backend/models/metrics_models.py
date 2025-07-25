@@ -15,10 +15,10 @@
 #
 
 from datetime import datetime
-from typing import Optional, Literal, Any
+from typing import Optional, Dict, List, Any
 
 from backend.models import CamelModel
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, validator, root_validator
 
 
 class SampleCount(BaseModel):
@@ -91,62 +91,80 @@ class HTMLMetadata(CamelModel):
 
 class ProfilingRequest(BaseModel):
     """Model for profiling request parameters"""
-    service_name: str = Field(..., description='Name of the service to profile')
-    request_type: Literal["start", "stop"] = Field(..., description='The overall type of the request')  # maybe add more types in the future
-    duration: Optional[int] = Field(60, description='Duration of the profiling in seconds (default is 60 seconds)')
-    frequency: Optional[int] = Field(11, description='Frequency of profiling in Hz (default is 11 Hz)')
-    profiling_mode: Optional[Literal["cpu", "allocation", "none"]] = Field(
-        "cpu", description='Profiling mode to use (default is "cpu")'
-    )
-    target_hosts: Optional[dict[str, Optional[list[int]]]] = Field(
-        None, description='Mapping of hostname to optional list of PIDs for that host. If PIDs are not specified for a host, profiling will target all processes on that host.'
-    )
-    stop_level: Optional[Literal['process', 'host']] = Field("process", description='Stop level (process or host)')
-    additional_args: Optional[dict[str, Any]] = Field(
-        None, description='Additional arguments for profiling (e.g., custom flags or options)'
-    )
+    service_name: str
+    request_type: str  # "start" or "stop"
+    duration: Optional[int] = 60
+    frequency: Optional[int] = 11
+    profiling_mode: Optional[str] = "cpu"  # "cpu", "allocation", "none"
+    target_hosts: Optional[Dict[str, Optional[List[int]]]] = None
+    stop_level: Optional[str] = "process"  # "process" or "host"
+    additional_args: Optional[Dict[str, Any]] = None
 
-    @model_validator(mode='after')
-    def validate_profile_request(cls, model: 'ProfilingRequest') -> 'ProfilingRequest':
+    @validator('request_type')
+    def validate_request_type(cls, v):
+        if v not in ["start", "stop"]:
+            raise ValueError('request_type must be "start" or "stop"')
+        return v
+
+    @validator('profiling_mode')
+    def validate_profiling_mode(cls, v):
+        if v not in ["cpu", "allocation", "none"]:
+            raise ValueError('profiling_mode must be "cpu", "allocation", or "none"')
+        return v
+
+    @validator('stop_level')
+    def validate_stop_level(cls, v):
+        if v not in ["process", "host"]:
+            raise ValueError('stop_level must be "process" or "host"')
+        return v
+
+    @validator('duration')
+    def validate_duration(cls, v):
+        if v is not None and v <= 0:
+            raise ValueError("Duration must be a positive integer (seconds)")
+        return v
+
+    @validator('frequency')
+    def validate_frequency(cls, v):
+        if v is not None and v <= 0:
+            raise ValueError("Frequency must be a positive integer (Hz)")
+        return v
+
+    @root_validator
+    def validate_profile_request(cls, values):
         """Validate that PIDs are provided when request_type is stop and stop_level is process"""
-        if model.request_type == 'stop' and model.stop_level == 'process':
+        request_type = values.get('request_type')
+        stop_level = values.get('stop_level')
+        target_hosts = values.get('target_hosts')
+        
+        if request_type == 'stop' and stop_level == 'process':
             # Check if PIDs are provided in target_hosts mapping
             has_pids = (
-                model.target_hosts and
-                any(pids for pids in model.target_hosts.values() if pids)
+                target_hosts and
+                any(pids for pids in target_hosts.values() if pids)
             )
             if not has_pids:
                 raise ValueError('At least one PID must be provided when request_type is "stop" and stop_level is "process"')
         
         # Validate if a process id is provided when request_type is stop and stop_level is host, if so raises
-        if model.request_type == 'stop' and model.stop_level == 'host':
+        if request_type == 'stop' and stop_level == 'host':
             has_pids = (
-                model.target_hosts and
-                any(pids for pids in model.target_hosts.values() if pids is not None)
+                target_hosts and
+                any(pids for pids in target_hosts.values() if pids is not None)
             )
             if has_pids:
                 raise ValueError('No PIDs should be provided when request_type is "stop" and stop_level is "host"')
-
-        # Validate the duration
-        if model.duration and model.duration <= 0:
-            raise ValueError("Duration must be a positive integer (seconds)")
-
-        # Validate the frequency
-        if model.frequency and model.frequency <= 0:
-            raise ValueError("Frequency must be a positive integer (Hz)")
-
-        return model
+        
+        return values
 
 
 class ProfilingResponse(BaseModel):
     """Response model for profiling requests"""
-    success: bool = Field(..., description='Wheather the profiling response was successfull or not')
-    message: str = Field(..., description='Message describing the result of the profiling request')
-    request_id: Optional[str] = Field(None, description='Unique identifier for the profiling request')
-    command_ids: Optional[list[str]] = Field(None, description='List of command IDs associated with the profiling request')
-    estimated_completion_time: Optional[datetime] = Field(
-        None, description='Estimated time of completion for the profiling request'
-    )
+    success: bool
+    message: str
+    request_id: Optional[str] = None
+    command_ids: Optional[List[str]] = None
+    estimated_completion_time: Optional[datetime] = None
 
 
 class HeartbeatRequest(BaseModel):
@@ -163,27 +181,21 @@ class HeartbeatResponse(BaseModel):
     """Response model for heartbeat requests"""
     success: bool
     message: str
-    profiling_command: Optional[dict[str, Any]] = None  # Changed from profiling_request to profiling_command
+    profiling_command: Optional[Dict[str, Any]] = None
     command_id: Optional[str] = None
-
-
-class ProfilingCommand(BaseModel):
-    """Model for combined profiling command sent to hosts"""
-    command_id: str
-    command_type: str  # start, stop
-    hostname: str
-    service_name: str
-    combined_config: dict[str, Any]  # Combined configuration from multiple requests
-    request_ids: list[str]  # List of request IDs that make up this command
-    created_at: datetime
-    status: str  # pending, sent, completed, failed
 
 
 class CommandCompletionRequest(BaseModel):
     """Model for reporting command completion"""
-    command_id: str = Field(..., description='Unique identifier for the command')
-    hostname: str = Field(..., description='Hostname of the machine where the command was executed')
-    status: Literal["completed", "failed"] = Field(..., description='Status of the command completion')
-    execution_time: Optional[int] = Field(None, description='Execution time of the command in seconds')
-    error_message: Optional[str] = Field(None, description='Error message if the command failed')
-    results_path: Optional[str] = Field(None, description='S3 path or local path to results')
+    command_id: str
+    hostname: str
+    status: str  # "completed" or "failed"
+    execution_time: Optional[int] = None
+    error_message: Optional[str] = None
+    results_path: Optional[str] = None
+
+    @validator('status')
+    def validate_status(cls, v):
+        if v not in ["completed", "failed"]:
+            raise ValueError('status must be "completed" or "failed"')
+        return v

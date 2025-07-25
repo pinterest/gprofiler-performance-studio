@@ -18,7 +18,6 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from backend.models import CamelModel
-from pydantic import ConfigDict
 from gprofiler_dev.tags import CONTAINER_KEY, HOSTNAME_KEY, INSTANCE_TYPE_KEY, K8S_OBJ_KEY
 
 
@@ -61,28 +60,24 @@ class RQLFilter(CamelModel):
                 res.append(logic_op)
         return "__".join(res[:-1]).replace("$", "")
 
-    model_config = ConfigDict(
-        json_schema_extra=staticmethod(lambda schema: _update_rql_schema(schema))
-    )
+    class Config:
+        @staticmethod
+        def schema_extra(schema: Dict[str, Any]) -> None:
+            logic_ops_value = schema["properties"]["filter"].pop("additionalProperties")
+            filter_types_value = logic_ops_value["items"].pop("additionalProperties")
+            cmp_ops_value = filter_types_value.pop("additionalProperties")
 
+            filter_types_value["properties"] = {}
+            for cmp_op in RQLCompareOperators:
+                filter_types_value["properties"][cmp_op] = cmp_ops_value
 
-def _update_rql_schema(schema: Dict[str, Any]) -> None:
-    """Update the JSON schema for RQLFilter to include proper structure."""
-    logic_ops_value = schema["properties"]["filter"].pop("additionalProperties")
-    filter_types_value = logic_ops_value["items"].pop("additionalProperties")
-    cmp_ops_value = filter_types_value.pop("additionalProperties")
+            logic_ops_value["items"]["properties"] = {}
+            for filter_type in FilterTypes:
+                logic_ops_value["items"]["properties"][filter_type] = filter_types_value
 
-    filter_types_value["properties"] = {}
-    for cmp_op in RQLCompareOperators:
-        filter_types_value["properties"][cmp_op] = cmp_ops_value
-
-    logic_ops_value["items"]["properties"] = {}
-    for filter_type in FilterTypes:
-        logic_ops_value["items"]["properties"][filter_type] = filter_types_value
-
-    schema["properties"]["filter"]["properties"] = {}
-    for logic_op in RQLLogicOperators:
-        schema["properties"]["filter"]["properties"][logic_op] = logic_ops_value
+            schema["properties"]["filter"]["properties"] = {}
+            for logic_op in RQLLogicOperators:
+                schema["properties"]["filter"]["properties"][logic_op] = logic_ops_value
 
 
 class GetRQLFilter(RQLFilter):
