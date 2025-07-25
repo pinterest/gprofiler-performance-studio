@@ -1387,6 +1387,20 @@ class DBManager(metaclass=Singleton):
                 self.db.logger.warning(f"Failed to parse combined_config for command {result.get('command_id')}")
                 result['combined_config'] = {}
         
+        if result and result.get('request_ids'):
+            try:
+                if isinstance(result['request_ids'], str):
+                    # PostgreSQL array format: {uuid1,uuid2,uuid3}
+                    # Remove braces and split by comma
+                    request_ids_str = result['request_ids'].strip('{}')
+                    if request_ids_str:
+                        result['request_ids'] = [uuid.strip() for uuid in request_ids_str.split(',')]
+                    else:
+                        result['request_ids'] = []
+            except Exception:
+                self.db.logger.warning(f"Failed to parse request_ids for command {result.get('command_id')}")
+                result['request_ids'] = []
+        
         return result if result else None
 
     def validate_command_completion_eligibility(self, command_id: str, hostname: str) -> tuple[bool, str]:
