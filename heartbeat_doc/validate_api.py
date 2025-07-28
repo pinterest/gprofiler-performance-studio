@@ -23,7 +23,7 @@ def test_heartbeat_api():
         "duration": 60,
         "frequency": 11,
         "profiling_mode": "cpu",
-        "target_hostnames": ["test-host"],
+        "target_hosts": {"test-host": [1234, 5678]},
         "additional_args": {"test": True}
     }
     
@@ -45,8 +45,8 @@ def test_heartbeat_api():
     except Exception as e:
         print(f"❌ Valid request error: {e}")
     
-    # Test 2: Invalid request (missing target_hostnames)
-    print("\n2️⃣  Testing invalid request (missing target_hostnames)...")
+    # Test 2: Invalid request (missing target_hosts)
+    print("\n2️⃣  Testing invalid request (missing target_hosts)...")
     
     invalid_request = {
         "service_name": "test-service",
@@ -54,7 +54,7 @@ def test_heartbeat_api():
         "duration": 60,
         "frequency": 11,
         "profiling_mode": "cpu"
-        # target_hostnames missing
+        # target_hosts missing
     }
     
     try:

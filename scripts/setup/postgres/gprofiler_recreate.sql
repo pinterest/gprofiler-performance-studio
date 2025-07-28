@@ -331,7 +331,7 @@ CREATE TABLE ProfilingExecutions (
     ID bigserial PRIMARY KEY,
     command_id uuid NOT NULL,
     hostname text NOT NULL,
-    profiling_request_id bigint NOT NULL CONSTRAINT "fk_profiling_execution_request" REFERENCES ProfilingRequests(ID),
+    profiling_request_id uuid NOT NULL CONSTRAINT "fk_profiling_execution_request" REFERENCES ProfilingRequests(request_id),
     status ProfilingRequestStatus NOT NULL DEFAULT 'pending',
     started_at timestamp NULL,
     completed_at timestamp NULL,
@@ -339,7 +339,10 @@ CREATE TABLE ProfilingExecutions (
     error_message text NULL,
     results_path text NULL,
     created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    
+    -- Adding the constraint that db_manager.py expects for ON CONFLICT
+    CONSTRAINT "unique_profiling_execution" UNIQUE (command_id, hostname)
 );
 
 -- Essential indexes for profiling executions

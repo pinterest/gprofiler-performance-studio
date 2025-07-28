@@ -57,8 +57,10 @@ Content-Type: application/json
   "duration": 60,
   "frequency": 11,
   "profiling_mode": "cpu",
-  "target_hostnames": ["host1", "host2"],
-  "pids": [1234, 5678],
+  "target_hosts": {
+    "host1": [1234, 5678],
+    "host2": null
+  },
   "stop_level": "process",
   "additional_args": {}
 }
