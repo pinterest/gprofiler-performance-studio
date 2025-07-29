@@ -245,8 +245,8 @@ CREATE TABLE MinesweeperFrames (
 
 -- Additional Types for Profiling System
 CREATE TYPE ProfilingMode AS ENUM ('cpu', 'allocation', 'none');
-CREATE TYPE ProfilingRequestStatus AS ENUM ('pending', 'assigned', 'completed', 'failed', 'cancelled');
-CREATE TYPE CommandStatus AS ENUM ('pending', 'sent', 'completed', 'failed');
+CREATE TYPE ProfilingRequestStatus AS ENUM ('pending', 'assigned', 'completed', 'failed', 'cancelled', 'stopped');
+CREATE TYPE CommandStatus AS ENUM ('pending', 'sent', 'completed', 'failed', 'stopped');
 CREATE TYPE HostStatus AS ENUM ('active', 'idle', 'error', 'offline');
 
 -- Host Heartbeat Table (simplified)
@@ -275,6 +275,7 @@ CREATE TABLE ProfilingRequests (
     request_id uuid NOT NULL UNIQUE,
     service_name text NOT NULL,
     request_type text NOT NULL CHECK (request_type IN ('start', 'stop')),
+    continuous boolean NOT NULL DEFAULT false,
     duration integer NULL DEFAULT 60,
     frequency integer NULL DEFAULT 11,
     profiling_mode ProfilingMode NOT NULL DEFAULT 'cpu',

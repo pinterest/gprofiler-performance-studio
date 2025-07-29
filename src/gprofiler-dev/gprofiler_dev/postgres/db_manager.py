@@ -596,6 +596,7 @@ class DBManager(metaclass=Singleton):
         request_id: str,
         request_type: str,
         service_name: str,
+        continuous: Optional[bool] = False,
         duration: Optional[int] = 60,
         frequency: Optional[int] = 11,
         profiling_mode: Optional[str] = "cpu",
@@ -613,10 +614,10 @@ class DBManager(metaclass=Singleton):
         
         query = """
         INSERT INTO ProfilingRequests (
-            request_id, request_type, service_name, duration, frequency, profiling_mode,
+            request_id, request_type, service_name, continuous, duration, frequency, profiling_mode,
             target_hostnames, pids, additional_args
         ) VALUES (
-            %(request_id)s::uuid, %(request_type)s, %(service_name)s, %(duration)s, %(frequency)s,
+            %(request_id)s::uuid, %(request_type)s, %(service_name)s, %(continuous)s, %(duration)s, %(frequency)s,
             %(profiling_mode)s::ProfilingMode, %(target_hostnames)s, %(pids)s, %(additional_args)s
         )
         """
@@ -625,6 +626,7 @@ class DBManager(metaclass=Singleton):
             "request_id": request_id,
             "request_type": request_type,
             "service_name": service_name,
+            "continuous": continuous,
             "duration": duration,
             "frequency": frequency,
             "profiling_mode": profiling_mode,
@@ -661,6 +663,7 @@ class DBManager(metaclass=Singleton):
         SELECT
             pr.request_id,
             pr.service_name,
+            pr.continuous,
             pr.duration,
             pr.frequency,
             pr.profiling_mode,
@@ -972,7 +975,7 @@ class DBManager(metaclass=Singleton):
         
         # Get the request details to build combined_config
         request_query = """
-        SELECT duration, frequency, profiling_mode, pids, additional_args
+        SELECT continuous, duration, frequency, profiling_mode, pids, additional_args
         FROM ProfilingRequests
         WHERE request_id = %(request_id)s::uuid
         """
@@ -988,6 +991,7 @@ class DBManager(metaclass=Singleton):
         # Build base configuration from new request
         new_config = {
             "command_type": command_type,
+            "continuous": request_result["continuous"],
             "duration": request_result["duration"],
             "frequency": request_result["frequency"],
             "profiling_mode": request_result["profiling_mode"],
@@ -1082,6 +1086,9 @@ class DBManager(metaclass=Singleton):
         # Always use the latest command_type
         merged["command_type"] = new_config["command_type"]
         
+        # For continuous, always make it true if either is true
+        merged["continuous"] = existing_config.get("continuous", False) or new_config.get("continuous", False)
+
         # For duration, use the maximum (longer duration wins)
         if new_config.get("duration") and existing_config.get("duration"):
             merged["duration"] = max(new_config["duration"], existing_config["duration"])
@@ -1459,7 +1466,7 @@ class DBManager(metaclass=Singleton):
     def _get_profiling_request_details(self, request_id: str) -> Optional[Dict]:
         """Get details of a specific profiling request"""
         query = """
-        SELECT request_id, duration, frequency, profiling_mode, pids, target_hostnames
+        SELECT request_id, continuous, duration, frequency, profiling_mode, pids, target_hostnames
         FROM ProfilingRequests
         WHERE request_id = %(request_id)s::uuid
         """
@@ -1486,6 +1493,7 @@ class DBManager(metaclass=Singleton):
         # Use the most recent request's basic settings
         latest_request = request_details[-1]
         combined_config = {
+            "continuous": latest_request.get("continuous", False),
             "duration": latest_request.get("duration", 60),
             "frequency": latest_request.get("frequency", 11),
             "profiling_mode": latest_request.get("profiling_mode", "cpu")

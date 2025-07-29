@@ -272,6 +272,7 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
             extra={
                 "request_type": profiling_request.request_type,
                 "service_name": profiling_request.service_name,
+                "continuous": profiling_request.continuous,
                 "duration": profiling_request.duration,
                 "frequency": profiling_request.frequency,
                 "mode": profiling_request.profiling_mode,
@@ -296,6 +297,7 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
                 request_id=request_id,
                 request_type=profiling_request.request_type,
                 service_name=profiling_request.service_name,
+                continuous=profiling_request.continuous,
                 duration=profiling_request.duration,
                 frequency=profiling_request.frequency,
                 profiling_mode=profiling_request.profiling_mode,
