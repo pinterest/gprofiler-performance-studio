@@ -755,6 +755,82 @@ class DBManager(metaclass=Singleton):
         # For now, just return True to avoid breaking existing code
         # In the future, this method should be removed
         return True
+    
+    def auto_update_profiling_request_status_by_request_ids(
+        self,
+        request_ids: List[str],
+    ) -> bool:
+        """
+        Automatically update the status of profiling requests based on the status of their profiling commands.
+        This method checks the status of all commands associated with each request ID,
+        and updates the request status accordingly.
+        The resulting status is determined by the highest "priority" / "criticality" status from the associated commands.
+        """
+        if not request_ids:
+            return True
+        
+        exec_query = """
+        WITH
+            status_priority AS (
+                SELECT
+                    status,
+                    status_value
+                FROM (
+                    VALUES
+                        ('completed', 0),
+                        ('pending', 1),
+                        ('sent', 2),
+                        ('stopped', 3),
+                        ('failed', 4)
+                ) AS t(status, status_value)
+            ),
+            profiling_request_with_command_status AS (
+                SELECT
+                    pr.request_id,
+                    pc.status::text AS command_status
+                FROM
+                    ProfilingRequests pr
+                    LEFT JOIN ProfilingCommands pc ON pr.request_id = ANY(pc.request_ids)
+                WHERE
+                    pr.request_id = ANY(%(request_ids)s::uuid[])
+            ),
+            max_status AS (
+                SELECT
+                    pr.request_id,
+                    MAX(sp.status_value) AS max_status_value
+                FROM
+                    profiling_request_with_command_status pr
+                    JOIN status_priority sp ON pr.command_status = sp.status
+                GROUP BY
+                    pr.request_id
+            ),
+            final_status AS (
+                SELECT
+                    ms.request_id,
+                    sp.status
+                FROM
+                    max_status ms
+                    JOIN status_priority sp ON ms.max_status_value = sp.status_value
+            )
+        UPDATE ProfilingRequests
+        SET status = fs.status::profilingrequeststatus,
+            completed_at = CASE
+                WHEN fs.status IN ('completed', 'failed', 'stopped') THEN CURRENT_TIMESTAMP
+                ELSE pr.completed_at
+            END
+        FROM
+            ProfilingRequests pr
+            JOIN final_status fs ON pr.request_id = fs.request_id
+        WHERE
+            pr.request_id = ANY(%(request_ids)s::uuid[])
+        """
+
+        exec_values = {
+            "request_ids": request_ids
+        }
+
+        self.db.execute(exec_query, exec_values, has_value=False)
+        return True
 
     def update_profiling_execution_status(
         self,
@@ -1024,8 +1100,10 @@ class DBManager(metaclass=Singleton):
             one_value=True, 
             return_dict=True
         )
-        
-        if existing_command:
+       
+        # Only merge the command when there is an existing command and
+        # the command status is 'pending' or 'sent'
+        if existing_command and existing_command.get("status") in ["pending", "sent"]:
             # Merge with existing command
             existing_config = existing_command["combined_config"]
             if isinstance(existing_config, str):
@@ -1039,10 +1117,12 @@ class DBManager(metaclass=Singleton):
             # Merge configurations
             merged_config = self._merge_profiling_configs(existing_config, new_config)
             final_config = merged_config
+            final_request_ids = existing_command["request_ids"] + [new_request_id]
         else:
             # No existing command, use new config as-is
             final_config = new_config
-        
+            final_request_ids = [new_request_id]
+
         # Use INSERT ... ON CONFLICT for atomic upsert
         upsert_query = """
         INSERT INTO ProfilingCommands (
@@ -1050,14 +1130,14 @@ class DBManager(metaclass=Singleton):
             combined_config, status, created_at
         ) VALUES (
             %(command_id)s::uuid, %(hostname)s, %(service_name)s, %(command_type)s,
-            ARRAY[%(new_request_id)s::uuid], %(final_config)s::jsonb,
+            %(final_request_ids)s::uuid[], %(final_config)s::jsonb,
             'pending', CURRENT_TIMESTAMP
         )
         ON CONFLICT (hostname, service_name)
         DO UPDATE SET
             command_id = %(command_id)s::uuid,
             command_type = %(command_type)s,
-            request_ids = array_append(ProfilingCommands.request_ids, %(new_request_id)s::uuid),
+            request_ids = %(final_request_ids)s::uuid[],
             combined_config = %(final_config)s::jsonb,
             status = 'pending',
             created_at = CURRENT_TIMESTAMP
@@ -1068,7 +1148,7 @@ class DBManager(metaclass=Singleton):
             "hostname": hostname,
             "service_name": service_name,
             "command_type": command_type,
-            "new_request_id": new_request_id,
+            "final_request_ids": final_request_ids,
             "final_config": json.dumps(final_config)
         }
         
@@ -1373,16 +1453,21 @@ class DBManager(metaclass=Singleton):
         self.db.execute(query, values, has_value=False)
         return True
 
-    def get_profiling_command_by_id(self, command_id: str) -> Optional[Dict]:
-        """Get profiling command by command ID"""
+    def get_profiling_command_by_hostname(
+        self,
+        hostname: str,
+    ) -> Optional[Dict]:
+        """Get the latest profiling command for a specific hostname"""
         query = """
         SELECT command_id, hostname, service_name, command_type, combined_config,
                request_ids, status, created_at, sent_at, completed_at
         FROM ProfilingCommands
-        WHERE command_id = %(command_id)s::uuid
+        WHERE hostname = %(hostname)s
+        ORDER BY created_at DESC
+        LIMIT 1
         """
 
-        values = {"command_id": command_id}
+        values = {"hostname": hostname}
         result = self.db.execute(query, values, one_value=True, return_dict=True)
         
         # Parse the combined_config JSON if it exists
@@ -1407,23 +1492,26 @@ class DBManager(metaclass=Singleton):
             except Exception:
                 self.db.logger.warning(f"Failed to parse request_ids for command {result.get('command_id')}")
                 result['request_ids'] = []
-        
+
         return result if result else None
 
     def validate_command_completion_eligibility(self, command_id: str, hostname: str) -> tuple[bool, str]:
         """
         Validate if a command can be completed for a specific hostname.
-        Checks both that the command exists and that the execution is in 'assigned' status.
+        The logic joins ProfilingCommands and ProfilingExecutions to guarantee the command id existed at some point.
         Returns (is_valid: bool, error_message: str).
         """
         query = """
         SELECT
-            pc.command_id,
+            COALESCE(pc.command_id, pe.command_id) as command_id,
             pe.status as execution_status
-        FROM ProfilingCommands pc
-        LEFT JOIN ProfilingExecutions pe ON pc.command_id = pe.command_id AND pe.hostname = %(hostname)s
-        WHERE pc.command_id = %(command_id)s::uuid
-          AND pc.hostname = %(hostname)s
+        FROM
+            ProfilingCommands pc
+            FULL OUTER JOIN ProfilingExecutions pe ON pc.command_id = pe.command_id
+            AND pc.hostname =  pe.hostname
+        WHERE
+            COALESCE(pc.command_id, pe.command_id) = %(command_id)s::uuid
+            AND pe.hostname = %(hostname)s
         """
 
         values = {
