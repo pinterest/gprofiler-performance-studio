@@ -93,6 +93,7 @@ class ProfilingRequest(BaseModel):
     """Model for profiling request parameters"""
     service_name: str
     request_type: str  # "start" or "stop"
+    continuous: Optional[bool] = False
     duration: Optional[int] = 60
     frequency: Optional[int] = 11
     profiling_mode: Optional[str] = "cpu"  # "cpu", "allocation", "none"
@@ -189,7 +190,7 @@ class CommandCompletionRequest(BaseModel):
     """Model for reporting command completion"""
     command_id: str
     hostname: str
-    status: str  # "completed" or "failed"
+    status: str
     execution_time: Optional[int] = None
     error_message: Optional[str] = None
     results_path: Optional[str] = None
@@ -197,5 +198,5 @@ class CommandCompletionRequest(BaseModel):
     @validator('status')
     def validate_status(cls, v):
         if v not in ["completed", "failed"]:
-            raise ValueError('status must be "completed" or "failed"')
+            raise ValueError(f"invalid status: {v}. Must be 'completed' or 'failed'.")
         return v

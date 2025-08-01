@@ -272,6 +272,7 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
             extra={
                 "request_type": profiling_request.request_type,
                 "service_name": profiling_request.service_name,
+                "continuous": profiling_request.continuous,
                 "duration": profiling_request.duration,
                 "frequency": profiling_request.frequency,
                 "mode": profiling_request.profiling_mode,
@@ -296,6 +297,7 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
                 request_id=request_id,
                 request_type=profiling_request.request_type,
                 service_name=profiling_request.service_name,
+                continuous=profiling_request.continuous,
                 duration=profiling_request.duration,
                 frequency=profiling_request.frequency,
                 profiling_mode=profiling_request.profiling_mode,
@@ -591,7 +593,10 @@ def report_command_completion(completion: CommandCompletionRequest):
                 "message": error_message
             }
 
-        # Update command status
+        # Update the command status
+        # The command_id reported by the CommandCompletionRequest can be outdated
+        # Meaning that the current command for the hostname might not be the one reported by the command completion (common at profiling restarts due to new profiling requests)
+        # For those cases, this update will not change any row at the commands table
         db_manager.update_profiling_command_status(
             command_id=completion.command_id,
             hostname=completion.hostname,
@@ -601,7 +606,7 @@ def report_command_completion(completion: CommandCompletionRequest):
             results_path=completion.results_path
         )
         
-        # Update the specific execution record for this command
+        # Update the specific profiling execution record for the command_id reported by the CommandCompletionRequest
         completed_at = datetime.now() if completion.status in ["completed", "failed"] else None
         db_manager.update_profiling_execution_status(
             command_id=completion.command_id,
@@ -613,55 +618,20 @@ def report_command_completion(completion: CommandCompletionRequest):
             results_path=completion.results_path
         )
         
-        # Update related profiling requests status (only if ALL executions for the request are complete)
-        try:
-            # Get the command to find related request IDs
-            command_info = db_manager.get_profiling_command_by_id(completion.command_id)
-            if command_info and command_info.get("request_ids"):
-                request_ids = command_info["request_ids"]
-                # Handle both string and list formats from database
-                if isinstance(request_ids, str):
-                    try:
-                        request_ids = json.loads(request_ids) if request_ids.startswith('[') else [request_ids]
-                    except json.JSONDecodeError:
-                        logger.warning(f"Failed to parse request_ids for command {completion.command_id}")
-                        request_ids = []
-                
-                for request_id in request_ids:
-                    try:
-                        # Check if ALL executions for this request are complete before updating request status
-                        # For now, we'll update request status based on individual command completion
-                        # A more sophisticated approach would check all executions for the request
-                        request_status = "completed" if completion.status == "completed" else "failed"
-                        completed_at = datetime.now() if completion.status in ["completed", "failed"] else None
-                        
-                        # Only update the request status, don't update execution records again
-                        query = """
-                        UPDATE ProfilingRequests
-                        SET status = %(status)s::ProfilingRequestStatus,
-                            completed_at = %(completed_at)s
-                        WHERE request_id = %(request_id)s::uuid
-                        """
-                        
-                        values = {
-                            "request_id": request_id,
-                            "status": request_status,
-                            "completed_at": completed_at
-                        }
-                        
-                        db_manager.db.execute(query, values, has_value=False)
-                        
-                    except Exception as e:
-                        logger.warning(f"Failed to update status for request {request_id}: {e}")
-        except Exception as e:
-            logger.warning(f"Failed to update related profiling requests for command {completion.command_id}: {e}")
-            # Don't fail the entire operation if request status update fails
-        
+        # Get current profiling command to to verify if the command_id corresponds the one reported by the CommandCompletionRequest
+        current_command = db_manager.get_profiling_command_by_hostname(completion.hostname)
+        outdated_command = current_command is None or current_command["command_id"] != completion.command_id
+        # If the command is outdated, we don't need to update the request status of each request related to the command
+        # The request status will be updated when the most recent command_id is completed
+        if not outdated_command:
+            # Update related profiling requests status
+            db_manager.auto_update_profiling_request_status_by_request_ids(current_command["request_ids"])
+
         return {
             "success": True,
             "message": f"Command completion recorded for {completion.command_id}"
         }
-        
+
     except Exception as e:
         logger.error(f"Failed to process command completion: {str(e)}", exc_info=True)
         raise HTTPException(
