@@ -81,12 +81,12 @@ Also, make sure to correctly configure the port on your host machine that you wa
 #...
 ```
 
-### 1.4 Port forwarding via SSH for remote dev environment
-This step should only be completed in case your dev environment is running on a remote machine, but your dev tools (i.e postman, db client, browser) are running on you local machine.
+### 1.4 [Optional] Port forwarding via SSH for remote dev environment
+**This step should only be completed in case your dev environment is running on a remote machine, but your dev tools (i.e postman, db client, browser) are running on you local machine.**
 
 Also, this technique is particularly useful for cases where you don't want to (or can't) open ports on your remote machine for debugging.
 
-#### 1.4.1 Configure SSH client to forward specific ports for specific host
+#### 1.4.1 [Optional] Configure SSH client to forward specific ports for specific host
 1- Open the configuration file for your SSH client:
 ```sh
 vim ~/.ssh/config
@@ -129,18 +129,15 @@ Check that all services are running:
 docker-compose ps
 ```
 
-You should see something like this
-```shell
-NAME                               IMAGE                               COMMAND                  SERVICE               CREATED         STATUS         PORTS
-gprofiler-ps-agents-logs-backend   deploy-agents-logs-backend          "./run.sh"               agents-logs-backend   4 minutes ago   Up 4 minutes   80/tcp
-gprofiler-ps-ch-indexer            deploy-ch-indexer                   "/indexer"               ch-indexer            4 minutes ago   Up 4 minutes
-gprofiler-ps-ch-rest-service       deploy-ch-rest-service              "/usr/local/bin/app"     ch-rest-service       4 minutes ago   Up 4 minutes
-gprofiler-ps-clickhouse            clickhouse/clickhouse-server:22.8   "/entrypoint.sh"         db_clickhouse         4 minutes ago   Up 4 minutes   8123/tcp, 9000/tcp, 9009/tcp
-gprofiler-ps-nginx-load-balancer   nginx:1.23.3                        "/docker-entrypoint.…"   nginx-load-balancer   4 minutes ago   Up 4 minutes   0.0.0.0:8080->80/tcp, 0.0.0.0:4433->443/tcp
-gprofiler-ps-periodic-tasks        deploy-periodic-tasks               "/bin/sh -c '/logrot…"   periodic-tasks        4 minutes ago   Up 4 minutes
-gprofiler-ps-postgres              postgres:15.1                       "docker-entrypoint.s…"   db_postgres           4 minutes ago   Up 4 minutes   5432/tcp
-gprofiler-ps-webapp                deploy-webapp                       "./run.sh"               webapp                4 minutes ago   Up 4 minutes   80/tcp
-```
+You should see the following containers with the prefix 'gprofiler-ps*':
+* gprofiler-ps-agents-logs-backend
+* gprofiler-ps-ch-indexer
+* gprofiler-ps-ch-rest-service
+* gprofiler-ps-clickhouse
+* gprofiler-ps-nginx-load-balancer
+* gprofiler-ps-periodic-tasks
+* gprofiler-ps-postgres
+* gprofiler-ps-webapp
 
 Now You can access the UI by navigating to https://localhost:4433 in your browser
 (4433 is the default port, configurable in the docker-compose.yml file).
