@@ -197,6 +197,6 @@ class CommandCompletionRequest(BaseModel):
 
     @validator('status')
     def validate_status(cls, v):
-        if v not in ["completed", "failed", "stopped"]:
-            raise ValueError(f"invalid status: {v}. Must be 'completed', 'failed', or 'stopped'.")
+        if v not in ["completed", "failed"]:
+            raise ValueError(f"invalid status: {v}. Must be 'completed' or 'failed'.")
         return v

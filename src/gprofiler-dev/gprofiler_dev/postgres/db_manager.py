@@ -780,8 +780,7 @@ class DBManager(metaclass=Singleton):
                         ('completed', 0),
                         ('pending', 1),
                         ('sent', 2),
-                        ('stopped', 3),
-                        ('failed', 4)
+                        ('failed', 3)
                 ) AS t(status, status_value)
             ),
             profiling_request_with_command_status AS (
@@ -815,7 +814,7 @@ class DBManager(metaclass=Singleton):
         UPDATE ProfilingRequests
         SET status = fs.status::profilingrequeststatus,
             completed_at = CASE
-                WHEN fs.status IN ('completed', 'failed', 'stopped') THEN CURRENT_TIMESTAMP
+                WHEN fs.status IN ('completed', 'failed') THEN CURRENT_TIMESTAMP
                 ELSE pr.completed_at
             END
         FROM

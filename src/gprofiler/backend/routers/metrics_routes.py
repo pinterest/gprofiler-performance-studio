@@ -607,7 +607,7 @@ def report_command_completion(completion: CommandCompletionRequest):
         )
         
         # Update the specific profiling execution record for the command_id reported by the CommandCompletionRequest
-        completed_at = datetime.now() if completion.status in ["completed", "failed", "stopped"] else None
+        completed_at = datetime.now() if completion.status in ["completed", "failed"] else None
         db_manager.update_profiling_execution_status(
             command_id=completion.command_id,
             hostname=completion.hostname,
