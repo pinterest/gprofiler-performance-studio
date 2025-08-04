@@ -275,6 +275,7 @@ CREATE TABLE ProfilingRequests (
     request_id uuid NOT NULL UNIQUE,
     service_name text NOT NULL,
     request_type text NOT NULL CHECK (request_type IN ('start', 'stop')),
+    continuous boolean NOT NULL DEFAULT false,
     duration integer NULL DEFAULT 60,
     frequency integer NULL DEFAULT 11,
     profiling_mode ProfilingMode NOT NULL DEFAULT 'cpu',
