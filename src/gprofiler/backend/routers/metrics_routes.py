@@ -40,6 +40,7 @@ from backend.models.metrics_models import (
     CommandCompletionRequest,
     SampleCount,
     HTMLMetadata,
+    ProfilingHostStatus,
 )
 from backend.utils.filters_utils import get_rql_first_eq_key, get_rql_only_for_one_key
 from backend.utils.request_utils import flamegraph_base_request_params, get_metrics_response, get_query_response
@@ -638,3 +639,30 @@ def report_command_completion(completion: CommandCompletionRequest):
             status_code=500,
             detail="Internal server error while processing command completion"
         )
+
+
+@router.get("/profiling/host_status", response_model=List[ProfilingHostStatus])
+def get_profiling_host_status():
+    db = DBManager()
+    hosts = db.get_all_host_heartbeats()
+    results = []
+    for host in hosts:
+        hostname = host.get("hostname")
+        service_name = host.get("service_name")
+        ip_address = host.get("ip_address")
+        pids = "All"  # Placeholder, update if you have per-host PID info
+        # Get current profiling command for this host/service
+        command = db.get_current_profiling_command(hostname, service_name)
+        if command and command.get("status") == "running":
+            profiling_status = "Running"
+        else:
+            profiling_status = "Stopped"
+        results.append(ProfilingHostStatus(
+            id=host.get("id", 0),
+            service_name=service_name,
+            hostname=hostname,
+            ip_address=ip_address,
+            pids=pids,
+            profiling_status=profiling_status
+        ))
+    return results

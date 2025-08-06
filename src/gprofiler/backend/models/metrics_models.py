@@ -200,3 +200,12 @@ class CommandCompletionRequest(BaseModel):
         if v not in ["completed", "failed"]:
             raise ValueError(f"invalid status: {v}. Must be 'completed' or 'failed'.")
         return v
+
+
+class ProfilingHostStatus(BaseModel):
+    id: int
+    service_name: str
+    hostname: str
+    ip_address: str
+    pids: str
+    profiling_status: str
