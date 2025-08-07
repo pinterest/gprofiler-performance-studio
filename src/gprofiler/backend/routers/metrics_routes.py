@@ -643,8 +643,8 @@ def report_command_completion(completion: CommandCompletionRequest):
 
 @router.get("/profiling/host_status", response_model=List[ProfilingHostStatus])
 def get_profiling_host_status():
-    db = DBManager()
-    hosts = db.get_all_host_heartbeats()
+    db_manager = DBManager()
+    hosts = db_manager.get_all_host_heartbeats()
     results = []
     for host in hosts:
         hostname = host.get("hostname")
@@ -652,9 +652,19 @@ def get_profiling_host_status():
         ip_address = host.get("ip_address")
         pids = "All"  # Placeholder, update if you have per-host PID info
         # Get current profiling command for this host/service
-        command = db.get_current_profiling_command(hostname, service_name)
-        if command and command.get("status") == "running":
-            profiling_status = "Running"
+        command = db_manager.get_current_profiling_command(hostname, service_name)
+        if command:
+            status = command.get("status")
+            if status == "pending":
+                profiling_status = "Pending"
+            elif status == "sent":
+                profiling_status = "Running"
+            elif status == "completed":
+                profiling_status = "Completed"
+            elif status == "failed":
+                profiling_status = "Failed"
+            else:
+                profiling_status = "Unknown"
         else:
             profiling_status = "Stopped"
         results.append(ProfilingHostStatus(

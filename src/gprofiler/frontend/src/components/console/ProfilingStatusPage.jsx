@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import MuiTable from '../../common/dataDisplay/table/MuiTable';
-import { Button, Box, Typography } from '@mui/material';
+import MuiTable from '../common/dataDisplay/table/MuiTable';
+import { Button, Box, Typography, duration } from '@mui/material';
 import TextField from '@mui/material/TextField';
 
 const columns = [
-  { field: 'id', headerName: '', width: 50, renderCell: (params) => null }, // Checkbox handled by MuiTable selection
   { field: 'service', headerName: 'service name', flex: 1 },
   { field: 'host', headerName: 'host name', flex: 1 },
   { field: 'pids', headerName: 'pids (if profiled)', flex: 1 },
@@ -19,7 +18,7 @@ const ProfilingStatusPage = () => {
   const [filter, setFilter] = useState('');
 
   // Placeholder: Fetch profiling status from backend
-  useEffect(() => {
+  const fetchProfilingStatus = () => {
     setLoading(true);
     fetch('/api/metrics/profiling/host_status')
       .then(res => res.json())
@@ -37,20 +36,55 @@ const ProfilingStatusPage = () => {
         setLoading(false);
       })
       .catch(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    fetchProfilingStatus();
   }, []);
 
   // Bulk Start/Stop handlers
   function handleBulkAction(action) {
     const selectedRows = rows.filter(row => selectionModel.includes(row.id));
-    // TODO: Replace with real API call
-    selectedRows.forEach(row => {
+    
+    // Group selected rows by service name
+    const serviceGroups = selectedRows.reduce((groups, row) => {
+      if (!groups[row.service]) {
+        groups[row.service] = [];
+      }
+      groups[row.service].push(row.host);
+      return groups;
+    }, {});
+
+    // Create one request per service with all hosts for that service
+    Object.entries(serviceGroups).forEach(([serviceName, hosts]) => {
+      const target_host = hosts.reduce((hostObj, host) => {
+        hostObj[host] = null;
+        return hostObj;
+      }, {});
+
+      const submitData = {
+        service_name: serviceName,
+        request_type: action,
+        duration: 60, // Default duration, can't be adjusted yet
+        frequency: 11, // Default frequency, can't be adjusted yet
+        profiling_mode: 'cpu', // Default profiling mode, can't be adjusted yet
+        target_hosts:target_host,
+      };
+
+      // append 'stop_level: host' when action is 'stop'
+      if (action === 'stop') {
+        submitData.stop_level = 'host';
+      }
+      
       fetch('/api/metrics/profile_request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, host: row.host, service: row.service }),
+        body: JSON.stringify(submitData),
       });
     });
-    setRows(prev => prev.map(r => selectionModel.includes(r.id) ? { ...r, status: action === 'start' ? 'Running' : 'Stopped' } : r));
+    
+    // Refresh the table data from the API
+    fetchProfilingStatus();
   }
 
   const filteredRows = filter
@@ -85,9 +119,18 @@ const ProfilingStatusPage = () => {
           color="error"
           size="small"
           onClick={() => handleBulkAction('stop')}
-          disabled={selectionModel.length === 0 || filteredRows.filter(r => selectionModel.includes(r.id) && r.status !== 'Running').length === selectionModel.length}
+          disabled={selectionModel.length === 0 || filteredRows.filter(r => selectionModel.includes(r.id) && (r.status === 'Pending' || r.status === 'Running')).length === 0}
         >
           Stop
+        </Button>
+        <Button
+          variant="outlined"
+          color="primary"
+          size="small"
+          onClick={fetchProfilingStatus}
+          disabled={loading}
+        >
+          Refresh
         </Button>
       </Box>
       <MuiTable
