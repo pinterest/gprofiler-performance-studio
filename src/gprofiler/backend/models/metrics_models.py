@@ -208,4 +208,5 @@ class ProfilingHostStatus(BaseModel):
     hostname: str
     ip_address: str
     pids: str
+    command_type: str
     profiling_status: str

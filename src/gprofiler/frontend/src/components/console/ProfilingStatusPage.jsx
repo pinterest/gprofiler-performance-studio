@@ -2,12 +2,14 @@ import React, { useState, useEffect } from 'react';
 import MuiTable from '../common/dataDisplay/table/MuiTable';
 import { Button, Box, Typography, duration } from '@mui/material';
 import TextField from '@mui/material/TextField';
+import PageHeader from '../common/layout/PageHeader';
 
 const columns = [
   { field: 'service', headerName: 'service name', flex: 1 },
   { field: 'host', headerName: 'host name', flex: 1 },
   { field: 'pids', headerName: 'pids (if profiled)', flex: 1 },
   { field: 'ip', headerName: 'IP', flex: 1 },
+  { field: 'commandType', headerName: 'command type', flex: 1 },
   { field: 'status', headerName: 'profiling status', flex: 1 },
 ];
 
@@ -30,6 +32,7 @@ const ProfilingStatusPage = () => {
             host: row.hostname,
             pids: row.pids,
             ip: row.ip_address,
+            commandType: row.command_type || 'N/A',
             status: row.profiling_status,
           }))
         );
@@ -65,9 +68,9 @@ const ProfilingStatusPage = () => {
       const submitData = {
         service_name: serviceName,
         request_type: action,
-        duration: 60, // Default duration, can't be adjusted yet
-        frequency: 11, // Default frequency, can't be adjusted yet
-        profiling_mode: 'cpu', // Default profiling mode, can't be adjusted yet
+        duration: 60,           // Default duration, can't be adjusted yet
+        frequency: 11,          // Default frequency, can't be adjusted yet
+        profiling_mode: 'cpu',  // Default profiling mode, can't be adjusted yet
         target_hosts: target_host,
       };
 
@@ -86,6 +89,7 @@ const ProfilingStatusPage = () => {
     // Wait for all requests to finish before refreshing
     Promise.all(requests).then(() => {
       fetchProfilingStatus();
+      setSelectionModel([]); // Clear all checkboxes after API requests complete
     });
   }
 
@@ -94,10 +98,11 @@ const ProfilingStatusPage = () => {
     : rows;
 
   return (
+    <>
+    <PageHeader
+      title='Dynamic Profiling'
+    />
     <Box sx={{ p: 3 }}>
-      <Typography variant="h5" gutterBottom>
-        Dynamic Profiling
-      </Typography>
       <Box sx={{ mb: 2, display: 'flex', gap: 2, alignItems: 'center' }}>
         <TextField
           label="Filter by service name"
@@ -112,7 +117,7 @@ const ProfilingStatusPage = () => {
           color="success"
           size="small"
           onClick={() => handleBulkAction('start')}
-          disabled={selectionModel.length === 0 || filteredRows.filter(r => selectionModel.includes(r.id) && r.status === 'Running').length === selectionModel.length}
+          disabled={selectionModel.length === 0 || filteredRows.filter(r => selectionModel.includes(r.id) && (r.commandType == 'N/A' || (r.commandType === 'stop' && (r.status === 'Running' || r.status === 'Completed')))).length === 0}
         >
           Start
         </Button>
@@ -121,7 +126,7 @@ const ProfilingStatusPage = () => {
           color="error"
           size="small"
           onClick={() => handleBulkAction('stop')}
-          disabled={selectionModel.length === 0 || filteredRows.filter(r => selectionModel.includes(r.id) && (r.status === 'Pending' || r.status === 'Running')).length === 0}
+          disabled={selectionModel.length === 0 || filteredRows.filter(r => selectionModel.includes(r.id) && r.commandType === 'start' && (r.status === 'Running' || r.status === 'Completed')).length === 0}
         >
           Stop
         </Button>
@@ -147,6 +152,7 @@ const ProfilingStatusPage = () => {
         selectionModel={selectionModel}
       />
     </Box>
+    </>
   );
 };
 
