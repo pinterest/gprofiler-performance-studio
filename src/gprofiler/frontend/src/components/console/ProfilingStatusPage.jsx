@@ -56,7 +56,7 @@ const ProfilingStatusPage = () => {
     }, {});
 
     // Create one request per service with all hosts for that service
-    Object.entries(serviceGroups).forEach(([serviceName, hosts]) => {
+    const requests = Object.entries(serviceGroups).map(([serviceName, hosts]) => {
       const target_host = hosts.reduce((hostObj, host) => {
         hostObj[host] = null;
         return hostObj;
@@ -68,23 +68,25 @@ const ProfilingStatusPage = () => {
         duration: 60, // Default duration, can't be adjusted yet
         frequency: 11, // Default frequency, can't be adjusted yet
         profiling_mode: 'cpu', // Default profiling mode, can't be adjusted yet
-        target_hosts:target_host,
+        target_hosts: target_host,
       };
 
       // append 'stop_level: host' when action is 'stop'
       if (action === 'stop') {
         submitData.stop_level = 'host';
       }
-      
-      fetch('/api/metrics/profile_request', {
+
+      return fetch('/api/metrics/profile_request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(submitData),
       });
     });
-    
-    // Refresh the table data from the API
-    fetchProfilingStatus();
+
+    // Wait for all requests to finish before refreshing
+    Promise.all(requests).then(() => {
+      fetchProfilingStatus();
+    });
   }
 
   const filteredRows = filter
@@ -137,7 +139,7 @@ const ProfilingStatusPage = () => {
         columns={columns}
         data={filteredRows}
         isLoading={loading}
-        pageSize={5}
+        pageSize={50}
         rowHeight={50}
         autoPageSize
         checkboxSelection
