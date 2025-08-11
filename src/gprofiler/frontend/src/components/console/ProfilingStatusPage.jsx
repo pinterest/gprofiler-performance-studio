@@ -117,7 +117,7 @@ const ProfilingStatusPage = () => {
           color="success"
           size="small"
           onClick={() => handleBulkAction('start')}
-          disabled={selectionModel.length === 0 || filteredRows.filter(r => selectionModel.includes(r.id) && (r.commandType == 'N/A' || (r.commandType === 'stop' && (r.status === 'Running' || r.status === 'Completed')))).length === 0}
+          disabled={selectionModel.length === 0 || filteredRows.filter (r => selectionModel.includes(r.id) && (r.commandType == 'N/A' || (r.commandType === 'stop' && r.status === 'completed'))).length === 0}
         >
           Start
         </Button>
@@ -126,7 +126,7 @@ const ProfilingStatusPage = () => {
           color="error"
           size="small"
           onClick={() => handleBulkAction('stop')}
-          disabled={selectionModel.length === 0 || filteredRows.filter(r => selectionModel.includes(r.id) && r.commandType === 'start' && (r.status === 'Running' || r.status === 'Completed')).length === 0}
+          disabled={selectionModel.length === 0 || filteredRows.filter(r => selectionModel.includes(r.id) && r.commandType === 'start' && r.status === 'completed').length === 0}
         >
           Stop
         </Button>

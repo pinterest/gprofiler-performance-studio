@@ -654,20 +654,10 @@ def get_profiling_host_status():
         # Get current profiling command for this host/service
         command = db_manager.get_current_profiling_command(hostname, service_name)
         if command:
-            status = command.get("status")
+            profiling_status = command.get("status")
             command_type = command.get("command_type", "N/A")
-            if status == "pending":
-                profiling_status = "Pending"
-            elif status == "sent":
-                profiling_status = "Running"
-            elif status == "completed":
-                profiling_status = "Completed"
-            elif status == "failed":
-                profiling_status = "Failed"
-            else:
-                profiling_status = "Unknown"
         else:
-            profiling_status = "Stopped"
+            profiling_status = "stopped"
             command_type = "N/A"
         results.append(ProfilingHostStatus(
             id=host.get("id", 0),
