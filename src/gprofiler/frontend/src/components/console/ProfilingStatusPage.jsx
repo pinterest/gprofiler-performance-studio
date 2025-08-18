@@ -68,6 +68,7 @@ const ProfilingStatusPage = () => {
       const submitData = {
         service_name: serviceName,
         request_type: action,
+        continuous: true,
         duration: 60,           // Default duration, can't be adjusted yet
         frequency: 11,          // Default frequency, can't be adjusted yet
         profiling_mode: 'cpu',  // Default profiling mode, can't be adjusted yet
