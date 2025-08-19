@@ -873,20 +873,38 @@ class DBManager(metaclass=Singleton):
         service_name: str,
         last_command_id: Optional[str] = None,
         status: str = "active",
-        heartbeat_timestamp: Optional[datetime] = None
+        heartbeat_timestamp: Optional[datetime] = None,
+        available_pids: Optional[List[int]] = None,
+        merge_pids: bool = False
     ) -> None:
         """Update or insert host heartbeat information using pure SQL"""
         if heartbeat_timestamp is None:
             heartbeat_timestamp = datetime.now()
+        
+        # Handle available_pids logic
+        pids_to_store = available_pids or []
+        
+        if merge_pids and available_pids:
+            # Get existing PIDs and merge with new ones
+            existing_heartbeat = self.get_host_heartbeat(hostname)
+            if existing_heartbeat and existing_heartbeat.get('available_pids'):
+                existing_pids = existing_heartbeat['available_pids']
+                if isinstance(existing_pids, list):
+                    # Merge and deduplicate PIDs
+                    pids_to_store = list(set(existing_pids + available_pids))
+                    pids_to_store.sort()  # Keep consistent ordering
+                else:
+                    # If existing PIDs are malformed, just use new PIDs
+                    pids_to_store = available_pids
             
         query = """
         INSERT INTO HostHeartbeats (
-            hostname, ip_address, service_name, last_command_id, 
-            status, heartbeat_timestamp, created_at, updated_at
+            hostname, ip_address, service_name, last_command_id,
+            status, heartbeat_timestamp, available_pids, created_at, updated_at
         ) VALUES (
             %(hostname)s, %(ip_address)s::inet, %(service_name)s,
             %(last_command_id)s::uuid, %(status)s::HostStatus,
-            %(heartbeat_timestamp)s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            %(heartbeat_timestamp)s, %(available_pids)s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         )
         ON CONFLICT (hostname, service_name)
         DO UPDATE SET
@@ -894,6 +912,7 @@ class DBManager(metaclass=Singleton):
             last_command_id = EXCLUDED.last_command_id,
             status = EXCLUDED.status,
             heartbeat_timestamp = EXCLUDED.heartbeat_timestamp,
+            available_pids = EXCLUDED.available_pids,
             updated_at = CURRENT_TIMESTAMP
         """
 
@@ -903,7 +922,8 @@ class DBManager(metaclass=Singleton):
             "service_name": service_name,
             "last_command_id": last_command_id,
             "status": status,
-            "heartbeat_timestamp": heartbeat_timestamp
+            "heartbeat_timestamp": heartbeat_timestamp,
+            "available_pids": pids_to_store
         }
 
         self.db.execute(query, values, has_value=False)
@@ -914,13 +934,19 @@ class DBManager(metaclass=Singleton):
         query = """
         SELECT
             hostname, ip_address, service_name, last_command_id,
-            status, heartbeat_timestamp, created_at, updated_at
+            status, heartbeat_timestamp, created_at, updated_at, available_pids
         FROM HostHeartbeats
         WHERE hostname = %(hostname)s
         """
 
         values = {"hostname": hostname}
         result = self.db.execute(query, values, one_value=True, return_dict=True)
+        
+        # Ensure available_pids is a list (PostgreSQL returns array as list)
+        if result:
+            if result.get('available_pids') is None:
+                result['available_pids'] = []
+            
         return result if result else None
 
     def get_active_hosts(self, service_name: Optional[str] = None) -> List[Dict]:
@@ -948,7 +974,7 @@ class DBManager(metaclass=Singleton):
         query = """
         SELECT
             ID, hostname, ip_address, service_name, last_command_id,
-            status, heartbeat_timestamp, created_at, updated_at
+            status, heartbeat_timestamp, created_at, updated_at, available_pids
         FROM HostHeartbeats
         ORDER BY heartbeat_timestamp DESC
         """
@@ -961,7 +987,14 @@ class DBManager(metaclass=Singleton):
             query += " OFFSET %(offset)s"
             values["offset"] = offset
         
-        return self.db.execute(query, values, one_value=False, return_dict=True, fetch_all=True)
+        results = self.db.execute(query, values, one_value=False, return_dict=True, fetch_all=True)
+        
+        # Ensure available_pids is a list for each result (PostgreSQL returns array as list)
+        for result in results:
+            if result.get('available_pids') is None:
+                result['available_pids'] = []
+                
+        return results
     
     def get_host_heartbeats_by_service(self, service_name: str, limit: Optional[int] = None) -> List[Dict]:
         """Get all host heartbeat records for a specific service"""

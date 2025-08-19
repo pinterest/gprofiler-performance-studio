@@ -427,7 +427,10 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
 
 
 @router.post("/heartbeat", response_model=HeartbeatResponse)
-def receive_heartbeat(heartbeat: HeartbeatRequest):
+def receive_heartbeat(
+    heartbeat: HeartbeatRequest,
+    merge_pids: bool = Query(False, alias="mergePids")
+):
     """
     Receive heartbeat from host and check for pending profiling requests.
     
@@ -451,7 +454,9 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                 "service_name": heartbeat.service_name,
                 "last_command_id": heartbeat.last_command_id,
                 "status": heartbeat.status,
-                "timestamp": heartbeat.timestamp
+                "timestamp": heartbeat.timestamp,
+                "available_pids": heartbeat.available_pids,
+                "merge_pids": merge_pids
             }
         )
         
@@ -465,7 +470,9 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                 service_name=heartbeat.service_name,
                 last_command_id=heartbeat.last_command_id,
                 status=heartbeat.status,
-                heartbeat_timestamp=heartbeat.timestamp
+                heartbeat_timestamp=heartbeat.timestamp,
+                available_pids=heartbeat.available_pids,
+                merge_pids=merge_pids
             )
             
             # 2. Check for pending profiling commands for this host/service
@@ -650,7 +657,8 @@ def get_profiling_host_status():
         hostname = host.get("hostname")
         service_name = host.get("service_name")
         ip_address = host.get("ip_address")
-        pids = "All"  # Placeholder, update if you have per-host PID info
+        available_pids = host.get("available_pids", [])
+        
         # Get current profiling command for this host/service
         command = db_manager.get_current_profiling_command(hostname, service_name)
         if command:
@@ -659,13 +667,22 @@ def get_profiling_host_status():
         else:
             profiling_status = "stopped"
             command_type = "N/A"
+        
+        # Create one entry per service/host with all PIDs displayed
+        if available_pids:
+            pids_display = ", ".join(str(pid) for pid in available_pids)
+        else:
+            pids_display = "N/A"
+            
         results.append(ProfilingHostStatus(
             id=host.get("id", 0),
             service_name=service_name,
             hostname=hostname,
             ip_address=ip_address,
-            pids=pids,
+            pids=pids_display,
             command_type=command_type,
-            profiling_status=profiling_status
+            profiling_status=profiling_status,
+            available_pids=available_pids
         ))
+
     return results
