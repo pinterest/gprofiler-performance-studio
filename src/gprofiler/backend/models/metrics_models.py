@@ -176,7 +176,7 @@ class HeartbeatRequest(BaseModel):
     last_command_id: Optional[str] = None
     status: Optional[str] = "active"  # active, idle, error
     timestamp: Optional[datetime] = None
-    available_pids: Optional[List[int]] = None
+    available_pids: Optional[Dict[str, List[int]]] = None
 
 
 class HeartbeatResponse(BaseModel):
@@ -211,4 +211,4 @@ class ProfilingHostStatus(BaseModel):
     pids: str
     command_type: str
     profiling_status: str
-    available_pids: Optional[List[int]] = None
+    available_pids: Optional[Dict[str, List[int]]] = None

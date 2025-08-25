@@ -31,10 +31,11 @@ const ProfilingStatusPage = () => {
     
     // Auto-select all PIDs when opening modal if none are selected
     if (!selectedPids[row.id] || selectedPids[row.id].length === 0) {
-      if (row.available_pids && row.available_pids.length > 0) {
+      const allPids = Array.isArray(row.available_pids) ? row.available_pids : Object.values(row.available_pids || {}).flat();
+      if (allPids && allPids.length > 0) {
         setSelectedPids(prev => ({
           ...prev,
-          [row.id]: [...row.available_pids]
+          [row.id]: [...allPids]
         }));
       }
     }
@@ -48,7 +49,6 @@ const ProfilingStatusPage = () => {
   const columns = [
     { field: 'service', headerName: 'service name', flex: 1 },
     { field: 'host', headerName: 'host name', flex: 1 },
-    { field: 'pids', headerName: 'available pids', flex: 1 },
     { field: 'ip', headerName: 'IP', flex: 1 },
     { field: 'commandType', headerName: 'command type', flex: 1 },
     { field: 'status', headerName: 'profiling status', flex: 1 },
@@ -58,7 +58,9 @@ const ProfilingStatusPage = () => {
       flex: 1.2,
       renderCell: (params) => {
         const rowSelectedPids = selectedPids[params.row.id] || [];
-        const allAvailablePids = params.row.available_pids || [];
+        const allAvailablePids = Array.isArray(params.row.available_pids)
+          ? params.row.available_pids
+          : Object.values(params.row.available_pids || {}).flat();
         
         if (rowSelectedPids.length === 0) {
           return <Typography variant="body2" color="text.secondary">None</Typography>;
@@ -93,7 +95,7 @@ const ProfilingStatusPage = () => {
           size="small"
           variant="outlined"
           onClick={() => openPidModal(params.row)}
-          disabled={!params.row.available_pids || params.row.available_pids.length === 0}
+          disabled={!params.row.available_pids || (Array.isArray(params.row.available_pids) ? params.row.available_pids.length === 0 : Object.values(params.row.available_pids).flat().length === 0)}
         >
           Select
         </Button>
@@ -117,9 +119,10 @@ const ProfilingStatusPage = () => {
   const handleSelectAllPids = (rowId, checked) => {
     const row = rows.find(r => r.id === rowId);
     if (row && row.available_pids) {
+      const allPids = Array.isArray(row.available_pids) ? row.available_pids : Object.values(row.available_pids).flat();
       setSelectedPids(prev => ({
         ...prev,
-        [rowId]: checked ? [...row.available_pids] : []
+        [rowId]: checked ? [...allPids] : []
       }));
     }
   };
@@ -134,22 +137,18 @@ const ProfilingStatusPage = () => {
           id: row.id,
           service: row.service_name,
           host: row.hostname,
-          pids: row.pids,
           ip: row.ip_address,
           commandType: row.command_type || 'N/A',
           status: row.profiling_status,
-          available_pids: row.available_pids || []
+          available_pids: row.available_pids || {}
         }));
         setRows(mappedRows);
         
         // Initialize selectedPids with all available PIDs for each row
         const initialSelections = {};
         for (const r of mappedRows) {
-          if (r.available_pids && r.available_pids.length > 0) {
-            initialSelections[r.id] = [...r.available_pids];
-          } else {
-            initialSelections[r.id] = [];
-          }
+          const allPids = Array.isArray(r.available_pids) ? r.available_pids : Object.values(r.available_pids || {}).flat();
+          initialSelections[r.id] = allPids && allPids.length > 0 ? [...allPids] : [];
         }
         setSelectedPids(initialSelections);
 
@@ -174,7 +173,7 @@ const ProfilingStatusPage = () => {
       
       // Determine if this is host-level or process-level profiling
       const rowSelectedPids = selectedPids[row.id] || [];
-      const allAvailablePids = row.available_pids || [];
+      const allAvailablePids = Array.isArray(row.available_pids) ? row.available_pids : Object.values(row.available_pids || {}).flat();
       
       if (rowSelectedPids.length === 0) {
         // No PIDs selected - host level profiling
@@ -233,7 +232,8 @@ const ProfilingStatusPage = () => {
     if (!currentModalRow) return null;
 
     const rowSelectedPids = selectedPids[currentModalRow.id] || [];
-    const allSelected = rowSelectedPids.length === currentModalRow.available_pids.length;
+    const allAvailablePids = Array.isArray(currentModalRow.available_pids) ? currentModalRow.available_pids : Object.values(currentModalRow.available_pids || {}).flat();
+    const allSelected = rowSelectedPids.length === allAvailablePids.length;
     const someSelected = rowSelectedPids.length > 0;
 
     return (
@@ -260,25 +260,34 @@ const ProfilingStatusPage = () => {
             />
           </Box>
           
-          <Grid container spacing={2}>
-            {currentModalRow.available_pids.map(pid => (
-              <Grid item key={pid} xs={6} sm={4} md={3}>
-                <FormControlLabel
-                  control={
-                    <Checkbox
-                      checked={rowSelectedPids.includes(pid)}
-                      onChange={(e) => handlePidSelection(currentModalRow.id, pid, e.target.checked)}
-                    />
-                  }
-                  label={`PID ${pid}`}
-                />
-              </Grid>
-            ))}
-          </Grid>
+          {
+            // Group by language keys if object, else single group "unknown"
+            Object.entries(Array.isArray(currentModalRow.available_pids) ? { unknown: currentModalRow.available_pids } : currentModalRow.available_pids || {})
+              .map(([lang, pidList]) => (
+                <Box key={lang} sx={{ mb: 2 }}>
+                  <Typography variant="subtitle2" sx={{ mb: 1 }}>{lang}</Typography>
+                  <Grid container spacing={2}>
+                    {pidList.map(pid => (
+                      <Grid item key={`${lang}-${pid}`} xs={6} sm={4} md={3}>
+                        <FormControlLabel
+                          control={
+                            <Checkbox
+                              checked={rowSelectedPids.includes(pid)}
+                              onChange={(e) => handlePidSelection(currentModalRow.id, pid, e.target.checked)}
+                            />
+                          }
+                          label={`PID ${pid}`}
+                        />
+                      </Grid>
+                    ))}
+                  </Grid>
+                </Box>
+              ))
+          }
           
           {rowSelectedPids.length > 0 && (
             <Box sx={{ mt: 2, p: 2, bgcolor: 'grey.100', borderRadius: 1 }}>
-              {rowSelectedPids.length === currentModalRow.available_pids.length ? (
+              {rowSelectedPids.length === allAvailablePids.length ? (
                 <Typography variant="body2" color="success.main" sx={{ fontWeight: 'medium' }}>
                   All PIDs selected ({rowSelectedPids.length}) → Host-level profiling
                 </Typography>

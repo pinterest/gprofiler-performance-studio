@@ -874,28 +874,44 @@ class DBManager(metaclass=Singleton):
         last_command_id: Optional[str] = None,
         status: str = "active",
         heartbeat_timestamp: Optional[datetime] = None,
-        available_pids: Optional[List[int]] = None,
+        available_pids: Optional[Dict[str, List[int]]] = None,
         merge_pids: bool = False
     ) -> None:
         """Update or insert host heartbeat information using pure SQL"""
         if heartbeat_timestamp is None:
             heartbeat_timestamp = datetime.now()
         
-        # Handle available_pids logic
-        pids_to_store = available_pids or []
+        # Handle available_pids as JSON mapping: language -> [pids]
+        pids_to_store: Dict[str, List[int]] = {}
+        if available_pids:
+            # Normalize incoming map: ensure lists of unique sorted ints
+            pids_to_store = {
+                str(lang): sorted(list({int(pid) for pid in (pids or [])}))
+                for lang, pids in available_pids.items()
+            }
         
         if merge_pids and available_pids:
-            # Get existing PIDs and merge with new ones
+            # Get existing mapping and merge per language
             existing_heartbeat = self.get_host_heartbeat(hostname)
             if existing_heartbeat and existing_heartbeat.get('available_pids'):
-                existing_pids = existing_heartbeat['available_pids']
-                if isinstance(existing_pids, list):
-                    # Merge and deduplicate PIDs
-                    pids_to_store = list(set(existing_pids + available_pids))
-                    pids_to_store.sort()  # Keep consistent ordering
+                existing_map = existing_heartbeat['available_pids']
+                if isinstance(existing_map, dict):
+                    merged: Dict[str, List[int]] = {}
+                    # union keys
+                    for lang in set(list(existing_map.keys()) + list(pids_to_store.keys())):
+                        old_list = existing_map.get(lang) or []
+                        new_list = pids_to_store.get(lang) or []
+                        merged_set = {int(pid) for pid in old_list} | {int(pid) for pid in new_list}
+                        merged[lang] = sorted(list(merged_set))
+                    pids_to_store = merged
                 else:
-                    # If existing PIDs are malformed, just use new PIDs
-                    pids_to_store = available_pids
+                    # Backward compatibility: existing was array -> put under 'unknown'
+                    try:
+                        flat = [int(x) for x in (existing_map or [])]
+                    except Exception:
+                        flat = []
+                    merged_set = set(flat) | {pid for pids in pids_to_store.values() for pid in pids}
+                    pids_to_store = {"unknown": sorted(list(merged_set))}
             
         query = """
         INSERT INTO HostHeartbeats (
@@ -904,7 +920,7 @@ class DBManager(metaclass=Singleton):
         ) VALUES (
             %(hostname)s, %(ip_address)s::inet, %(service_name)s,
             %(last_command_id)s::uuid, %(status)s::HostStatus,
-            %(heartbeat_timestamp)s, %(available_pids)s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            %(heartbeat_timestamp)s, %(available_pids)s::jsonb, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         )
         ON CONFLICT (hostname, service_name)
         DO UPDATE SET
@@ -923,7 +939,7 @@ class DBManager(metaclass=Singleton):
             "last_command_id": last_command_id,
             "status": status,
             "heartbeat_timestamp": heartbeat_timestamp,
-            "available_pids": pids_to_store
+            "available_pids": json.dumps(pids_to_store)
         }
 
         self.db.execute(query, values, has_value=False)
@@ -942,10 +958,10 @@ class DBManager(metaclass=Singleton):
         values = {"hostname": hostname}
         result = self.db.execute(query, values, one_value=True, return_dict=True)
         
-        # Ensure available_pids is a list (PostgreSQL returns array as list)
+        # Ensure available_pids is a dict
         if result:
             if result.get('available_pids') is None:
-                result['available_pids'] = []
+                result['available_pids'] = {}
             
         return result if result else None
 
@@ -989,10 +1005,10 @@ class DBManager(metaclass=Singleton):
         
         results = self.db.execute(query, values, one_value=False, return_dict=True, fetch_all=True)
         
-        # Ensure available_pids is a list for each result (PostgreSQL returns array as list)
+        # Ensure available_pids is a dict for each result
         for result in results:
             if result.get('available_pids') is None:
-                result['available_pids'] = []
+                result['available_pids'] = {}
                 
         return results
     

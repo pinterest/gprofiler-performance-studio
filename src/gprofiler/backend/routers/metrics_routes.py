@@ -657,7 +657,14 @@ def get_profiling_host_status():
         hostname = host.get("hostname")
         service_name = host.get("service_name")
         ip_address = host.get("ip_address")
-        available_pids = host.get("available_pids", [])
+        # Normalize available_pids to a language->pids map
+        raw_available = host.get("available_pids")
+        if isinstance(raw_available, dict):
+            available_pids_map = raw_available or {}
+        elif isinstance(raw_available, list):
+            available_pids_map = {"unknown": raw_available}
+        else:
+            available_pids_map = {}
         
         # Get current profiling command for this host/service
         command = db_manager.get_current_profiling_command(hostname, service_name)
@@ -668,9 +675,16 @@ def get_profiling_host_status():
             profiling_status = "stopped"
             command_type = "N/A"
         
-        # Create one entry per service/host with all PIDs displayed
-        if available_pids:
-            pids_display = ", ".join(str(pid) for pid in available_pids)
+        # Create display string grouped by language
+        if available_pids_map:
+            parts = []
+            for lang, pid_list in available_pids_map.items():
+                try:
+                    pid_str = ", ".join(str(int(pid)) for pid in (pid_list or []))
+                except Exception:
+                    pid_str = ""
+                parts.append(f"{lang}: {pid_str}" if pid_str else f"{lang}: -")
+            pids_display = " | ".join(parts)
         else:
             pids_display = "N/A"
             
@@ -682,7 +696,7 @@ def get_profiling_host_status():
             pids=pids_display,
             command_type=command_type,
             profiling_status=profiling_status,
-            available_pids=available_pids
+            available_pids=available_pids_map
         ))
 
     return results
