@@ -1,6 +1,6 @@
-import pytest
-import requests
 import base64
+
+import pytest
 
 
 def pytest_addoption(parser):
@@ -95,9 +95,7 @@ def pytest_addoption(parser):
         help="PostgreSQL port",
     )
 
-    parser.addoption(
-        "--postgres-host", action="store", default="localhost", help="PostgreSQL host"
-    )
+    parser.addoption("--postgres-host", action="store", default="localhost", help="PostgreSQL host")
 
 
 @pytest.fixture(scope="session")
@@ -109,7 +107,7 @@ def backend_base_url(pytestconfig) -> str:
 
 
 @pytest.fixture(scope="session")
-def credentials(pytestconfig) -> str:
+def credentials(pytestconfig) -> dict[str, str]:
     """Get credentials from pytest config."""
     username = pytestconfig.getoption("--backend-user", default="test-user")
     password = pytestconfig.getoption("--backend-password", default="tester123")

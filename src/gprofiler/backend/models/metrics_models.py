@@ -15,10 +15,10 @@
 #
 
 from datetime import datetime
-from typing import Optional, Dict, List, Any
+from typing import Any, Dict, List, Optional
 
 from backend.models import CamelModel
-from pydantic import BaseModel, validator, root_validator
+from pydantic import BaseModel, root_validator, validator
 
 
 class SampleCount(BaseModel):
@@ -91,6 +91,7 @@ class HTMLMetadata(CamelModel):
 
 class ProfilingRequest(BaseModel):
     """Model for profiling request parameters"""
+
     service_name: str
     request_type: str  # "start" or "stop"
     continuous: Optional[bool] = False
@@ -101,31 +102,31 @@ class ProfilingRequest(BaseModel):
     stop_level: Optional[str] = "process"  # "process" or "host"
     additional_args: Optional[Dict[str, Any]] = None
 
-    @validator('request_type')
+    @validator("request_type")
     def validate_request_type(cls, v):
         if v not in ["start", "stop"]:
             raise ValueError('request_type must be "start" or "stop"')
         return v
 
-    @validator('profiling_mode')
+    @validator("profiling_mode")
     def validate_profiling_mode(cls, v):
         if v not in ["cpu", "allocation", "none"]:
             raise ValueError('profiling_mode must be "cpu", "allocation", or "none"')
         return v
 
-    @validator('stop_level')
+    @validator("stop_level")
     def validate_stop_level(cls, v):
         if v not in ["process", "host"]:
             raise ValueError('stop_level must be "process" or "host"')
         return v
 
-    @validator('duration')
+    @validator("duration")
     def validate_duration(cls, v):
         if v is not None and v <= 0:
             raise ValueError("Duration must be a positive integer (seconds)")
         return v
 
-    @validator('frequency')
+    @validator("frequency")
     def validate_frequency(cls, v):
         if v is not None and v <= 0:
             raise ValueError("Frequency must be a positive integer (Hz)")
@@ -134,33 +135,30 @@ class ProfilingRequest(BaseModel):
     @root_validator
     def validate_profile_request(cls, values):
         """Validate that PIDs are provided when request_type is stop and stop_level is process"""
-        request_type = values.get('request_type')
-        stop_level = values.get('stop_level')
-        target_hosts = values.get('target_hosts')
-        
-        if request_type == 'stop' and stop_level == 'process':
+        request_type = values.get("request_type")
+        stop_level = values.get("stop_level")
+        target_hosts = values.get("target_hosts")
+
+        if request_type == "stop" and stop_level == "process":
             # Check if PIDs are provided in target_hosts mapping
-            has_pids = (
-                target_hosts and
-                any(pids for pids in target_hosts.values() if pids)
-            )
+            has_pids = target_hosts and any(pids for pids in target_hosts.values() if pids)
             if not has_pids:
-                raise ValueError('At least one PID must be provided when request_type is "stop" and stop_level is "process"')
-        
+                raise ValueError(
+                    'At least one PID must be provided when request_type is "stop" and stop_level is "process"'
+                )
+
         # Validate if a process id is provided when request_type is stop and stop_level is host, if so raises
-        if request_type == 'stop' and stop_level == 'host':
-            has_pids = (
-                target_hosts and
-                any(pids for pids in target_hosts.values() if pids is not None)
-            )
+        if request_type == "stop" and stop_level == "host":
+            has_pids = target_hosts and any(pids for pids in target_hosts.values() if pids is not None)
             if has_pids:
                 raise ValueError('No PIDs should be provided when request_type is "stop" and stop_level is "host"')
-        
+
         return values
 
 
 class ProfilingResponse(BaseModel):
     """Response model for profiling requests"""
+
     success: bool
     message: str
     request_id: Optional[str] = None
@@ -170,17 +168,19 @@ class ProfilingResponse(BaseModel):
 
 class HeartbeatRequest(BaseModel):
     """Model for host heartbeat request"""
+
     ip_address: str
     hostname: str
     service_name: str
     last_command_id: Optional[str] = None
-    status: Optional[str] = "active"  # active, idle, error
+    status: str = "active"  # active, idle, error
     timestamp: Optional[datetime] = None
     available_pids: Optional[Dict[str, List[int]]] = None
 
 
 class HeartbeatResponse(BaseModel):
     """Response model for heartbeat requests"""
+
     success: bool
     message: str
     profiling_command: Optional[Dict[str, Any]] = None
@@ -189,6 +189,7 @@ class HeartbeatResponse(BaseModel):
 
 class CommandCompletionRequest(BaseModel):
     """Model for reporting command completion"""
+
     command_id: str
     hostname: str
     status: str
@@ -196,7 +197,7 @@ class CommandCompletionRequest(BaseModel):
     error_message: Optional[str] = None
     results_path: Optional[str] = None
 
-    @validator('status')
+    @validator("status")
     def validate_status(cls, v):
         if v not in ["completed", "failed"]:
             raise ValueError(f"invalid status: {v}. Must be 'completed' or 'failed'.")
@@ -212,3 +213,4 @@ class ProfilingHostStatus(BaseModel):
     command_type: str
     profiling_status: str
     available_pids: Optional[Dict[str, List[int]]] = None
+    heartbeat_timestamp: datetime

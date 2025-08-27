@@ -10,13 +10,14 @@ to database storage, including:
 4. Validating data consistency between API responses and database state
 """
 
-import pytest
-import requests
 import uuid
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
+
 import psycopg2
 import psycopg2.extras
+import pytest
+import requests
 
 
 @pytest.fixture(scope="session")
@@ -24,9 +25,7 @@ def postgres_connection(pytestconfig):
     """Create a PostgreSQL connection for database verification."""
     # Get PostgreSQL configuration from pytest config
     postgres_user = pytestconfig.getoption("--postgres-user", default="postgres")
-    postgres_password = pytestconfig.getoption(
-        "--postgres-password", default="password"
-    )
+    postgres_password = pytestconfig.getoption("--postgres-password", default="password")
     postgres_host = pytestconfig.getoption("--postgres-host", default="localhost")
     postgres_port = pytestconfig.getoption("--postgres-port", default=54321)
     postgres_db = pytestconfig.getoption("--postgres-db", default="gprofiler")
@@ -96,9 +95,7 @@ def valid_heartbeat_data(test_hostname: str, test_service_name: str) -> Dict[str
 
 
 @pytest.fixture(scope="session")
-def valid_start_request_data_single_host_stop_level_host(
-    test_service_name: str, test_hostname: str
-) -> Dict[str, Any]:
+def valid_start_request_data_single_host_stop_level_host(test_service_name: str, test_hostname: str) -> Dict[str, Any]:
     """Provide valid start request data for testing."""
     return {
         "service_name": test_service_name,
@@ -115,9 +112,7 @@ def valid_start_request_data_single_host_stop_level_host(
 
 
 @pytest.fixture(scope="session")
-def valid_stop_request_data_single_host_stop_level_host(
-    test_service_name: str, test_hostname: str
-) -> Dict[str, Any]:
+def valid_stop_request_data_single_host_stop_level_host(test_service_name: str, test_hostname: str) -> Dict[str, Any]:
     """Provide valid stop request data for testing."""
     return {
         "service_name": test_service_name,
@@ -216,8 +211,8 @@ def get_profiling_commands_from_db(
 ) -> List[Dict[str, Any]]:
     """Get profiling commands from the database by service and optionally hostname."""
     if command_ids:
-        formatted_command_ids = [f"'{command_id}'" for command_id in command_ids]
-        formatted_command_ids = f"({','.join(formatted_command_ids)})"
+        formatted_command_ids_ = [f"'{command_id}'" for command_id in command_ids]
+        formatted_command_ids = f"({','.join(formatted_command_ids_)})"
 
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
         cursor.execute(
@@ -240,9 +235,7 @@ def get_profiling_commands_from_db(
         return [dict(result) for result in results]
 
 
-def get_host_heartbeats_from_db(
-    conn, hostname: str, service_name: str = None
-) -> List[Dict[str, Any]]:
+def get_host_heartbeats_from_db(conn, hostname: str, service_name: str = None) -> List[Dict[str, Any]]:
     """Get host heartbeats from the database by hostname and optionally service."""
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
         if service_name:
@@ -272,22 +265,12 @@ def cleanup_test_data(conn, service_name: str, hostname: str = None):
     with conn.cursor() as cursor:
         # Clean up in reverse dependency order
         if hostname:
-            cursor.execute(
-                "DELETE FROM HostHeartbeats WHERE hostname = %s", (hostname,)
-            )
-            cursor.execute(
-                "DELETE FROM ProfilingCommands WHERE hostname = %s", (hostname,)
-            )
-            cursor.execute(
-                "DELETE FROM ProfilingExecutions WHERE hostname = %s", (hostname,)
-            )
+            cursor.execute("DELETE FROM HostHeartbeats WHERE hostname = %s", (hostname,))
+            cursor.execute("DELETE FROM ProfilingCommands WHERE hostname = %s", (hostname,))
+            cursor.execute("DELETE FROM ProfilingExecutions WHERE hostname = %s", (hostname,))
 
-        cursor.execute(
-            "DELETE FROM ProfilingRequests WHERE service_name = %s", (service_name,)
-        )
-        cursor.execute(
-            "DELETE FROM ProfilingCommands WHERE service_name = %s", (service_name,)
-        )
+        cursor.execute("DELETE FROM ProfilingRequests WHERE service_name = %s", (service_name,))
+        cursor.execute("DELETE FROM ProfilingCommands WHERE service_name = %s", (service_name,))
 
 
 def send_heartbeat_and_verify(
@@ -312,9 +295,7 @@ def send_heartbeat_and_verify(
     )
 
     # Verify heartbeat response
-    assert (
-        response.status_code == 200
-    ), f"Heartbeat failed: {response.status_code}: {response.text}"
+    assert response.status_code == 200, f"Heartbeat failed: {response.status_code}: {response.text}"
     result = response.json()
     assert "message" in result, "Heartbeat response should contain 'message' field"
 
@@ -336,9 +317,7 @@ def send_heartbeat_and_verify(
     profiling_command = result.get("profiling_command", None)
     command_id = result.get("command_id", None)
     if profiling_command and command_id:
-        assert (
-            expected_command_present
-        ), "Received unexpected command in heartbeat response"
+        assert expected_command_present, "Received unexpected command in heartbeat response"
         received_command = {
             "command_id": result["command_id"],
             "profiling_command": result["profiling_command"],
@@ -347,14 +326,10 @@ def send_heartbeat_and_verify(
             f"📋 Received command via heartbeat: {result['profiling_command'].get('command_type', 'unknown')} (ID: {result['command_id']})"
         )
     else:
-        assert (
-            not expected_command_present
-        ), "Expected command in heartbeat response but none received"
+        assert not expected_command_present, "Expected command in heartbeat response but none received"
         print("📭 No commands received in heartbeat response")
 
-    print(
-        f"✅ Heartbeat successfully sent and verified in database for {heartbeat_data['hostname']}"
-    )
+    print(f"✅ Heartbeat successfully sent and verified in database for {heartbeat_data['hostname']}")
     return received_command
 
 
@@ -386,9 +361,7 @@ class TestProfileRequestIntegration:
         )
 
         # Verify API response
-        assert (
-            response.status_code == 200
-        ), f"Expected 200, got {response.status_code}: {response.text}"
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
         result = response.json()
 
         # Validate response structure
@@ -410,26 +383,11 @@ class TestProfileRequestIntegration:
         assert db_request is not None, f"Request {request_id} not found in database"
 
         # Verify request data matches what was sent
-        assert (
-            db_request["service_name"]
-            == valid_start_request_data_single_host_stop_level_host["service_name"]
-        )
-        assert (
-            db_request["request_type"]
-            == valid_start_request_data_single_host_stop_level_host["request_type"]
-        )
-        assert (
-            db_request["duration"]
-            == valid_start_request_data_single_host_stop_level_host["duration"]
-        )
-        assert (
-            db_request["frequency"]
-            == valid_start_request_data_single_host_stop_level_host["frequency"]
-        )
-        assert (
-            db_request["profiling_mode"]
-            == valid_start_request_data_single_host_stop_level_host["profiling_mode"]
-        )
+        assert db_request["service_name"] == valid_start_request_data_single_host_stop_level_host["service_name"]
+        assert db_request["request_type"] == valid_start_request_data_single_host_stop_level_host["request_type"]
+        assert db_request["duration"] == valid_start_request_data_single_host_stop_level_host["duration"]
+        assert db_request["frequency"] == valid_start_request_data_single_host_stop_level_host["frequency"]
+        assert db_request["profiling_mode"] == valid_start_request_data_single_host_stop_level_host["profiling_mode"]
         assert db_request["target_hostnames"] == list(
             valid_start_request_data_single_host_stop_level_host["target_hosts"].keys()
         )
@@ -438,12 +396,7 @@ class TestProfileRequestIntegration:
         # Verify additional_args JSON
         stored_additional_args = db_request["additional_args"]
         if stored_additional_args:
-            assert (
-                stored_additional_args
-                == valid_start_request_data_single_host_stop_level_host[
-                    "additional_args"
-                ]
-            )
+            assert stored_additional_args == valid_start_request_data_single_host_stop_level_host["additional_args"]
 
         # Verify timestamps
         assert db_request["created_at"] is not None
@@ -476,8 +429,7 @@ class TestProfileRequestIntegration:
                 combined_config = db_command["combined_config"]
                 assert combined_config is not None
                 assert (
-                    combined_config.get("duration")
-                    == valid_start_request_data_single_host_stop_level_host["duration"]
+                    combined_config.get("duration") == valid_start_request_data_single_host_stop_level_host["duration"]
                 )
                 assert (
                     combined_config.get("frequency")
@@ -485,9 +437,7 @@ class TestProfileRequestIntegration:
                 )
                 assert (
                     combined_config.get("profiling_mode")
-                    == valid_start_request_data_single_host_stop_level_host[
-                        "profiling_mode"
-                    ]
+                    == valid_start_request_data_single_host_stop_level_host["profiling_mode"]
                 )
 
                 break
@@ -505,9 +455,7 @@ class TestProfileRequestIntegration:
         )
 
         # Step 5: Verify the received command matches our created command
-        assert (
-            received_command is not None
-        ), "Expected to receive a command via heartbeat"
+        assert received_command is not None, "Expected to receive a command via heartbeat"
         assert (
             received_command["command_id"] in command_ids
         ), f"Received command ID {received_command['command_id']} not in expected IDs {command_ids}"
@@ -542,9 +490,7 @@ class TestProfileRequestIntegration:
         )
 
         # Should not receive the same command again
-        assert (
-            ack_command is None
-        ), "Should not receive the same command after acknowledgment"
+        assert ack_command is None, "Should not receive the same command after acknowledgment"
 
         print(
             f"✅ End-to-end integration test passed: Request {request_id} created, command delivered via heartbeat, and acknowledged"
@@ -574,9 +520,7 @@ class TestProfileRequestIntegration:
         )
 
         # Verify API response
-        assert (
-            response.status_code == 200
-        ), f"Expected 200, got {response.status_code}: {response.text}"
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
         result = response.json()
 
         # Validate response structure
@@ -594,23 +538,15 @@ class TestProfileRequestIntegration:
         assert db_request is not None, f"Request {request_id} not found in database"
 
         # Verify request data matches what was sent
-        assert (
-            db_request["service_name"]
-            == valid_stop_request_data_single_host_stop_level_host["service_name"]
-        )
-        assert (
-            db_request["request_type"]
-            == valid_stop_request_data_single_host_stop_level_host["request_type"]
-        )
+        assert db_request["service_name"] == valid_stop_request_data_single_host_stop_level_host["service_name"]
+        assert db_request["request_type"] == valid_stop_request_data_single_host_stop_level_host["request_type"]
         assert db_request["target_hostnames"] == list(
             valid_stop_request_data_single_host_stop_level_host["target_hosts"].keys()
         )
         assert db_request["status"] == "pending"
 
         # Step 3: Verify ProfilingCommands table entries for stop command
-        db_commands = get_profiling_commands_from_db(
-            postgres_connection, test_service_name, test_hostname
-        )
+        db_commands = get_profiling_commands_from_db(postgres_connection, test_service_name, test_hostname)
 
         # For stop commands, there should be at least one command
         if len(command_ids) > 0:
@@ -627,9 +563,7 @@ class TestProfileRequestIntegration:
                     assert db_command["status"] == "pending"
                     break
 
-            assert (
-                stop_command_found
-            ), f"Stop command with ID in {command_ids} not found in database"
+            assert stop_command_found, f"Stop command with ID in {command_ids} not found in database"
 
         # Step 4: Send heartbeat and verify stop command delivery
         print("🔄 Sending heartbeat to retrieve stop commands...")
@@ -642,9 +576,7 @@ class TestProfileRequestIntegration:
         )
 
         # Step 5: Verify the received command matches our created stop command
-        assert (
-            received_command is not None
-        ), "Expected to receive a stop command via heartbeat"
+        assert received_command is not None, "Expected to receive a stop command via heartbeat"
         assert (
             received_command["command_id"] in command_ids
         ), f"Received command ID {received_command['command_id']} not in expected IDs {command_ids}"
@@ -670,9 +602,7 @@ class TestProfileRequestIntegration:
             expected_command_present=False,
         )
 
-        assert (
-            ack_command is None
-        ), "Should not receive the same stop command after acknowledgment"
+        assert ack_command is None, "Should not receive the same stop command after acknowledgment"
 
         print(
             f"✅ End-to-end stop integration test passed: Stop request {request_id} created, command delivered via heartbeat, and acknowledged"
@@ -683,9 +613,7 @@ class TestProfileRequestIntegration:
         self,
         profile_request_url: str,
         heartbeat_url: str,
-        valid_start_request_data_single_host_stop_level_process_single_process: Dict[
-            str, Any
-        ],
+        valid_start_request_data_single_host_stop_level_process_single_process: Dict[str, Any],
         valid_heartbeat_data: Dict[str, Any],
         credentials: Dict[str, Any],
         postgres_connection,
@@ -704,9 +632,7 @@ class TestProfileRequestIntegration:
         )
 
         # Verify API response
-        assert (
-            response.status_code == 200
-        ), f"Expected 200, got {response.status_code}: {response.text}"
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
         result = response.json()
 
         # Validate response structure
@@ -730,44 +656,29 @@ class TestProfileRequestIntegration:
         # Verify request data matches what was sent
         assert (
             db_request["service_name"]
-            == valid_start_request_data_single_host_stop_level_process_single_process[
-                "service_name"
-            ]
+            == valid_start_request_data_single_host_stop_level_process_single_process["service_name"]
         )
         assert (
             db_request["request_type"]
-            == valid_start_request_data_single_host_stop_level_process_single_process[
-                "request_type"
-            ]
+            == valid_start_request_data_single_host_stop_level_process_single_process["request_type"]
         )
         assert (
-            db_request["duration"]
-            == valid_start_request_data_single_host_stop_level_process_single_process[
-                "duration"
-            ]
+            db_request["duration"] == valid_start_request_data_single_host_stop_level_process_single_process["duration"]
         )
         assert (
             db_request["frequency"]
-            == valid_start_request_data_single_host_stop_level_process_single_process[
-                "frequency"
-            ]
+            == valid_start_request_data_single_host_stop_level_process_single_process["frequency"]
         )
         assert (
             db_request["profiling_mode"]
-            == valid_start_request_data_single_host_stop_level_process_single_process[
-                "profiling_mode"
-            ]
+            == valid_start_request_data_single_host_stop_level_process_single_process["profiling_mode"]
         )
         assert db_request["target_hostnames"] == list(
-            valid_start_request_data_single_host_stop_level_process_single_process[
-                "target_hosts"
-            ].keys()
+            valid_start_request_data_single_host_stop_level_process_single_process["target_hosts"].keys()
         )
         assert (
             db_request["stop_level"]
-            == valid_start_request_data_single_host_stop_level_process_single_process[
-                "stop_level"
-            ]
+            == valid_start_request_data_single_host_stop_level_process_single_process["stop_level"]
         )
         assert db_request["status"] == "pending"
 
@@ -776,9 +687,7 @@ class TestProfileRequestIntegration:
         if stored_additional_args:
             assert (
                 stored_additional_args
-                == valid_start_request_data_single_host_stop_level_process_single_process[
-                    "additional_args"
-                ]
+                == valid_start_request_data_single_host_stop_level_process_single_process["additional_args"]
             )
 
         # Verify timestamps
@@ -813,27 +722,19 @@ class TestProfileRequestIntegration:
                 assert combined_config is not None
                 assert (
                     combined_config.get("duration")
-                    == valid_start_request_data_single_host_stop_level_process_single_process[
-                        "duration"
-                    ]
+                    == valid_start_request_data_single_host_stop_level_process_single_process["duration"]
                 )
                 assert (
                     combined_config.get("frequency")
-                    == valid_start_request_data_single_host_stop_level_process_single_process[
-                        "frequency"
-                    ]
+                    == valid_start_request_data_single_host_stop_level_process_single_process["frequency"]
                 )
                 assert (
                     combined_config.get("profiling_mode")
-                    == valid_start_request_data_single_host_stop_level_process_single_process[
-                        "profiling_mode"
-                    ]
+                    == valid_start_request_data_single_host_stop_level_process_single_process["profiling_mode"]
                 )
                 assert (
                     combined_config.get("pids")
-                    == valid_start_request_data_single_host_stop_level_process_single_process[
-                        "target_hosts"
-                    ][
+                    == valid_start_request_data_single_host_stop_level_process_single_process["target_hosts"][
                         test_hostname
                     ]
                 )
@@ -853,9 +754,7 @@ class TestProfileRequestIntegration:
         )
 
         # Step 5: Verify the received command matches our created command
-        assert (
-            received_command is not None
-        ), "Expected to receive a command via heartbeat"
+        assert received_command is not None, "Expected to receive a command via heartbeat"
         assert (
             received_command["command_id"] in command_ids
         ), f"Received command ID {received_command['command_id']} not in expected IDs {command_ids}"
@@ -865,27 +764,19 @@ class TestProfileRequestIntegration:
         assert profiling_command["command_type"] == "start"
         assert (
             profiling_command["combined_config"]["duration"]
-            == valid_start_request_data_single_host_stop_level_process_single_process[
-                "duration"
-            ]
+            == valid_start_request_data_single_host_stop_level_process_single_process["duration"]
         )
         assert (
             profiling_command["combined_config"]["frequency"]
-            == valid_start_request_data_single_host_stop_level_process_single_process[
-                "frequency"
-            ]
+            == valid_start_request_data_single_host_stop_level_process_single_process["frequency"]
         )
         assert (
             profiling_command["combined_config"]["profiling_mode"]
-            == valid_start_request_data_single_host_stop_level_process_single_process[
-                "profiling_mode"
-            ]
+            == valid_start_request_data_single_host_stop_level_process_single_process["profiling_mode"]
         )
         assert (
             profiling_command["combined_config"]["pids"]
-            == valid_start_request_data_single_host_stop_level_process_single_process[
-                "target_hosts"
-            ][test_hostname]
+            == valid_start_request_data_single_host_stop_level_process_single_process["target_hosts"][test_hostname]
         )
 
         # Step 6: Send another heartbeat with last_command_id to simulate acknowledgment
@@ -902,9 +793,7 @@ class TestProfileRequestIntegration:
         )
 
         # Should not receive the same command again
-        assert (
-            ack_command is None
-        ), "Should not receive the same command after acknowledgment"
+        assert ack_command is None, "Should not receive the same command after acknowledgment"
 
         print(
             f"✅ End-to-end process-level start integration test passed: Request {request_id} with PID {valid_start_request_data_single_host_stop_level_process_single_process['target_hosts'][test_hostname]} created, command delivered via heartbeat, and acknowledged"
@@ -915,9 +804,7 @@ class TestProfileRequestIntegration:
         self,
         profile_request_url: str,
         heartbeat_url: str,
-        valid_stop_request_data_single_host_stop_level_process_single_process: Dict[
-            str, Any
-        ],
+        valid_stop_request_data_single_host_stop_level_process_single_process: Dict[str, Any],
         valid_heartbeat_data: Dict[str, Any],
         credentials: Dict[str, Any],
         postgres_connection,
@@ -936,9 +823,7 @@ class TestProfileRequestIntegration:
         )
 
         # Verify API response
-        assert (
-            response.status_code == 200
-        ), f"Expected 200, got {response.status_code}: {response.text}"
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
         result = response.json()
 
         # Validate response structure
@@ -958,27 +843,19 @@ class TestProfileRequestIntegration:
         # Verify request data matches what was sent
         assert (
             db_request["service_name"]
-            == valid_stop_request_data_single_host_stop_level_process_single_process[
-                "service_name"
-            ]
+            == valid_stop_request_data_single_host_stop_level_process_single_process["service_name"]
         )
         assert (
             db_request["request_type"]
-            == valid_stop_request_data_single_host_stop_level_process_single_process[
-                "request_type"
-            ]
+            == valid_stop_request_data_single_host_stop_level_process_single_process["request_type"]
         )
         assert db_request["target_hostnames"] == list(
-            valid_stop_request_data_single_host_stop_level_process_single_process[
-                "target_hosts"
-            ].keys()
+            valid_stop_request_data_single_host_stop_level_process_single_process["target_hosts"].keys()
         )
         assert db_request["status"] == "pending"
 
         # Step 3: Verify ProfilingCommands table entries for stop command
-        db_commands = get_profiling_commands_from_db(
-            postgres_connection, test_service_name, test_hostname
-        )
+        db_commands = get_profiling_commands_from_db(postgres_connection, test_service_name, test_hostname)
 
         # For stop commands, there should be at least one command
         if len(command_ids) > 0:
@@ -995,9 +872,7 @@ class TestProfileRequestIntegration:
                     assert db_command["status"] == "pending"
                     break
 
-            assert (
-                stop_command_found
-            ), f"Stop command with ID in {command_ids} not found in database"
+            assert stop_command_found, f"Stop command with ID in {command_ids} not found in database"
 
         # Step 4: Send heartbeat and verify stop command delivery
         print("🔄 Sending heartbeat to retrieve stop commands...")
@@ -1010,9 +885,7 @@ class TestProfileRequestIntegration:
         )
 
         # Step 5: Verify the received command matches our created stop command
-        assert (
-            received_command is not None
-        ), "Expected to receive a stop command via heartbeat"
+        assert received_command is not None, "Expected to receive a stop command via heartbeat"
         assert (
             received_command["command_id"] in command_ids
         ), f"Received command ID {received_command['command_id']} not in expected IDs {command_ids}"
@@ -1037,9 +910,7 @@ class TestProfileRequestIntegration:
             expected_command_present=False,
         )
 
-        assert (
-            ack_command is None
-        ), "Should not receive the same stop command after acknowledgment"
+        assert ack_command is None, "Should not receive the same stop command after acknowledgment"
 
         print(
             f"✅ End-to-end process-level stop integration test passed: Stop request {request_id} with PID {valid_stop_request_data_single_host_stop_level_process_single_process['target_hosts'][test_hostname]} created, command delivered via heartbeat, and acknowledged"
@@ -1050,9 +921,7 @@ class TestProfileRequestIntegration:
         self,
         profile_request_url: str,
         heartbeat_url: str,
-        valid_start_request_data_single_host_stop_level_process_multi_process: Dict[
-            str, Any
-        ],
+        valid_start_request_data_single_host_stop_level_process_multi_process: Dict[str, Any],
         valid_heartbeat_data: Dict[str, Any],
         credentials: Dict[str, Any],
         postgres_connection,
@@ -1071,9 +940,7 @@ class TestProfileRequestIntegration:
         )
 
         # Verify API response
-        assert (
-            response.status_code == 200
-        ), f"Expected 200, got {response.status_code}: {response.text}"
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
         result = response.json()
 
         # Validate response structure
@@ -1097,44 +964,29 @@ class TestProfileRequestIntegration:
         # Verify request data matches what was sent
         assert (
             db_request["service_name"]
-            == valid_start_request_data_single_host_stop_level_process_multi_process[
-                "service_name"
-            ]
+            == valid_start_request_data_single_host_stop_level_process_multi_process["service_name"]
         )
         assert (
             db_request["request_type"]
-            == valid_start_request_data_single_host_stop_level_process_multi_process[
-                "request_type"
-            ]
+            == valid_start_request_data_single_host_stop_level_process_multi_process["request_type"]
         )
         assert (
-            db_request["duration"]
-            == valid_start_request_data_single_host_stop_level_process_multi_process[
-                "duration"
-            ]
+            db_request["duration"] == valid_start_request_data_single_host_stop_level_process_multi_process["duration"]
         )
         assert (
             db_request["frequency"]
-            == valid_start_request_data_single_host_stop_level_process_multi_process[
-                "frequency"
-            ]
+            == valid_start_request_data_single_host_stop_level_process_multi_process["frequency"]
         )
         assert (
             db_request["profiling_mode"]
-            == valid_start_request_data_single_host_stop_level_process_multi_process[
-                "profiling_mode"
-            ]
+            == valid_start_request_data_single_host_stop_level_process_multi_process["profiling_mode"]
         )
         assert db_request["target_hostnames"] == list(
-            valid_start_request_data_single_host_stop_level_process_multi_process[
-                "target_hosts"
-            ].keys()
+            valid_start_request_data_single_host_stop_level_process_multi_process["target_hosts"].keys()
         )
         assert (
             db_request["stop_level"]
-            == valid_start_request_data_single_host_stop_level_process_multi_process[
-                "stop_level"
-            ]
+            == valid_start_request_data_single_host_stop_level_process_multi_process["stop_level"]
         )
         assert db_request["status"] == "pending"
 
@@ -1143,9 +995,7 @@ class TestProfileRequestIntegration:
         if stored_additional_args:
             assert (
                 stored_additional_args
-                == valid_start_request_data_single_host_stop_level_process_multi_process[
-                    "additional_args"
-                ]
+                == valid_start_request_data_single_host_stop_level_process_multi_process["additional_args"]
             )
 
         # Verify timestamps
@@ -1180,44 +1030,32 @@ class TestProfileRequestIntegration:
                 assert combined_config is not None
                 assert (
                     combined_config.get("duration")
-                    == valid_start_request_data_single_host_stop_level_process_multi_process[
-                        "duration"
-                    ]
+                    == valid_start_request_data_single_host_stop_level_process_multi_process["duration"]
                 )
                 assert (
                     combined_config.get("frequency")
-                    == valid_start_request_data_single_host_stop_level_process_multi_process[
-                        "frequency"
-                    ]
+                    == valid_start_request_data_single_host_stop_level_process_multi_process["frequency"]
                 )
                 assert (
                     combined_config.get("profiling_mode")
-                    == valid_start_request_data_single_host_stop_level_process_multi_process[
-                        "profiling_mode"
-                    ]
+                    == valid_start_request_data_single_host_stop_level_process_multi_process["profiling_mode"]
                 )
                 assert (
                     combined_config.get("pids")
-                    == valid_start_request_data_single_host_stop_level_process_multi_process[
-                        "target_hosts"
-                    ][
+                    == valid_start_request_data_single_host_stop_level_process_multi_process["target_hosts"][
                         test_hostname
                     ]
                 )
 
                 # Verify multiple PIDs are correctly stored
-                expected_pids = valid_start_request_data_single_host_stop_level_process_multi_process[
-                    "target_hosts"
-                ][
+                expected_pids = valid_start_request_data_single_host_stop_level_process_multi_process["target_hosts"][
                     test_hostname
                 ]
                 assert len(combined_config.get("pids", [])) == len(
                     expected_pids
                 ), f"Expected {len(expected_pids)} PIDs, got {len(combined_config.get('pids', []))}"
                 for pid in expected_pids:
-                    assert pid in combined_config.get(
-                        "pids", []
-                    ), f"PID {pid} not found in command config"
+                    assert pid in combined_config.get("pids", []), f"PID {pid} not found in command config"
 
                 break
 
@@ -1234,9 +1072,7 @@ class TestProfileRequestIntegration:
         )
 
         # Step 5: Verify the received command matches our created command
-        assert (
-            received_command is not None
-        ), "Expected to receive a command via heartbeat"
+        assert received_command is not None, "Expected to receive a command via heartbeat"
         assert (
             received_command["command_id"] in command_ids
         ), f"Received command ID {received_command['command_id']} not in expected IDs {command_ids}"
@@ -1246,27 +1082,19 @@ class TestProfileRequestIntegration:
         assert profiling_command["command_type"] == "start"
         assert (
             profiling_command["combined_config"]["duration"]
-            == valid_start_request_data_single_host_stop_level_process_multi_process[
-                "duration"
-            ]
+            == valid_start_request_data_single_host_stop_level_process_multi_process["duration"]
         )
         assert (
             profiling_command["combined_config"]["frequency"]
-            == valid_start_request_data_single_host_stop_level_process_multi_process[
-                "frequency"
-            ]
+            == valid_start_request_data_single_host_stop_level_process_multi_process["frequency"]
         )
         assert (
             profiling_command["combined_config"]["profiling_mode"]
-            == valid_start_request_data_single_host_stop_level_process_multi_process[
-                "profiling_mode"
-            ]
+            == valid_start_request_data_single_host_stop_level_process_multi_process["profiling_mode"]
         )
         assert (
             profiling_command["combined_config"]["pids"]
-            == valid_start_request_data_single_host_stop_level_process_multi_process[
-                "target_hosts"
-            ][test_hostname]
+            == valid_start_request_data_single_host_stop_level_process_multi_process["target_hosts"][test_hostname]
         )
 
         # Step 6: Send another heartbeat with last_command_id to simulate acknowledgment
@@ -1283,9 +1111,7 @@ class TestProfileRequestIntegration:
         )
 
         # Should not receive the same command again
-        assert (
-            ack_command is None
-        ), "Should not receive the same command after acknowledgment"
+        assert ack_command is None, "Should not receive the same command after acknowledgment"
 
         print(
             f"✅ End-to-end multi-process start integration test passed: Request {request_id} with PIDs {valid_start_request_data_single_host_stop_level_process_multi_process['target_hosts'][test_hostname]} created, command delivered via heartbeat, and acknowledged"
@@ -1296,12 +1122,8 @@ class TestProfileRequestIntegration:
         self,
         profile_request_url: str,
         heartbeat_url: str,
-        valid_start_request_data_single_host_stop_level_process_multi_process: Dict[
-            str, Any
-        ],
-        valid_stop_request_data_single_host_stop_level_process_multi_process: Dict[
-            str, Any
-        ],
+        valid_start_request_data_single_host_stop_level_process_multi_process: Dict[str, Any],
+        valid_stop_request_data_single_host_stop_level_process_multi_process: Dict[str, Any],
         valid_heartbeat_data: Dict[str, Any],
         credentials: Dict[str, Any],
         postgres_connection,
@@ -1320,9 +1142,7 @@ class TestProfileRequestIntegration:
         )
 
         # Verify API response
-        assert (
-            response.status_code == 200
-        ), f"Expected 200, got {response.status_code}: {response.text}"
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
         result = response.json()
 
         # Validate response structure
@@ -1342,33 +1162,23 @@ class TestProfileRequestIntegration:
         # Verify request data matches what was sent
         assert (
             db_request["service_name"]
-            == valid_stop_request_data_single_host_stop_level_process_multi_process[
-                "service_name"
-            ]
+            == valid_stop_request_data_single_host_stop_level_process_multi_process["service_name"]
         )
         assert (
             db_request["request_type"]
-            == valid_stop_request_data_single_host_stop_level_process_multi_process[
-                "request_type"
-            ]
+            == valid_stop_request_data_single_host_stop_level_process_multi_process["request_type"]
         )
         assert db_request["target_hostnames"] == list(
-            valid_stop_request_data_single_host_stop_level_process_multi_process[
-                "target_hosts"
-            ].keys()
+            valid_stop_request_data_single_host_stop_level_process_multi_process["target_hosts"].keys()
         )
         assert (
             db_request["stop_level"]
-            == valid_stop_request_data_single_host_stop_level_process_multi_process[
-                "stop_level"
-            ]
+            == valid_stop_request_data_single_host_stop_level_process_multi_process["stop_level"]
         )
         assert db_request["status"] == "pending"
 
         # Step 3: Verify ProfilingCommands table entries for stop command
-        db_commands = get_profiling_commands_from_db(
-            postgres_connection, test_service_name, test_hostname
-        )
+        db_commands = get_profiling_commands_from_db(postgres_connection, test_service_name, test_hostname)
 
         # For stop commands, there should be at least one command
         if len(command_ids) > 0:
@@ -1391,9 +1201,7 @@ class TestProfileRequestIntegration:
                     assert combined_config.get("stop_level") == "host"
                     break
 
-            assert (
-                stop_command_found
-            ), f"Stop command with ID in {command_ids} not found in database"
+            assert stop_command_found, f"Stop command with ID in {command_ids} not found in database"
 
         # Step 4: Send heartbeat and verify stop command delivery
         print("🔄 Sending heartbeat to retrieve multi-process stop commands...")
@@ -1406,9 +1214,7 @@ class TestProfileRequestIntegration:
         )
 
         # Step 5: Verify the received command matches our created stop command
-        assert (
-            received_command is not None
-        ), "Expected to receive a stop command via heartbeat"
+        assert received_command is not None, "Expected to receive a stop command via heartbeat"
         assert (
             received_command["command_id"] in command_ids
         ), f"Received command ID {received_command['command_id']} not in expected IDs {command_ids}"
@@ -1433,9 +1239,7 @@ class TestProfileRequestIntegration:
             expected_command_present=False,
         )
 
-        assert (
-            ack_command is None
-        ), "Should not receive the same stop command after acknowledgment"
+        assert ack_command is None, "Should not receive the same stop command after acknowledgment"
 
         print(
             f"✅ End-to-end multi-process stop integration test passed: Stop request {request_id} with PID {valid_stop_request_data_single_host_stop_level_process_multi_process['target_hosts'][test_hostname]} created, command delivered via heartbeat, and acknowledged"
@@ -1446,12 +1250,8 @@ class TestProfileRequestIntegration:
         self,
         profile_request_url: str,
         heartbeat_url: str,
-        valid_start_request_data_single_host_stop_level_process_multi_process: Dict[
-            str, Any
-        ],
-        valid_stop_request_data_single_host_stop_level_process_single_process: Dict[
-            str, Any
-        ],
+        valid_start_request_data_single_host_stop_level_process_multi_process: Dict[str, Any],
+        valid_stop_request_data_single_host_stop_level_process_single_process: Dict[str, Any],
         valid_heartbeat_data: Dict[str, Any],
         credentials: Dict[str, Any],
         postgres_connection,
@@ -1492,11 +1292,9 @@ class TestProfileRequestIntegration:
         # Verify initial command has multiple PIDs
         assert initial_command is not None, "Expected to receive initial start command"
         initial_pids = initial_command["profiling_command"]["combined_config"]["pids"]
-        expected_initial_pids = (
-            valid_start_request_data_single_host_stop_level_process_multi_process[
-                "target_hosts"
-            ][test_hostname]
-        )
+        expected_initial_pids = valid_start_request_data_single_host_stop_level_process_multi_process["target_hosts"][
+            test_hostname
+        ]
 
         assert len(initial_pids) == len(
             expected_initial_pids
@@ -1560,14 +1358,10 @@ class TestProfileRequestIntegration:
         ), f"Expected 'start' command, got '{profiling_command['command_type']}'"
 
         # Calculate expected remaining PIDs
-        stopped_pids = (
-            valid_stop_request_data_single_host_stop_level_process_single_process[
-                "target_hosts"
-            ][test_hostname]
-        )
-        remaining_pids = [
-            pid for pid in expected_initial_pids if pid not in stopped_pids
+        stopped_pids = valid_stop_request_data_single_host_stop_level_process_single_process["target_hosts"][
+            test_hostname
         ]
+        remaining_pids = [pid for pid in expected_initial_pids if pid not in stopped_pids]
 
         # Verify remaining PIDs in the command
         command_pids = profiling_command["combined_config"]["pids"]
@@ -1579,9 +1373,7 @@ class TestProfileRequestIntegration:
             assert pid in command_pids, f"Remaining PID {pid} not found in command"
 
         for pid in stopped_pids:
-            assert (
-                pid not in command_pids
-            ), f"Stopped PID {pid} should not be in command"
+            assert pid not in command_pids, f"Stopped PID {pid} should not be in command"
 
         print(f"✅ Resulting start command has correct remaining PIDs: {command_pids}")
         print(
@@ -1591,6 +1383,7 @@ class TestProfileRequestIntegration:
         # Step 7: Acknowledge the resulting command
         print("🔄 Step 7: Acknowledging resulting command...")
         final_ack_heartbeat = valid_heartbeat_data.copy()
+        assert resulting_command is not None, "resulting_command is None, cannot access 'command_id'"
         final_ack_heartbeat["last_command_id"] = resulting_command["command_id"]
 
         final_ack_response = send_heartbeat_and_verify(
@@ -1601,9 +1394,7 @@ class TestProfileRequestIntegration:
             expected_command_present=False,
         )
 
-        assert (
-            final_ack_response is None
-        ), "Should not receive command after final acknowledgment"
+        assert final_ack_response is None, "Should not receive command after final acknowledgment"
 
         print(
             f"✅ End-to-end differential PID management test passed: Started PIDs {expected_initial_pids}, stopped PIDs {stopped_pids}, remaining PIDs {remaining_pids} continue profiling"
@@ -1614,12 +1405,8 @@ class TestProfileRequestIntegration:
         self,
         profile_request_url: str,
         heartbeat_url: str,
-        valid_start_request_data_single_host_stop_level_process_multi_process: Dict[
-            str, Any
-        ],
-        valid_stop_request_data_single_host_stop_level_process_single_process: Dict[
-            str, Any
-        ],
+        valid_start_request_data_single_host_stop_level_process_multi_process: Dict[str, Any],
+        valid_stop_request_data_single_host_stop_level_process_single_process: Dict[str, Any],
         valid_heartbeat_data: Dict[str, Any],
         credentials: Dict[str, Any],
         postgres_connection,
@@ -1643,9 +1430,7 @@ class TestProfileRequestIntegration:
         start_request_id = start_result["request_id"]
 
         # Verify start request in database
-        db_start_request = get_profiling_request_from_db(
-            postgres_connection, start_request_id
-        )
+        db_start_request = get_profiling_request_from_db(postgres_connection, start_request_id)
         assert db_start_request is not None
         assert db_start_request["request_type"] == "start"
         assert db_start_request["target_hostnames"] == [test_hostname]
@@ -1664,6 +1449,7 @@ class TestProfileRequestIntegration:
 
         # Acknowledge initial command
         ack_heartbeat = valid_heartbeat_data.copy()
+        assert initial_command is not None, "Expected to receive initial command via heartbeat"
         ack_heartbeat["last_command_id"] = initial_command["command_id"]
         send_heartbeat_and_verify(
             heartbeat_url,
@@ -1691,17 +1477,13 @@ class TestProfileRequestIntegration:
         print("🔍 Step 4: Verifying database consistency...")
 
         # Verify stop request in database
-        db_stop_request = get_profiling_request_from_db(
-            postgres_connection, stop_request_id
-        )
+        db_stop_request = get_profiling_request_from_db(postgres_connection, stop_request_id)
         assert db_stop_request is not None
         assert db_stop_request["request_type"] == "stop"
         assert db_stop_request["target_hostnames"] == [test_hostname]
 
         # Verify ProfilingCommands table has correct entries
-        db_commands = get_profiling_commands_from_db(
-            postgres_connection, test_service_name, test_hostname
-        )
+        db_commands = get_profiling_commands_from_db(postgres_connection, test_service_name, test_hostname)
 
         # Should have at least one command entry for the resulting state
         assert len(db_commands) >= 1, "No commands found in database"
@@ -1710,9 +1492,7 @@ class TestProfileRequestIntegration:
         most_recent_command = db_commands[0]  # Commands are ordered by created_at DESC
 
         # Step 5: Get the resulting command via heartbeat and verify database consistency
-        print(
-            "🔄 Step 5: Getting resulting command and verifying database consistency..."
-        )
+        print("🔄 Step 5: Getting resulting command and verifying database consistency...")
         resulting_command = send_heartbeat_and_verify(
             heartbeat_url,
             valid_heartbeat_data,
@@ -1722,36 +1502,25 @@ class TestProfileRequestIntegration:
         )
 
         # Verify command consistency between database and heartbeat response
+        assert resulting_command is not None, "Expected to receive resulting command via heartbeat"
         assert resulting_command["command_id"] == most_recent_command["command_id"]
-        assert (
-            resulting_command["profiling_command"]["command_type"]
-            == most_recent_command["command_type"]
-        )
+        assert resulting_command["profiling_command"]["command_type"] == most_recent_command["command_type"]
 
         # Verify PID consistency
-        heartbeat_pids = resulting_command["profiling_command"]["combined_config"][
-            "pids"
-        ]
+        assert resulting_command is not None, "resulting_command is None, cannot access 'profiling_command'"
+        heartbeat_pids = resulting_command["profiling_command"]["combined_config"]["pids"]
         db_pids = most_recent_command["combined_config"]["pids"]
 
-        assert (
-            heartbeat_pids == db_pids
-        ), f"PID mismatch: heartbeat={heartbeat_pids}, database={db_pids}"
+        assert heartbeat_pids == db_pids, f"PID mismatch: heartbeat={heartbeat_pids}, database={db_pids}"
 
         # Calculate and verify expected remaining PIDs
-        initial_pids = (
-            valid_start_request_data_single_host_stop_level_process_multi_process[
-                "target_hosts"
-            ][test_hostname]
-        )
-        stopped_pids = (
-            valid_stop_request_data_single_host_stop_level_process_single_process[
-                "target_hosts"
-            ][test_hostname]
-        )
-        expected_remaining_pids = [
-            pid for pid in initial_pids if pid not in stopped_pids
+        initial_pids = valid_start_request_data_single_host_stop_level_process_multi_process["target_hosts"][
+            test_hostname
         ]
+        stopped_pids = valid_stop_request_data_single_host_stop_level_process_single_process["target_hosts"][
+            test_hostname
+        ]
+        expected_remaining_pids = [pid for pid in initial_pids if pid not in stopped_pids]
 
         assert set(heartbeat_pids) == set(
             expected_remaining_pids
@@ -1759,14 +1528,10 @@ class TestProfileRequestIntegration:
 
         # Step 6: Verify HostHeartbeats table entries
         print("🔍 Step 6: Verifying heartbeat history in database...")
-        heartbeat_entries = get_host_heartbeats_from_db(
-            postgres_connection, test_hostname, test_service_name
-        )
+        heartbeat_entries = get_host_heartbeats_from_db(postgres_connection, test_hostname, test_service_name)
 
         # Should have multiple heartbeat entries from our test
-        assert (
-            len(heartbeat_entries) == 1
-        ), f"Expected one heartbeat entry, got {len(heartbeat_entries)}"
+        assert len(heartbeat_entries) == 1, f"Expected one heartbeat entry, got {len(heartbeat_entries)}"
 
         # Verify latest heartbeat entry
         latest_heartbeat = heartbeat_entries[0]
@@ -1776,6 +1541,7 @@ class TestProfileRequestIntegration:
 
         # Final acknowledgment
         final_ack_heartbeat = valid_heartbeat_data.copy()
+        assert resulting_command is not None, "resulting_command is None, cannot access 'command_id'"
         final_ack_heartbeat["last_command_id"] = resulting_command["command_id"]
         send_heartbeat_and_verify(
             heartbeat_url,
@@ -1788,9 +1554,7 @@ class TestProfileRequestIntegration:
         print(
             "✅ Database consistency test passed: All database tables (ProfilingRequests, ProfilingCommands, HostHeartbeats) maintain consistency throughout differential PID management workflow"
         )
-        print(
-            f"🎯 Verified workflow: Start {initial_pids} → Stop {stopped_pids} → Continue {expected_remaining_pids}"
-        )
+        print(f"🎯 Verified workflow: Start {initial_pids} → Stop {stopped_pids} → Continue {expected_remaining_pids}")
 
     @pytest.mark.order(9)
     def test_start_profiling_then_update_frequency_verify_command_update(
@@ -1808,9 +1572,7 @@ class TestProfileRequestIntegration:
 
         # Step 1: Create initial profiling request
         print("🚀 Step 1: Creating initial profiling request...")
-        initial_request_data = (
-            valid_start_request_data_single_host_stop_level_host.copy()
-        )
+        initial_request_data = valid_start_request_data_single_host_stop_level_host.copy()
         initial_frequency = initial_request_data["frequency"]
 
         initial_response = requests.post(
@@ -1828,9 +1590,7 @@ class TestProfileRequestIntegration:
 
         initial_request_id = initial_result["request_id"]
 
-        print(
-            f"✅ Initial profiling request created: {initial_request_id} with frequency {initial_frequency}"
-        )
+        print(f"✅ Initial profiling request created: {initial_request_id} with frequency {initial_frequency}")
 
         # Step 2: Send heartbeat to get the initial command
         print("🔄 Step 2: Retrieving initial profiling command...")
@@ -1844,9 +1604,7 @@ class TestProfileRequestIntegration:
 
         # Verify initial command has the original frequency
         assert initial_command is not None, "Expected to receive initial command"
-        initial_cmd_frequency = initial_command["profiling_command"]["combined_config"][
-            "frequency"
-        ]
+        initial_cmd_frequency = initial_command["profiling_command"]["combined_config"]["frequency"]
         assert (
             initial_cmd_frequency == initial_frequency
         ), f"Expected initial frequency {initial_frequency}, got {initial_cmd_frequency}"
@@ -1870,9 +1628,7 @@ class TestProfileRequestIntegration:
         print("✅ Initial command acknowledged successfully")
 
         # Step 4: Create updated profiling request with different frequency
-        print(
-            "🔄 Step 4: Creating updated profiling request with different frequency..."
-        )
+        print("🔄 Step 4: Creating updated profiling request with different frequency...")
         updated_request_data = initial_request_data.copy()
         updated_frequency = initial_frequency + 5  # Change frequency by adding 5
         updated_request_data["frequency"] = updated_frequency
@@ -1893,9 +1649,7 @@ class TestProfileRequestIntegration:
         updated_request_id = updated_result["request_id"]
         updated_command_ids = updated_result["command_ids"]
 
-        print(
-            f"✅ Updated profiling request created: {updated_request_id} with frequency {updated_frequency}"
-        )
+        print(f"✅ Updated profiling request created: {updated_request_id} with frequency {updated_frequency}")
 
         # Step 5: Send heartbeat to get the updated command
         print("🔄 Step 5: Retrieving updated profiling command...")
@@ -1923,44 +1677,28 @@ class TestProfileRequestIntegration:
 
         # Verify other configuration remains the same
         assert (
-            profiling_command["combined_config"]["duration"]
-            == initial_request_data["duration"]
+            profiling_command["combined_config"]["duration"] == initial_request_data["duration"]
         ), "Duration should remain unchanged"
         assert (
-            profiling_command["combined_config"]["profiling_mode"]
-            == initial_request_data["profiling_mode"]
+            profiling_command["combined_config"]["profiling_mode"] == initial_request_data["profiling_mode"]
         ), "Profiling mode should remain unchanged"
 
         print(f"✅ Updated command received with frequency: {command_frequency}")
-        print(
-            f"🎯 Successfully verified frequency update: {initial_frequency} → {updated_frequency}"
-        )
+        print(f"🎯 Successfully verified frequency update: {initial_frequency} → {updated_frequency}")
 
         # Step 7: Verify database consistency
         print("🔍 Step 7: Verifying database consistency...")
 
         # Verify both requests exist in database
-        db_initial_request = get_profiling_request_from_db(
-            postgres_connection, initial_request_id
-        )
-        db_updated_request = get_profiling_request_from_db(
-            postgres_connection, updated_request_id
-        )
+        db_initial_request = get_profiling_request_from_db(postgres_connection, initial_request_id)
+        db_updated_request = get_profiling_request_from_db(postgres_connection, updated_request_id)
 
-        assert (
-            db_initial_request is not None
-        ), "Initial request should exist in database"
-        assert (
-            db_updated_request is not None
-        ), "Updated request should exist in database"
+        assert db_initial_request is not None, "Initial request should exist in database"
+        assert db_updated_request is not None, "Updated request should exist in database"
 
         # Verify frequencies in database
-        assert (
-            db_initial_request["frequency"] == initial_frequency
-        ), "Initial request frequency mismatch in database"
-        assert (
-            db_updated_request["frequency"] == updated_frequency
-        ), "Updated request frequency mismatch in database"
+        assert db_initial_request["frequency"] == initial_frequency, "Initial request frequency mismatch in database"
+        assert db_updated_request["frequency"] == updated_frequency, "Updated request frequency mismatch in database"
 
         # Verify the command in database has the updated frequency
         db_commands = get_profiling_commands_from_db(
@@ -1999,9 +1737,7 @@ class TestProfileRequestIntegration:
             expected_command_present=False,
         )
 
-        assert (
-            final_ack_response is None
-        ), "Should not receive command after final acknowledgment"
+        assert final_ack_response is None, "Should not receive command after final acknowledgment"
 
         print(
             f"✅ End-to-end frequency update test passed: Initial frequency {initial_frequency} → Updated frequency {updated_frequency}, command properly updated and delivered"

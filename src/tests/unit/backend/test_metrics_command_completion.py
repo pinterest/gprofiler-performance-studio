@@ -11,10 +11,11 @@ This module contains pytest-based unit tests that validate:
 6. Command status updates and related request updates
 """
 
+import uuid
+from typing import Any, Dict
+
 import pytest
 import requests
-from typing import Dict, Any
-import uuid
 
 
 @pytest.fixture
@@ -54,9 +55,7 @@ class TestCommandCompletionEndpoint:
             verify=False,
         )
 
-        assert (
-            response.status_code == 200
-        ), f"Expected 200, got {response.status_code}: {response.text}"
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
 
         result = response.json()
         assert "success" in result, "Response should contain 'success' field"
@@ -89,9 +88,7 @@ class TestCommandCompletionEndpoint:
             verify=False,
         )
 
-        assert (
-            response.status_code == 200
-        ), f"Expected 200, got {response.status_code}: {response.text}"
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
 
         result = response.json()
         assert result["success"] is True
@@ -301,9 +298,7 @@ class TestCommandCompletionEndpoint:
             verify=False,
         )
 
-        assert (
-            response.status_code == 200
-        ), f"Expected 200, got {response.status_code}: {response.text}"
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
 
     def test_none_values_for_optional_fields(
         self,
@@ -313,9 +308,7 @@ class TestCommandCompletionEndpoint:
     ):
         """Test request with None values for optional fields."""
         completion_data = valid_completion_data.copy()
-        completion_data.update(
-            {"execution_time": None, "error_message": None, "results_path": None}
-        )
+        completion_data.update({"execution_time": None, "error_message": None, "results_path": None})
 
         response = requests.post(
             command_completion_url,
@@ -325,9 +318,7 @@ class TestCommandCompletionEndpoint:
             verify=False,
         )
 
-        assert (
-            response.status_code == 200
-        ), f"Expected 200, got {response.status_code}: {response.text}"
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
 
     def test_none_values_for_required_fields(
         self,
@@ -370,9 +361,7 @@ class TestCommandCompletionEndpoint:
             verify=False,
         )
 
-        assert (
-            response.status_code == 200
-        ), f"Expected 200, got {response.status_code}: {response.text}"
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
 
     def test_long_error_message(
         self,
@@ -382,9 +371,7 @@ class TestCommandCompletionEndpoint:
     ):
         """Test request with very long error message."""
         long_error_request = valid_completion_data.copy()
-        long_error_request.update(
-            {"status": "failed", "error_message": "A" * 1000}  # Very long error message
-        )
+        long_error_request.update({"status": "failed", "error_message": "A" * 1000})  # Very long error message
 
         response = requests.post(
             command_completion_url,
@@ -394,13 +381,9 @@ class TestCommandCompletionEndpoint:
             verify=False,
         )
 
-        assert (
-            response.status_code == 200
-        ), f"Expected 200, got {response.status_code}: {response.text}"
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
 
-    def test_malformed_json(
-        self, command_completion_url: str, credentials: Dict[str, Any]
-    ):
+    def test_malformed_json(self, command_completion_url: str, credentials: Dict[str, Any]):
         """Test request with malformed JSON."""
         response = requests.post(
             command_completion_url,
@@ -415,9 +398,7 @@ class TestCommandCompletionEndpoint:
             422,
         ], f"Expected 400 or 422, got {response.status_code}"
 
-    def test_empty_request_body(
-        self, command_completion_url: str, credentials: Dict[str, Any]
-    ):
+    def test_empty_request_body(self, command_completion_url: str, credentials: Dict[str, Any]):
         """Test request with empty body."""
         response = requests.post(
             command_completion_url,
@@ -452,9 +433,7 @@ class TestCommandCompletionEndpoint:
         )
 
         # Additional fields should be ignored, not cause errors
-        assert (
-            response.status_code == 200
-        ), f"Expected 200, got {response.status_code}: {response.text}"
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
 
     def test_different_status_values(
         self,
@@ -478,9 +457,7 @@ class TestCommandCompletionEndpoint:
                 verify=False,
             )
 
-            assert (
-                response.status_code == 200
-            ), f"Failed with status: {status}, code: {response.status_code}"
+            assert response.status_code == 200, f"Failed with status: {status}, code: {response.status_code}"
 
     def test_results_path_variations(
         self,
@@ -510,9 +487,7 @@ class TestCommandCompletionEndpoint:
                 verify=False,
             )
 
-            assert (
-                response.status_code == 200
-            ), f"Failed with path: {path}, code: {response.status_code}"
+            assert response.status_code == 200, f"Failed with path: {path}, code: {response.status_code}"
 
     def test_command_completion_without_optional_fields(
         self,
@@ -534,9 +509,7 @@ class TestCommandCompletionEndpoint:
             verify=False,
         )
 
-        assert (
-            response.status_code == 200
-        ), f"Expected 200, got {response.status_code}: {response.text}"
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
 
         result = response.json()
         assert result["success"] is True
@@ -606,9 +579,7 @@ class TestCommandCompletionResponseStructure:
 
         for i in range(3):
             completion_data = valid_completion_data.copy()
-            completion_data["command_id"] = str(
-                uuid.uuid4()
-            )  # Unique command ID for each request
+            completion_data["command_id"] = str(uuid.uuid4())  # Unique command ID for each request
 
             response = requests.post(
                 command_completion_url,
@@ -625,18 +596,12 @@ class TestCommandCompletionResponseStructure:
         if len(responses) > 1:
             first_keys = set(responses[0].keys())
             for response_data in responses[1:]:
-                assert (
-                    set(response_data.keys()) == first_keys
-                ), "Response structure should be consistent"
+                assert set(response_data.keys()) == first_keys, "Response structure should be consistent"
 
         # All responses should contain required fields
         for response_data in responses:
-            assert (
-                "success" in response_data
-            ), "All responses should contain 'success' field"
-            assert (
-                "message" in response_data
-            ), "All responses should contain 'message' field"
+            assert "success" in response_data, "All responses should contain 'success' field"
+            assert "message" in response_data, "All responses should contain 'message' field"
 
     def test_error_response_structure(
         self,
