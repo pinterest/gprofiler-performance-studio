@@ -10,9 +10,10 @@ This module contains pytest-based unit tests that validate:
 5. Response structure validation
 """
 
+from typing import Any, Dict
+
 import pytest
 import requests
-from typing import Dict, Any
 
 
 @pytest.fixture
@@ -54,9 +55,7 @@ class TestProfileRequestEndpoint:
             verify=False,
         )
 
-        assert (
-            response.status_code == 200
-        ), f"Expected 200, got {response.status_code}: {response.text}"
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
 
         result = response.json()
         assert "message" in result, "Response should contain 'message' field"
@@ -64,9 +63,7 @@ class TestProfileRequestEndpoint:
         assert "command_ids" in result, "Response should contain 'command_ids' field"
 
         # Validate that IDs are non-empty strings
-        assert (
-            isinstance(result["request_id"], str) and result["request_id"]
-        ), "request_id should be a non-empty string"
+        assert isinstance(result["request_id"], str) and result["request_id"], "request_id should be a non-empty string"
         assert (
             isinstance(result["command_ids"], list) and result["command_ids"]
         ), "command_id should be a non-empty list"
@@ -89,9 +86,7 @@ class TestProfileRequestEndpoint:
             verify=False,
         )
 
-        assert (
-            response.status_code == 200
-        ), f"Expected 200, got {response.status_code}: {response.text}"
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
 
         result = response.json()
         assert "message" in result
@@ -346,9 +341,7 @@ class TestProfileRequestEndpoint:
             verify=False,
         )
 
-        assert (
-            response.status_code == 200
-        ), f"Expected 200, got {response.status_code}: {response.text}"
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
 
         result = response.json()
         assert "request_id" in result
@@ -450,9 +443,7 @@ class TestProfileRequestEndpoint:
             422,
         ], f"Expected 400 or 422, got {response.status_code}"
 
-    def test_malformed_json(
-        self, profile_request_url: str, credentials: Dict[str, Any]
-    ):
+    def test_malformed_json(self, profile_request_url: str, credentials: Dict[str, Any]):
         """Test request with malformed JSON."""
         response = requests.post(
             profile_request_url,
@@ -467,13 +458,9 @@ class TestProfileRequestEndpoint:
             422,
         ], f"Expected 400 or 422, got {response.status_code}"
 
-    def test_empty_request_body(
-        self, profile_request_url: str, credentials: Dict[str, Any]
-    ):
+    def test_empty_request_body(self, profile_request_url: str, credentials: Dict[str, Any]):
         """Test request with empty body."""
-        response = requests.post(
-            profile_request_url, headers=credentials, json={}, timeout=10, verify=False
-        )
+        response = requests.post(profile_request_url, headers=credentials, json={}, timeout=10, verify=False)
 
         assert response.status_code in [
             400,
@@ -561,9 +548,7 @@ class TestProfileRequestResponseStructure:
         if len(responses) > 1:
             first_keys = set(responses[0].keys())
             for response in responses[1:]:
-                assert (
-                    set(response.keys()) == first_keys
-                ), "Response structure should be consistent"
+                assert set(response.json().keys()) == first_keys, "Response structure should be consistent"
 
     def test_unique_identifiers(
         self,
@@ -596,7 +581,5 @@ class TestProfileRequestResponseStructure:
                 request_id_set.add(request_id)
 
                 for command_id in command_ids:
-                    assert (
-                        command_id not in command_id_set
-                    ), "command_id should be unique"
+                    assert command_id not in command_id_set, "command_id should be unique"
                     command_id_set.add(command_id)
