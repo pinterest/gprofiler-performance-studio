@@ -16,10 +16,10 @@
      */
 }
 
+import ProfilingStatusPage from '../components/console/ProfilingStatusPage';
 import InstallationPage from '../components/installation/InstallationPage';
 import OverviewPage from '../components/overview/OverviewPage';
 import WelcomePage from '../components/welcome/WelcomePage';
-import ProfilingStatusPage from '../components/console/ProfilingStatusPage';
 import { PAGES } from '../utils/consts';
 
 export const ROUTES = [

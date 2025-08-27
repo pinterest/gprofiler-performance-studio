@@ -1,6 +1,7 @@
 import argparse
 import os
 import sys
+
 import pytest
 
 TEST_BACKEND = os.getenv("TEST_BACKEND", "True")
@@ -45,9 +46,7 @@ def parse_arguments():
         help="Enable or disable backend tests",
     )
 
-    parser.add_argument(
-        "--test-db", default=TEST_DB, type=bool, help="Enable or disable database tests"
-    )
+    parser.add_argument("--test-db", default=TEST_DB, type=bool, help="Enable or disable database tests")
 
     parser.add_argument(
         "--test-managed-backend",
@@ -64,9 +63,7 @@ def parse_arguments():
     )
 
     # Backend configuration
-    parser.add_argument(
-        "--backend-url", default=BACKEND_URL, help="Backend URL for testing"
-    )
+    parser.add_argument("--backend-url", default=BACKEND_URL, help="Backend URL for testing")
 
     parser.add_argument(
         "--backend-port",
@@ -88,30 +85,18 @@ def parse_arguments():
     )
 
     # PostgreSQL configuration
-    parser.add_argument(
-        "--postgres-user", default=POSTGRES_USER, help="PostgreSQL username"
-    )
+    parser.add_argument("--postgres-user", default=POSTGRES_USER, help="PostgreSQL username")
 
-    parser.add_argument(
-        "--postgres-password", default=POSTGRES_PASSWORD, help="PostgreSQL password"
-    )
+    parser.add_argument("--postgres-password", default=POSTGRES_PASSWORD, help="PostgreSQL password")
 
-    parser.add_argument(
-        "--postgres-db", default=POSTGRES_DB, help="PostgreSQL database name"
-    )
+    parser.add_argument("--postgres-db", default=POSTGRES_DB, help="PostgreSQL database name")
 
-    parser.add_argument(
-        "--postgres-port", type=int, default=POSTGRES_PORT, help="PostgreSQL port"
-    )
+    parser.add_argument("--postgres-port", type=int, default=POSTGRES_PORT, help="PostgreSQL port")
 
-    parser.add_argument(
-        "--postgres-host", default=POSTGRES_HOST, help="PostgreSQL host"
-    )
+    parser.add_argument("--postgres-host", default=POSTGRES_HOST, help="PostgreSQL host")
 
     # Pytest configuration
-    parser.add_argument(
-        "--test-path", default=".", help="Path to test files or directories"
-    )
+    parser.add_argument("--test-path", default=".", help="Path to test files or directories")
 
     parser.add_argument(
         "--verbose",
@@ -128,17 +113,11 @@ def parse_arguments():
         help="Capture output during test execution",
     )
 
-    parser.add_argument(
-        "--markers", "-m", help="Run tests matching given mark expression"
-    )
+    parser.add_argument("--markers", "-m", help="Run tests matching given mark expression")
 
-    parser.add_argument(
-        "--keyword", "-k", help="Run tests matching given substring expression"
-    )
+    parser.add_argument("--keyword", "-k", help="Run tests matching given substring expression")
 
-    parser.add_argument(
-        "--maxfail", type=int, help="Stop after first num failures or errors"
-    )
+    parser.add_argument("--maxfail", type=int, help="Stop after first num failures or errors")
 
     parser.add_argument(
         "--tb",
@@ -147,17 +126,11 @@ def parse_arguments():
         help="Traceback print mode",
     )
 
-    parser.add_argument(
-        "--junit-xml", help="Create junit-xml style report file at given path"
-    )
+    parser.add_argument("--junit-xml", help="Create junit-xml style report file at given path")
 
-    parser.add_argument(
-        "--html", help="Create html report file at given path (requires pytest-html)"
-    )
+    parser.add_argument("--html", help="Create html report file at given path (requires pytest-html)")
 
-    parser.add_argument(
-        "--extra-args", nargs="*", help="Additional arguments to pass to pytest"
-    )
+    parser.add_argument("--extra-args", nargs="*", help="Additional arguments to pass to pytest")
 
     return parser.parse_args()
 

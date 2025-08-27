@@ -11,10 +11,11 @@ This module contains pytest-based unit tests that validate:
 6. Command delivery through heartbeat responses
 """
 
+from datetime import datetime
+from typing import Any, Dict
+
 import pytest
 import requests
-from typing import Dict, Any
-from datetime import datetime
 
 
 @pytest.fixture
@@ -54,18 +55,14 @@ class TestHeartbeatEndpoint:
             verify=False,
         )
 
-        assert (
-            response.status_code == 200
-        ), f"Expected 200, got {response.status_code}: {response.text}"
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
 
         result = response.json()
         assert "message" in result, "Response should contain 'message' field"
 
         # Check for optional command fields
         if "profiling_command" in result:
-            assert (
-                "command_id" in result
-            ), "Response with command should contain 'command_id' field"
+            assert "command_id" in result, "Response with command should contain 'command_id' field"
 
     def test_heartbeat_with_last_command_id(
         self,
@@ -85,9 +82,7 @@ class TestHeartbeatEndpoint:
             verify=False,
         )
 
-        assert (
-            response.status_code == 200
-        ), f"Expected 200, got {response.status_code}: {response.text}"
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
 
         result = response.json()
         assert "message" in result
@@ -349,9 +344,7 @@ class TestHeartbeatEndpoint:
         )
 
         # Missing timestamp should be handled gracefully
-        assert (
-            response.status_code == 200
-        ), f"Expected 200, got {response.status_code}: {response.text}"
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
 
     def test_ipv6_address(
         self,
@@ -371,9 +364,7 @@ class TestHeartbeatEndpoint:
             verify=False,
         )
 
-        assert (
-            response.status_code == 200
-        ), f"Expected 200, got {response.status_code}: {response.text}"
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
 
     def test_long_hostname(
         self,
@@ -417,9 +408,7 @@ class TestHeartbeatEndpoint:
 
     def test_empty_request_body(self, heartbeat_url: str, credentials: Dict[str, Any]):
         """Test request with empty body."""
-        response = requests.post(
-            heartbeat_url, headers=credentials, json={}, timeout=10, verify=False
-        )
+        response = requests.post(heartbeat_url, headers=credentials, json={}, timeout=10, verify=False)
 
         assert response.status_code in [
             400,
@@ -446,9 +435,7 @@ class TestHeartbeatEndpoint:
         )
 
         # Additional fields should be ignored, not cause errors
-        assert (
-            response.status_code == 200
-        ), f"Expected 200, got {response.status_code}: {response.text}"
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
 
     def test_status_variations(
         self,
@@ -497,9 +484,7 @@ class TestHeartbeatEndpoint:
                 verify=False,
             )
 
-            assert (
-                response.status_code == 200
-            ), f"Heartbeat {i+1} failed: {response.status_code}: {response.text}"
+            assert response.status_code == 200, f"Heartbeat {i+1} failed: {response.status_code}: {response.text}"
 
 
 class TestHeartbeatResponseStructure:
@@ -549,9 +534,7 @@ class TestHeartbeatResponseStructure:
 
         # All successful responses should have at least the message field
         for response_data in responses:
-            assert (
-                "message" in response_data
-            ), "All responses should contain 'message' field"
+            assert "message" in response_data, "All responses should contain 'message' field"
 
     def test_command_response_structure(
         self,
@@ -573,26 +556,18 @@ class TestHeartbeatResponseStructure:
 
         assert "command_id" in result, "Response should contain 'command_id' field"
         if result.get("command_id", None) is not None:
-            assert isinstance(
-                result["command_id"], str
-            ), "command_id should be a string"
+            assert isinstance(result["command_id"], str), "command_id should be a string"
 
-        assert (
-            "profiling_command" in result
-        ), "Response should contain 'profiling_command' field"
+        assert "profiling_command" in result, "Response should contain 'profiling_command' field"
         if result.get("profiling_command", None) is not None:
-            assert isinstance(
-                result["profiling_command"], dict
-            ), "profiling_command should be a dictionary"
+            assert isinstance(result["profiling_command"], dict), "profiling_command should be a dictionary"
 
             # Validate command structure
             command = result["profiling_command"]
             expected_fields = ["command_type"]  # Minimum expected fields
             for field in expected_fields:
                 if field in command:
-                    assert (
-                        command[field] is not None
-                    ), f"Command field {field} should not be None"
+                    assert command[field] is not None, f"Command field {field} should not be None"
 
     def test_heartbeat_idempotency(
         self,
