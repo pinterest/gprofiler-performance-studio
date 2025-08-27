@@ -210,3 +210,4 @@ class ProfilingHostStatus(BaseModel):
     pids: str
     command_type: str
     profiling_status: str
+    heartbeat_timestamp: datetime
