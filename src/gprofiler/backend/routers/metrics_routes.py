@@ -644,14 +644,16 @@ def get_profiling_host_status():
         else:
             profiling_status = "stopped"
             command_type = "N/A"
-        results.append(ProfilingHostStatus(
-            id=host.get("id", 0),
-            service_name=service_name,
-            hostname=hostname,
-            ip_address=ip_address,
-            pids=pids,
-            command_type=command_type,
-            profiling_status=profiling_status,
-            heartbeat_timestamp=host.get("heartbeat_timestamp")
-        ))
+        results.append(
+            ProfilingHostStatus(
+                id=host.get("id", 0),
+                service_name=service_name,
+                hostname=hostname,
+                ip_address=ip_address,
+                pids=pids,
+                command_type=command_type,
+                profiling_status=profiling_status,
+                heartbeat_timestamp=host.get("heartbeat_timestamp"),
+            )
+        )
     return results

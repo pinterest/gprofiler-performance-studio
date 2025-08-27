@@ -1,192 +1,186 @@
-import React, { useState, useEffect } from 'react';
-import MuiTable from '../common/dataDisplay/table/MuiTable';
-import { Button, Box, Typography, duration } from '@mui/material';
+import { Box, Button, duration, Typography } from '@mui/material';
 import TextField from '@mui/material/TextField';
-import PageHeader from '../common/layout/PageHeader';
+import React, { useEffect, useState } from 'react';
+
 import { formatDate, TIME_FORMATS } from '../../utils/datetimesUtils';
+import MuiTable from '../common/dataDisplay/table/MuiTable';
+import PageHeader from '../common/layout/PageHeader';
 
 const columns = [
-  { field: 'service', headerName: 'service name', flex: 1 },
-  { field: 'host', headerName: 'host name', flex: 1 },
-  { field: 'pids', headerName: 'pids (if profiled)', flex: 1 },
-  { field: 'ip', headerName: 'IP', flex: 1 },
-  { field: 'commandType', headerName: 'command type', flex: 1 },
-  { field: 'status', headerName: 'profiling status', flex: 1 },
-  { 
-    field: 'heartbeat_timestamp', 
-    headerName: 'last heartbeat', 
-    flex: 1,
-    renderCell: (params) => {
-      if (!params.value) return 'N/A';
-      try {
-        // The backend sends UTC timestamp without 'Z' suffix, so we need to explicitly treat it as UTC
-        let utcTimestamp = params.value;
-        if (!utcTimestamp.endsWith('Z') && !utcTimestamp.includes('+') && !utcTimestamp.includes('-', 10)) {
-          utcTimestamp += 'Z';
-        }
-        
-        const utcDate = new Date(utcTimestamp);
-        // Convert to user's local timezone
-        const localDateTimeString = utcDate.toLocaleString(navigator.language, {
-          day: '2-digit',
-          month: '2-digit', 
-          year: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          hour12: true
-        });
-        return localDateTimeString;
-      } catch (error) {
-        return 'Invalid date';
-      }
+    { field: 'service', headerName: 'service name', flex: 1 },
+    { field: 'host', headerName: 'host name', flex: 1 },
+    { field: 'pids', headerName: 'pids (if profiled)', flex: 1 },
+    { field: 'ip', headerName: 'IP', flex: 1 },
+    { field: 'commandType', headerName: 'command type', flex: 1 },
+    { field: 'status', headerName: 'profiling status', flex: 1 },
+    {
+        field: 'heartbeat_timestamp',
+        headerName: 'last heartbeat',
+        flex: 1,
+        renderCell: (params) => {
+            if (!params.value) return 'N/A';
+            try {
+                // The backend sends UTC timestamp without 'Z' suffix, so we need to explicitly treat it as UTC
+                let utcTimestamp = params.value;
+                if (!utcTimestamp.endsWith('Z') && !utcTimestamp.includes('+') && !utcTimestamp.includes('-', 10)) {
+                    utcTimestamp += 'Z';
+                }
+
+                const utcDate = new Date(utcTimestamp);
+                // Convert to user's local timezone
+                const localDateTimeString = utcDate.toLocaleString(navigator.language, {
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    hour12: true,
+                });
+                return localDateTimeString;
+            } catch (error) {
+                return 'Invalid date';
+            }
+        },
     },
-  },
 ];
 
 const ProfilingStatusPage = () => {
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [selectionModel, setSelectionModel] = useState([]);
-  const [filter, setFilter] = useState('');
+    const [rows, setRows] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [selectionModel, setSelectionModel] = useState([]);
+    const [filter, setFilter] = useState('');
 
-  // Placeholder: Fetch profiling status from backend
-  const fetchProfilingStatus = () => {
-    setLoading(true);
-    fetch('/api/metrics/profiling/host_status')
-      .then(res => res.json())
-      .then(data => {
-        setRows(
-          data.map(row => ({
-            id: row.id,
-            service: row.service_name,
-            host: row.hostname,
-            pids: row.pids,
-            ip: row.ip_address,
-            commandType: row.command_type || 'N/A',
-            status: row.profiling_status,
-            heartbeat_timestamp: row.heartbeat_timestamp,
-          }))
-        );
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  };
+    // Placeholder: Fetch profiling status from backend
+    const fetchProfilingStatus = () => {
+        setLoading(true);
+        fetch('/api/metrics/profiling/host_status')
+            .then((res) => res.json())
+            .then((data) => {
+                setRows(
+                    data.map((row) => ({
+                        id: row.id,
+                        service: row.service_name,
+                        host: row.hostname,
+                        pids: row.pids,
+                        ip: row.ip_address,
+                        commandType: row.command_type || 'N/A',
+                        status: row.profiling_status,
+                        heartbeat_timestamp: row.heartbeat_timestamp,
+                    }))
+                );
+                setLoading(false);
+            })
+            .catch(() => setLoading(false));
+    };
 
-  useEffect(() => {
-    fetchProfilingStatus();
-  }, []);
+    useEffect(() => {
+        fetchProfilingStatus();
+    }, []);
 
-  // Bulk Start/Stop handlers
-  function handleBulkAction(action) {
-    const selectedRows = rows.filter(row => selectionModel.includes(row.id));
-    
-    // Group selected rows by service name
-    const serviceGroups = selectedRows.reduce((groups, row) => {
-      if (!groups[row.service]) {
-        groups[row.service] = [];
-      }
-      groups[row.service].push(row.host);
-      return groups;
-    }, {});
+    // Bulk Start/Stop handlers
+    function handleBulkAction(action) {
+        const selectedRows = rows.filter((row) => selectionModel.includes(row.id));
 
-    // Create one request per service with all hosts for that service
-    const requests = Object.entries(serviceGroups).map(([serviceName, hosts]) => {
-      const target_host = hosts.reduce((hostObj, host) => {
-        hostObj[host] = null;
-        return hostObj;
-      }, {});
+        // Group selected rows by service name
+        const serviceGroups = selectedRows.reduce((groups, row) => {
+            if (!groups[row.service]) {
+                groups[row.service] = [];
+            }
+            groups[row.service].push(row.host);
+            return groups;
+        }, {});
 
-      const submitData = {
-        service_name: serviceName,
-        request_type: action,
-        continuous: true,
-        duration: 60,           // Default duration, can't be adjusted yet
-        frequency: 11,          // Default frequency, can't be adjusted yet
-        profiling_mode: 'cpu',  // Default profiling mode, can't be adjusted yet
-        target_hosts: target_host,
-      };
+        // Create one request per service with all hosts for that service
+        const requests = Object.entries(serviceGroups).map(([serviceName, hosts]) => {
+            const target_host = hosts.reduce((hostObj, host) => {
+                hostObj[host] = null;
+                return hostObj;
+            }, {});
 
-      // append 'stop_level: host' when action is 'stop'
-      if (action === 'stop') {
-        submitData.stop_level = 'host';
-      }
+            const submitData = {
+                service_name: serviceName,
+                request_type: action,
+                continuous: true,
+                duration: 60, // Default duration, can't be adjusted yet
+                frequency: 11, // Default frequency, can't be adjusted yet
+                profiling_mode: 'cpu', // Default profiling mode, can't be adjusted yet
+                target_hosts: target_host,
+            };
 
-      return fetch('/api/metrics/profile_request', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(submitData),
-      });
-    });
+            // append 'stop_level: host' when action is 'stop'
+            if (action === 'stop') {
+                submitData.stop_level = 'host';
+            }
 
-    // Wait for all requests to finish before refreshing
-    Promise.all(requests).then(() => {
-      fetchProfilingStatus();
-      setSelectionModel([]); // Clear all checkboxes after API requests complete
-    });
-  }
+            return fetch('/api/metrics/profile_request', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(submitData),
+            });
+        });
 
-  const filteredRows = filter
-    ? rows.filter(row => row.service.toLowerCase().includes(filter.toLowerCase()))
-    : rows;
+        // Wait for all requests to finish before refreshing
+        Promise.all(requests).then(() => {
+            fetchProfilingStatus();
+            setSelectionModel([]); // Clear all checkboxes after API requests complete
+        });
+    }
 
-  return (
-    <>
-    <PageHeader
-      title='Dynamic Profiling'
-    />
-    <Box sx={{ p: 3 }}>
-      <Box sx={{ mb: 2, display: 'flex', gap: 2, alignItems: 'center' }}>
-        <TextField
-          label="Filter by service name"
-          variant="outlined"
-          size="small"
-          value={filter}
-          onChange={e => setFilter(e.target.value)}
-          sx={{ minWidth: 250 }}
-        />
-        <Button
-          variant="contained"
-          color="success"
-          size="small"
-          onClick={() => handleBulkAction('start')}
-          disabled={selectionModel.length === 0}
-        >
-          Start
-        </Button>
-        <Button
-          variant="contained"
-          color="error"
-          size="small"
-          onClick={() => handleBulkAction('stop')}
-          disabled={selectionModel.length === 0}
-        >
-          Stop
-        </Button>
-        <Button
-          variant="outlined"
-          color="primary"
-          size="small"
-          onClick={fetchProfilingStatus}
-          disabled={loading}
-        >
-          Refresh
-        </Button>
-      </Box>
-      <MuiTable
-        columns={columns}
-        data={filteredRows}
-        isLoading={loading}
-        pageSize={50}
-        rowHeight={50}
-        autoPageSize
-        checkboxSelection
-        onSelectionModelChange={setSelectionModel}
-        selectionModel={selectionModel}
-      />
-    </Box>
-    </>
-  );
+    const filteredRows = filter ? rows.filter((row) => row.service.toLowerCase().includes(filter.toLowerCase())) : rows;
+
+    return (
+        <>
+            <PageHeader title='Dynamic Profiling' />
+            <Box sx={{ p: 3 }}>
+                <Box sx={{ mb: 2, display: 'flex', gap: 2, alignItems: 'center' }}>
+                    <TextField
+                        label='Filter by service name'
+                        variant='outlined'
+                        size='small'
+                        value={filter}
+                        onChange={(e) => setFilter(e.target.value)}
+                        sx={{ minWidth: 250 }}
+                    />
+                    <Button
+                        variant='contained'
+                        color='success'
+                        size='small'
+                        onClick={() => handleBulkAction('start')}
+                        disabled={selectionModel.length === 0}>
+                        Start
+                    </Button>
+                    <Button
+                        variant='contained'
+                        color='error'
+                        size='small'
+                        onClick={() => handleBulkAction('stop')}
+                        disabled={selectionModel.length === 0}>
+                        Stop
+                    </Button>
+                    <Button
+                        variant='outlined'
+                        color='primary'
+                        size='small'
+                        onClick={fetchProfilingStatus}
+                        disabled={loading}>
+                        Refresh
+                    </Button>
+                </Box>
+                <MuiTable
+                    columns={columns}
+                    data={filteredRows}
+                    isLoading={loading}
+                    pageSize={50}
+                    rowHeight={50}
+                    autoPageSize
+                    checkboxSelection
+                    onSelectionModelChange={setSelectionModel}
+                    selectionModel={selectionModel}
+                />
+            </Box>
+        </>
+    );
 };
 
 export default ProfilingStatusPage;
