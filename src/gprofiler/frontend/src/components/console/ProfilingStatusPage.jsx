@@ -3,6 +3,7 @@ import MuiTable from '../common/dataDisplay/table/MuiTable';
 import { Button, Box, Typography, duration } from '@mui/material';
 import TextField from '@mui/material/TextField';
 import PageHeader from '../common/layout/PageHeader';
+import { formatDate, TIME_FORMATS } from '../../utils/datetimesUtils';
 
 const columns = [
   { field: 'service', headerName: 'service name', flex: 1 },
@@ -11,6 +12,36 @@ const columns = [
   { field: 'ip', headerName: 'IP', flex: 1 },
   { field: 'commandType', headerName: 'command type', flex: 1 },
   { field: 'status', headerName: 'profiling status', flex: 1 },
+  { 
+    field: 'heartbeat_timestamp', 
+    headerName: 'last heartbeat', 
+    flex: 1,
+    renderCell: (params) => {
+      if (!params.value) return 'N/A';
+      try {
+        // The backend sends UTC timestamp without 'Z' suffix, so we need to explicitly treat it as UTC
+        let utcTimestamp = params.value;
+        if (!utcTimestamp.endsWith('Z') && !utcTimestamp.includes('+') && !utcTimestamp.includes('-', 10)) {
+          utcTimestamp += 'Z';
+        }
+        
+        const utcDate = new Date(utcTimestamp);
+        // Convert to user's local timezone
+        const localDateTimeString = utcDate.toLocaleString(navigator.language, {
+          day: '2-digit',
+          month: '2-digit', 
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: true
+        });
+        return localDateTimeString;
+      } catch (error) {
+        return 'Invalid date';
+      }
+    },
+  },
 ];
 
 const ProfilingStatusPage = () => {
@@ -34,6 +65,7 @@ const ProfilingStatusPage = () => {
             ip: row.ip_address,
             commandType: row.command_type || 'N/A',
             status: row.profiling_status,
+            heartbeat_timestamp: row.heartbeat_timestamp,
           }))
         );
         setLoading(false);
@@ -118,7 +150,7 @@ const ProfilingStatusPage = () => {
           color="success"
           size="small"
           onClick={() => handleBulkAction('start')}
-          disabled={selectionModel.length === 0 || filteredRows.filter (r => selectionModel.includes(r.id) && (r.commandType == 'N/A' || (r.commandType === 'stop' && r.status === 'completed'))).length === 0}
+          disabled={selectionModel.length === 0}
         >
           Start
         </Button>
@@ -127,7 +159,7 @@ const ProfilingStatusPage = () => {
           color="error"
           size="small"
           onClick={() => handleBulkAction('stop')}
-          disabled={selectionModel.length === 0 || filteredRows.filter(r => selectionModel.includes(r.id) && r.commandType === 'start' && r.status === 'completed').length === 0}
+          disabled={selectionModel.length === 0}
         >
           Stop
         </Button>
