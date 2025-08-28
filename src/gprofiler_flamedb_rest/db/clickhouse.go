@@ -212,10 +212,15 @@ func GetTimeRanges(start time.Time, end time.Time, resolution string) map[string
 	fullRange := makeTimeRange(start, trimEndTime(end))
 	now := time.Now().UTC()
 	
-	// Retention thresholds based on schema TTL settings
-	rawRetentionInterval := time.Hour * 24 * 7     // 7 days (raw data TTL)
-	hourlyRetentionInterval := time.Hour * 24 * 90 // 90 days (hourly data TTL)
-	dailyThreshold := time.Hour * 24 * 90          // 90 days (switch to daily aggregation)
+	// Retention thresholds from configurable settings
+	rawRetentionInterval := time.Hour * 24 * time.Duration(config.RawRetentionDays)       // Raw data TTL
+	hourlyRetentionInterval := time.Hour * 24 * time.Duration(config.HourlyRetentionDays) // Hourly data TTL
+	dailyThreshold := time.Hour * 24 * time.Duration(config.HourlyRetentionDays)          // Switch to daily aggregation
+	
+	// Debug logging for table selection
+	dataAge := now.Sub(start)
+	log.Printf("📊 Table Selection: range=%v, delta=%v, age=%v, resolution=%s", 
+		start.Format("2006-01-02"), delta, dataAge, resolution)
 	
 	// For very old data (>90 days), use daily aggregation with day boundaries
 	if now.Sub(start) >= dailyThreshold {
@@ -261,6 +266,14 @@ func GetTimeRanges(start time.Time, end time.Time, resolution string) map[string
 			sliceMultiRange(result, start, end)
 		} else {
 			result["raw"] = append(result["raw"], fullRange)
+		}
+	}
+
+	// Log final table selection
+	log.Printf("📋 Final table selection:")
+	for table, ranges := range result {
+		if len(ranges) > 0 {
+			log.Printf("  %s: %d ranges", table, len(ranges))
 		}
 	}
 
@@ -376,6 +389,7 @@ func (c *ClickHouseClient) GetTopFrames(ctx context.Context, params common.Flame
 		params.K8SObject, filterQuery)
 
 	for table, timeRanges := range allTimeRanges {
+		log.Printf("🔍 Service %d: Querying table type '%s' with %d time ranges", params.ServiceId, table, len(timeRanges))
 		for _, timeRange := range timeRanges {
 			wg.Add(1)
 			tableNew := getTableName(table, tablePrefix)
@@ -388,8 +402,12 @@ func (c *ClickHouseClient) GetTopFrames(ctx context.Context, params common.Flame
 				GROUP BY CallStackHash
 				ORDER BY SumNumSamples DESC
 				LIMIT %d`, sTable, params.ServiceId, sStart, sEnd, conditions, params.StacksNum)
-				log.Printf("SELECT query: %s", query)
+				
+				queryStart := time.Now()
+				log.Printf("🚀 Service %d: Starting query on %s (%s to %s)", params.ServiceId, sTable, sStart, sEnd)
 				rows, err := c.client.Query(query)
+				queryDuration := time.Since(queryStart)
+				
 				if err == nil {
 					defer rows.Close()
 					frames := make(map[uint64]Frame)
@@ -400,9 +418,9 @@ func (c *ClickHouseClient) GetTopFrames(ctx context.Context, params common.Flame
 						minValue = 0
 					}
 					graph.updateFrames(frames, minValue)
-					log.Printf("Fetch %d rows", nRows)
+					log.Printf("✅ Service %d: Query completed on %s in %v - fetched %d rows", params.ServiceId, sTable, queryDuration, nRows)
 				} else {
-					log.Println(err)
+					log.Printf("❌ Service %d: Query failed on %s after %v: %v", params.ServiceId, sTable, queryDuration, err)
 				}
 				mutex.Lock()
 				queryErrors = append(queryErrors, err)
