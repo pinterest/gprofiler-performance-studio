@@ -210,11 +210,45 @@ func GetTimeRanges(start time.Time, end time.Time, resolution string) map[string
 
 	delta := end.Sub(start)
 	fullRange := makeTimeRange(start, trimEndTime(end))
-	retentionInterval := time.Hour * 24 * 14
 	now := time.Now().UTC()
-	if now.Sub(start) >= retentionInterval {
+	
+	// Retention thresholds based on schema TTL settings
+	rawRetentionInterval := time.Hour * 24 * 7     // 7 days (raw data TTL)
+	hourlyRetentionInterval := time.Hour * 24 * 90 // 90 days (hourly data TTL)
+	dailyThreshold := time.Hour * 24 * 90          // 90 days (switch to daily aggregation)
+	
+	// For very old data (>90 days), use daily aggregation with day boundaries
+	if now.Sub(start) >= dailyThreshold {
 		result["1day_historical"] = append(result["1day_historical"], makeTimeRange(makeStartOfDay(start), makeEndOfDay(end)))
 		return result
+	}
+	
+	// For 7-90 day old data, raw is expired but hourly is available
+	if now.Sub(start) >= rawRetentionInterval && now.Sub(start) < hourlyRetentionInterval {
+		switch resolution {
+		case "hour", "day":
+			// Keep requested resolution for older data
+			result[tableMapping[resolution]] = append(result[tableMapping[resolution]], fullRange)
+			return result
+		case "raw":
+			// Force raw requests to use hourly when raw data is expired
+			result["1hour"] = append(result["1hour"], fullRange)
+			return result
+		case "multi":
+			if delta.Seconds() > time.Hour.Seconds() {
+				// For multi-hour ranges, use sliceMultiRange but replace raw with hourly
+				sliceMultiRange(result, start, end)
+				// Move any raw ranges to hourly since raw data is expired
+				if len(result["raw"]) > 0 {
+					result["1hour"] = append(result["1hour"], result["raw"]...)
+					result["raw"] = make([]TimeRange, 0)
+				}
+			} else {
+				// For single-hour ranges, use hourly directly
+				result["1hour"] = append(result["1hour"], fullRange)
+			}
+			return result
+		}
 	}
 
 	switch resolution {
