@@ -477,11 +477,18 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                     # 4. Mark related profiling requests as assigned
                     if success and current_command.get("request_ids"):
                         request_ids = current_command["request_ids"]
-                        # Handle both string and list formats from database
-                        if isinstance(request_ids, str):
+                        # Parse the request_ids array if it exists
+                        if request_ids:
                             try:
-                                request_ids = json.loads(request_ids) if request_ids.startswith("[") else [request_ids]
-                            except json.JSONDecodeError:
+                                if isinstance(request_ids, str):
+                                    # PostgreSQL array format: {uuid1,uuid2,uuid3}
+                                    # Remove braces and split by comma
+                                    request_ids_str = request_ids.strip("{}")
+                                    if request_ids_str:
+                                        request_ids = [uuid.strip() for uuid in request_ids_str.split(",")]
+                                    else:
+                                        request_ids = []
+                            except Exception:
                                 logger.warning(f"Failed to parse request_ids for command {current_command['command_id']}")
                                 request_ids = []
 
