@@ -424,13 +424,13 @@ def receive_heartbeat(
     merge_pids: bool = Query(False, alias="mergePids")
 ):
     """
-    Receive heartbeat from host and check for pending profiling requests.
+    Receive heartbeat from host and check for current profiling requests.
 
     This endpoint:
     1. Receives heartbeat information from hosts (IP, hostname, service, last command)
     2. Updates host status in PostgreSQL DB
-    3. Checks for pending profiling requests for this host/service
-    4. Returns new profiling request if available and not already executed
+    3. Checks for current profiling requests for this host/service
+    4. Returns new profiling request if available
     """
     try:
         # Set timestamp if not provided
@@ -467,47 +467,55 @@ def receive_heartbeat(
                 merge_pids=merge_pids,
             )
 
-            # 2. Check for pending profiling commands for this host/service
-            pending_command = db_manager.get_pending_profiling_command(
+            # 2. Check for current profiling command for this host/service
+            current_command = db_manager.get_current_profiling_command(
                 hostname=heartbeat.hostname,
                 service_name=heartbeat.service_name,
-                exclude_command_id=heartbeat.last_command_id,
             )
 
-            if pending_command:
-                # 3. Mark command as sent and update related request statuses
-                success = db_manager.mark_profiling_command_sent(
-                    command_id=pending_command["command_id"], hostname=heartbeat.hostname
-                )
+            if current_command:
+                success = True
+                if current_command["status"] == "pending":
+                    # 3. Mark command as sent and update related request statuses
+                    success = db_manager.mark_profiling_command_sent(
+                        command_id=current_command["command_id"], hostname=heartbeat.hostname
+                    )
 
-                # 4. Mark related profiling requests as assigned
-                if success and pending_command.get("request_ids"):
-                    request_ids = pending_command["request_ids"]
-                    # Handle both string and list formats from database
-                    if isinstance(request_ids, str):
-                        try:
-                            request_ids = json.loads(request_ids) if request_ids.startswith("[") else [request_ids]
-                        except json.JSONDecodeError:
-                            logger.warning(f"Failed to parse request_ids for command {pending_command['command_id']}")
-                            request_ids = []
+                    # 4. Mark related profiling requests as assigned
+                    if success and current_command.get("request_ids"):
+                        request_ids = current_command["request_ids"]
+                        # Parse the request_ids array if it exists
+                        if request_ids:
+                            try:
+                                if isinstance(request_ids, str):
+                                    # PostgreSQL array format: {uuid1,uuid2,uuid3}
+                                    # Remove braces and split by comma
+                                    request_ids_str = request_ids.strip("{}")
+                                    if request_ids_str:
+                                        request_ids = [uuid.strip() for uuid in request_ids_str.split(",")]
+                                    else:
+                                        request_ids = []
+                            except Exception:
+                                logger.warning(f"Failed to parse request_ids for command {current_command['command_id']}")
+                                request_ids = []
 
-                    for request_id in request_ids:
-                        try:
-                            db_manager.mark_profiling_request_assigned(
-                                request_id=request_id,
-                                command_id=pending_command["command_id"],
-                                hostname=heartbeat.hostname,
-                            )
-                        except Exception as e:
-                            logger.warning(f"Failed to mark request {request_id} as assigned: {e}")
+                        for request_id in request_ids:
+                            try:
+                                db_manager.mark_profiling_request_assigned(
+                                    request_id=request_id,
+                                    command_id=current_command["command_id"],
+                                    hostname=heartbeat.hostname,
+                                )
+                            except Exception as e:
+                                logger.warning(f"Failed to mark request {request_id} as assigned: {e}")
 
                 if success:
                     logger.info(
-                        f"Sending profiling command {pending_command['command_id']} to host {heartbeat.hostname}"
+                        f"Sending profiling command {current_command['command_id']} to host {heartbeat.hostname}"
                     )
 
                     # Extract combined_config and ensure it's properly formatted
-                    combined_config = pending_command.get("combined_config", {})
+                    combined_config = current_command.get("combined_config", {})
 
                     # If combined_config is a string (from DB), parse it
                     if isinstance(combined_config, str):
@@ -515,7 +523,7 @@ def receive_heartbeat(
                             combined_config = json.loads(combined_config)
                         except json.JSONDecodeError:
                             logger.warning(
-                                f"Failed to parse combined_config for command {pending_command['command_id']}"
+                                f"Failed to parse combined_config for command {current_command['command_id']}"
                             )
                             combined_config = {}
 
@@ -523,20 +531,20 @@ def receive_heartbeat(
                         success=True,
                         message="Heartbeat received. New profiling command available.",
                         profiling_command={
-                            "command_type": pending_command["command_type"],
+                            "command_type": current_command["command_type"],
                             "combined_config": combined_config,
                         },
-                        command_id=pending_command["command_id"],
+                        command_id=current_command["command_id"],
                     )
                 else:
                     logger.warning(
-                        f"Failed to mark command {pending_command['command_id']} as sent to host {heartbeat.hostname}"
+                        f"Failed to mark command {current_command['command_id']} as sent to host {heartbeat.hostname}"
                     )
 
-            # No pending commands or marking failed
+            # No commands or marking failed
             return HeartbeatResponse(
                 success=True,
-                message="Heartbeat received. No pending profiling commands.",
+                message="Heartbeat received. No profiling commands.",
                 profiling_command=None,
                 command_id=None,
             )
