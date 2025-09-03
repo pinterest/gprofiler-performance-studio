@@ -12,6 +12,7 @@ import {
 } from '@mui/material';
 import TextField from '@mui/material/TextField';
 import React, { useEffect, useState } from 'react';
+
 import { formatDate, TIME_FORMATS } from '../../utils/datetimesUtils';
 import MuiTable from '../common/dataDisplay/table/MuiTable';
 import PageHeader from '../common/layout/PageHeader';
@@ -52,7 +53,7 @@ const ProfilingStatusPage = () => {
     const columns = [
         { field: 'service', headerName: 'service name', flex: 1 },
         { field: 'host', headerName: 'host name', flex: 1 },
-        { field: 'ip', headerName: 'IP', flex: .5 },
+        { field: 'ip', headerName: 'IP', flex: 0.5 },
         { field: 'commandType', headerName: 'command type', flex: 1 },
         { field: 'status', headerName: 'profiling status', flex: 1 },
         {
@@ -67,7 +68,7 @@ const ProfilingStatusPage = () => {
                     if (!utcTimestamp.endsWith('Z') && !utcTimestamp.includes('+') && !utcTimestamp.includes('-', 10)) {
                         utcTimestamp += 'Z';
                     }
-    
+
                     const utcDate = new Date(utcTimestamp);
                     // Convert to user's local timezone
                     const localDateTimeString = utcDate.toLocaleString(navigator.language, {
@@ -125,7 +126,7 @@ const ProfilingStatusPage = () => {
         {
             field: 'selectPids',
             headerName: 'Select PIDs',
-            flex: .5,
+            flex: 0.5,
             renderCell: (params) => (
                 <Button
                     size='small'
@@ -255,12 +256,12 @@ const ProfilingStatusPage = () => {
                 submitData.stop_level = hasSpecificPids ? 'process' : 'host';
             }
 
-                  return fetch('/api/metrics/profile_request', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(submitData),
-                  });
+            return fetch('/api/metrics/profile_request', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(submitData),
             });
+        });
 
         // Wait for all requests to finish before refreshing
         Promise.all(requests).then(() => {

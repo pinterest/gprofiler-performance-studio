@@ -419,10 +419,7 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
 
 
 @router.post("/heartbeat", response_model=HeartbeatResponse)
-def receive_heartbeat(
-    heartbeat: HeartbeatRequest,
-    merge_pids: bool = Query(False, alias="mergePids")
-):
+def receive_heartbeat(heartbeat: HeartbeatRequest, merge_pids: bool = Query(False, alias="mergePids")):
     """
     Receive heartbeat from host and check for current profiling requests.
 
@@ -448,8 +445,8 @@ def receive_heartbeat(
                 "status": heartbeat.status,
                 "timestamp": heartbeat.timestamp,
                 "available_pids": heartbeat.available_pids,
-                "merge_pids": merge_pids
-            }
+                "merge_pids": merge_pids,
+            },
         )
 
         db_manager = DBManager()
@@ -496,7 +493,9 @@ def receive_heartbeat(
                                     else:
                                         request_ids = []
                             except Exception:
-                                logger.warning(f"Failed to parse request_ids for command {current_command['command_id']}")
+                                logger.warning(
+                                    f"Failed to parse request_ids for command {current_command['command_id']}"
+                                )
                                 request_ids = []
 
                         for request_id in request_ids:
@@ -658,7 +657,7 @@ def get_profiling_host_status():
             available_pids_map = {"unknown": raw_available}
         else:
             available_pids_map = {}
-        
+
         # Get current profiling command for this host/service
         command = db_manager.get_current_profiling_command(hostname, service_name)
         if command:
@@ -667,7 +666,7 @@ def get_profiling_host_status():
         else:
             profiling_status = "stopped"
             command_type = "N/A"
-        
+
         # Create display string grouped by language
         if available_pids_map:
             parts = []
@@ -680,17 +679,19 @@ def get_profiling_host_status():
             pids_display = " | ".join(parts)
         else:
             pids_display = "N/A"
-            
-        results.append(ProfilingHostStatus(
-            id=host.get("id", 0),
-            service_name=service_name,
-            hostname=hostname,
-            ip_address=ip_address,
-            pids=pids_display,
-            command_type=command_type,
-            profiling_status=profiling_status,
-            available_pids=available_pids_map,
-            heartbeat_timestamp=host.get("heartbeat_timestamp"),
-        ))
+
+        results.append(
+            ProfilingHostStatus(
+                id=host.get("id", 0),
+                service_name=service_name,
+                hostname=hostname,
+                ip_address=ip_address,
+                pids=pids_display,
+                command_type=command_type,
+                profiling_status=profiling_status,
+                available_pids=available_pids_map,
+                heartbeat_timestamp=host.get("heartbeat_timestamp"),
+            )
+        )
 
     return results

@@ -854,26 +854,25 @@ class DBManager(metaclass=Singleton):
         status: str = "active",
         heartbeat_timestamp: Optional[datetime] = None,
         available_pids: Optional[Dict[str, List[int]]] = None,
-        merge_pids: bool = False
+        merge_pids: bool = False,
     ) -> None:
         """Update or insert host heartbeat information using pure SQL"""
         if heartbeat_timestamp is None:
             heartbeat_timestamp = datetime.now()
-        
+
         # Handle available_pids as JSON mapping: language -> [pids]
         pids_to_store: Dict[str, List[int]] = {}
         if available_pids:
             # Normalize incoming map: ensure lists of unique sorted ints
             pids_to_store = {
-                str(lang): sorted(list({int(pid) for pid in (pids or [])}))
-                for lang, pids in available_pids.items()
+                str(lang): sorted(list({int(pid) for pid in (pids or [])})) for lang, pids in available_pids.items()
             }
-        
+
         if merge_pids and available_pids:
             # Get existing mapping and merge per language
             existing_heartbeat = self.get_host_heartbeat(hostname)
-            if existing_heartbeat and existing_heartbeat.get('available_pids'):
-                existing_map = existing_heartbeat['available_pids']
+            if existing_heartbeat and existing_heartbeat.get("available_pids"):
+                existing_map = existing_heartbeat["available_pids"]
                 if isinstance(existing_map, dict):
                     merged: Dict[str, List[int]] = {}
                     # union keys
@@ -891,7 +890,7 @@ class DBManager(metaclass=Singleton):
                         flat = []
                     merged_set = set(flat) | {pid for pids in pids_to_store.values() for pid in pids}
                     pids_to_store = {"unknown": sorted(list(merged_set))}
-            
+
         query = """
         INSERT INTO HostHeartbeats (
             hostname, ip_address, service_name, last_command_id,
@@ -918,7 +917,7 @@ class DBManager(metaclass=Singleton):
             "last_command_id": last_command_id,
             "status": status,
             "heartbeat_timestamp": heartbeat_timestamp,
-            "available_pids": json.dumps(pids_to_store)
+            "available_pids": json.dumps(pids_to_store),
         }
 
         self.db.execute(query, values, has_value=False)
@@ -936,12 +935,12 @@ class DBManager(metaclass=Singleton):
 
         values = {"hostname": hostname}
         result = self.db.execute(query, values, one_value=True, return_dict=True)
-        
+
         # Ensure available_pids is a dict
         if result:
-            if result.get('available_pids') is None:
-                result['available_pids'] = {}
-            
+            if result.get("available_pids") is None:
+                result["available_pids"] = {}
+
         return result if result else None
 
     def get_active_hosts(self, service_name: Optional[str] = None) -> List[Dict]:
@@ -981,16 +980,16 @@ class DBManager(metaclass=Singleton):
         if offset is not None:
             query += " OFFSET %(offset)s"
             values["offset"] = offset
-        
+
         results = self.db.execute(query, values, one_value=False, return_dict=True, fetch_all=True)
-        
+
         # Ensure available_pids is a dict for each result
         for result in results:
-            if result.get('available_pids') is None:
-                result['available_pids'] = {}
-                
+            if result.get("available_pids") is None:
+                result["available_pids"] = {}
+
         return results
-    
+
     def get_host_heartbeats_by_service(self, service_name: str, limit: Optional[int] = None) -> List[Dict]:
         """Get all host heartbeat records for a specific service"""
         query = """
