@@ -258,6 +258,7 @@ CREATE TABLE HostHeartbeats (
     last_command_id uuid NULL,
     status HostStatus NOT NULL DEFAULT 'active',
     heartbeat_timestamp timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    available_pids integer[] DEFAULT '{}',
     created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "unique_host_heartbeat" UNIQUE (hostname, service_name)
@@ -268,6 +269,7 @@ CREATE INDEX idx_hostheartbeats_hostname ON HostHeartbeats (hostname);
 CREATE INDEX idx_hostheartbeats_service_name ON HostHeartbeats (service_name);
 CREATE INDEX idx_hostheartbeats_status ON HostHeartbeats (status);
 CREATE INDEX idx_hostheartbeats_heartbeat_timestamp ON HostHeartbeats (heartbeat_timestamp);
+CREATE INDEX idx_hostheartbeats_available_pids ON HostHeartbeats USING gin(available_pids);
 
 -- Profiling Requests Table (simplified)
 CREATE TABLE ProfilingRequests (
