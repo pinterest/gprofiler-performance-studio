@@ -51,6 +51,18 @@ func main() {
 	flag.StringVar(&config.Credentials, "basic-auth-credentials",
 		common.LookupEnvOrDefault("BASIC_AUTH_CREDENTIALS", config.Credentials),
 		"Credentials to use in basic auth header")
+	flag.IntVar(&config.RawRetentionDays, "raw-retention-days",
+		common.LookupEnvOrDefault("RAW_RETENTION_DAYS", config.RawRetentionDays),
+		"Raw data retention period in days")
+	flag.IntVar(&config.MinuteRetentionDays, "minute-retention-days",
+		common.LookupEnvOrDefault("MINUTE_RETENTION_DAYS", config.MinuteRetentionDays),
+		"Minute aggregation retention period in days")
+	flag.IntVar(&config.HourlyRetentionDays, "hourly-retention-days",
+		common.LookupEnvOrDefault("HOURLY_RETENTION_DAYS", config.HourlyRetentionDays),
+		"Hourly aggregation retention period in days")
+	flag.IntVar(&config.DailyRetentionDays, "daily-retention-days",
+		common.LookupEnvOrDefault("DAILY_RETENTION_DAYS", config.DailyRetentionDays),
+		"Daily aggregation retention period in days")
 	flag.Parse()
 
 	h := handlers.Handlers{

@@ -15,6 +15,10 @@ docker-build:
 	@echo "Building Docker image..."
 	docker build -t ${DOCKER_IMAGE_NAME} .
 
+test:
+	@echo "Running retention logic tests..."
+	export PATH=/usr/local/go/bin:$$PATH && cd tests && go test -v
+
 clean:
 	@echo "Cleaning up..."
 	rm -f ${BINARY_NAME}
