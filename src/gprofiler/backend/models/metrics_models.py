@@ -212,3 +212,4 @@ class ProfilingHostStatus(BaseModel):
     command_type: str
     profiling_status: str
     heartbeat_timestamp: datetime
+    profiling_link: Optional[str] = None  # New field for contextual profiling link
