@@ -403,6 +403,73 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
         else:
             message = f"{profiling_request.request_type.capitalize()} profiling request submitted successfully for service '{profiling_request.service_name}' across {len(command_ids)} hosts"
 
+
+        # Send Slack notification for profiling request creation
+        try:
+            slack_notifier = SlackNotifier()
+            
+            # Create rich message blocks
+            blocks = [
+                {
+                    "type": "header",
+                    "text": {
+                        "type": "plain_text",
+                        "text": f"🔥 Profiling Request {profiling_request.request_type.capitalize()}"
+                    }
+                },
+                {
+                    "type": "section",
+                    "fields": [
+                        {
+                            "type": "mrkdwn",
+                            "text": f"*Service Name:*\n{profiling_request.service_name}"
+                        },
+                        {
+                            "type": "mrkdwn", 
+                            "text": f"*Request ID:*\n{request_id}"
+                        }
+                    ]
+                }
+            ]
+            
+            # Add hosts information in a separate block
+            if target_hosts:
+                hosts_text = "\n".join([f"• {host}" for host in target_hosts])
+                blocks.append({
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Available Hosts ({len(target_hosts)}):*\n```{hosts_text}```"
+                    }
+                })
+            
+            # Add PIDs information if available
+            if profiling_request.target_hosts:
+                pids_info = []
+                for host, pids in profiling_request.target_hosts.items():
+                    if pids:
+                        pids_str = ", ".join(map(str, pids))
+                        pids_info.append(f"• {host}: {pids_str}")
+                    else:
+                        pids_info.append(f"• {host}: All processes")
+                
+                if pids_info:
+                    pids_text = "\n".join(pids_info)
+                    blocks.append({
+                        "type": "section", 
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*Selected PIDs:*\n```{pids_text}```"
+                        }
+                    })
+            
+            slack_notifier.send_rich_message(
+                blocks=blocks,
+                text=message  # Fallback text for notifications
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send Slack notification for profiling request {request_id}: {e}")
+
         return ProfilingResponse(
             success=True,
             message=message,
