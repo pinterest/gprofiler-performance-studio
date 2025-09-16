@@ -45,6 +45,7 @@ from backend.utils.request_utils import flamegraph_base_request_params, get_metr
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
+from backend.utils.notifications import SlackNotifier
 from gprofiler_dev import S3ProfileDal
 from gprofiler_dev.postgres.db_manager import DBManager
 
@@ -429,6 +430,7 @@ def receive_heartbeat(heartbeat: HeartbeatRequest, merge_pids: bool = Query(Fals
     3. Checks for current profiling requests for this host/service
     4. Returns new profiling request if available
     """
+   
     try:
         # Set timestamp if not provided
         if heartbeat.timestamp is None:
