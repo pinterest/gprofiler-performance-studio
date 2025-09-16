@@ -652,6 +652,16 @@ class DBManager(metaclass=Singleton):
         """Get host-to-PID mapping for a request"""
         return self.request_host_pid_mappings.get(request_id, {})
 
+    def _normalize_available_pids(self, available_pids: Optional[Dict[str, List[int]]]) -> Dict[str, List[int]]:
+        """Normalize available_pids mapping: ensure lists of unique sorted ints"""
+        pids_to_store: Dict[str, List[int]] = {}
+        if available_pids:
+            # Normalize incoming map: ensure lists of unique sorted ints
+            pids_to_store = {
+                str(lang): sorted(list({int(pid) for pid in (pids or [])})) for lang, pids in available_pids.items()
+            }
+        return pids_to_store
+
     def get_pending_profiling_request(
         self, hostname: str, service_name: str, exclude_command_id: Optional[str] = None
     ) -> Optional[Dict]:
@@ -861,12 +871,7 @@ class DBManager(metaclass=Singleton):
             heartbeat_timestamp = datetime.now()
 
         # Handle available_pids as JSON mapping: language -> [pids]
-        pids_to_store: Dict[str, List[int]] = {}
-        if available_pids:
-            # Normalize incoming map: ensure lists of unique sorted ints
-            pids_to_store = {
-                str(lang): sorted(list({int(pid) for pid in (pids or [])})) for lang, pids in available_pids.items()
-            }
+        pids_to_store = self._normalize_available_pids(available_pids)
 
         if merge_pids and available_pids:
             # Get existing mapping and merge per language
