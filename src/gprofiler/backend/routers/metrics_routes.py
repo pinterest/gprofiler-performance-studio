@@ -36,6 +36,7 @@ from backend.models.metrics_models import (
     MetricNodesCoresSummary,
     MetricSummary,
     ProfilingHostStatus,
+    ProfilingHostStatusRequest,
     ProfilingRequest,
     ProfilingResponse,
     SampleCount,
@@ -43,7 +44,7 @@ from backend.models.metrics_models import (
 from backend.utils.filters_utils import get_rql_first_eq_key, get_rql_only_for_one_key
 from backend.utils.request_utils import flamegraph_base_request_params, get_metrics_response, get_query_response
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from gprofiler_dev import S3ProfileDal
 from gprofiler_dev.postgres.db_manager import DBManager
@@ -78,6 +79,13 @@ def get_time_interval_value(start_time: datetime, end_time: datetime, interval: 
     if value <= 60 * 60 * 24 * 14:  # 2 weeks
         return "6 hours"
     return "24 hours"
+
+
+def profiling_host_status_params(
+    service_name: Optional[str] = Query(None, description="Filter by service name"),
+    exact_match: bool = Query(False, description="Use exact match for service name (default: false for partial matching)"),
+) -> ProfilingHostStatusRequest:
+    return ProfilingHostStatusRequest(service_name=service_name, exact_match=exact_match)
 
 
 @router.get("/instance_type_count", response_model=List[InstanceTypeCount])
@@ -636,25 +644,22 @@ def report_command_completion(completion: CommandCompletionRequest):
 
 @router.get("/profiling/host_status", response_model=List[ProfilingHostStatus])
 def get_profiling_host_status(
-    service_name: Optional[str] = Query(None, description="Filter by service name"),
-    exact_match: bool = Query(False, description="Use exact match for service name (default: false for partial matching)"),
-    request: Request = None
+    profiling_params: ProfilingHostStatusRequest = Depends(profiling_host_status_params),
 ):
     """
     Get profiling host status with optional service name filtering.
     
     Args:
-        service_name: Optional service name to filter results (supports partial matching by default)
-        exact_match: If true, use exact matching; if false, use partial case-insensitive matching
+        profiling_params: ProfilingHostStatusRequest object containing service name and exact match flag
         
     Returns:
-        List of host statuses with dynamic profiling links
+        List of host statuses
     """
     db_manager = DBManager()
     
     # Get hosts - filter by service_name if provided
-    if service_name:
-        hosts = db_manager.get_host_heartbeats_by_service(service_name, exact_match=exact_match)
+    if profiling_params.service_name:
+        hosts = db_manager.get_host_heartbeats_by_service(profiling_params.service_name, exact_match=profiling_params.exact_match)
     else:
         hosts = db_manager.get_all_host_heartbeats()
     
@@ -674,10 +679,6 @@ def get_profiling_host_status(
             profiling_status = "stopped"
             command_type = "N/A"
         
-        # Generate dynamic profiling link with service filter
-        base_url = str(request.base_url).rstrip('/') if request else ""
-        profiling_link = f"{base_url}/profiling?service={host_service_name}&hostname={hostname}"
-        
         results.append(
             ProfilingHostStatus(
                 id=host.get("id", 0),
@@ -688,7 +689,6 @@ def get_profiling_host_status(
                 command_type=command_type,
                 profiling_status=profiling_status,
                 heartbeat_timestamp=host.get("heartbeat_timestamp"),
-                profiling_link=profiling_link,  # New field for contextual link
             )
         )
     

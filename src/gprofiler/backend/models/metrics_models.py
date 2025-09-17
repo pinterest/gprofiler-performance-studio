@@ -203,6 +203,13 @@ class CommandCompletionRequest(BaseModel):
         return v
 
 
+class ProfilingHostStatusRequest(BaseModel):
+    """Model for profiling host status request parameters"""
+    
+    service_name: Optional[str] = None
+    exact_match: bool = False
+
+
 class ProfilingHostStatus(BaseModel):
     id: int
     service_name: str
@@ -212,4 +219,3 @@ class ProfilingHostStatus(BaseModel):
     command_type: str
     profiling_status: str
     heartbeat_timestamp: datetime
-    profiling_link: Optional[str] = None  # New field for contextual profiling link
