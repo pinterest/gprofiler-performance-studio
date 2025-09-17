@@ -36,6 +36,7 @@ from backend.models.metrics_models import (
     MetricNodesCoresSummary,
     MetricSummary,
     ProfilingHostStatus,
+    ProfilingHostStatusRequest,
     ProfilingRequest,
     ProfilingResponse,
     SampleCount,
@@ -78,6 +79,13 @@ def get_time_interval_value(start_time: datetime, end_time: datetime, interval: 
     if value <= 60 * 60 * 24 * 14:  # 2 weeks
         return "6 hours"
     return "24 hours"
+
+
+def profiling_host_status_params(
+    service_name: Optional[str] = Query(None, description="Filter by service name"),
+    exact_match: bool = Query(False, description="Use exact match for service name (default: false for partial matching)"),
+) -> ProfilingHostStatusRequest:
+    return ProfilingHostStatusRequest(service_name=service_name, exact_match=exact_match)
 
 
 @router.get("/instance_type_count", response_model=List[InstanceTypeCount])
@@ -635,27 +643,46 @@ def report_command_completion(completion: CommandCompletionRequest):
 
 
 @router.get("/profiling/host_status", response_model=List[ProfilingHostStatus])
-def get_profiling_host_status():
+def get_profiling_host_status(
+    profiling_params: ProfilingHostStatusRequest = Depends(profiling_host_status_params),
+):
+    """
+    Get profiling host status with optional service name filtering.
+    
+    Args:
+        profiling_params: ProfilingHostStatusRequest object containing service name and exact match flag
+        
+    Returns:
+        List of host statuses
+    """
     db_manager = DBManager()
-    hosts = db_manager.get_all_host_heartbeats()
+    
+    # Get hosts - filter by service_name if provided
+    if profiling_params.service_name:
+        hosts = db_manager.get_host_heartbeats_by_service(profiling_params.service_name, exact_match=profiling_params.exact_match)
+    else:
+        hosts = db_manager.get_all_host_heartbeats()
+    
     results = []
     for host in hosts:
         hostname = host.get("hostname")
-        service_name = host.get("service_name")
+        host_service_name = host.get("service_name")
         ip_address = host.get("ip_address")
         pids = "All"  # Placeholder, update if you have per-host PID info
+        
         # Get current profiling command for this host/service
-        command = db_manager.get_current_profiling_command(hostname, service_name)
+        command = db_manager.get_current_profiling_command(hostname, host_service_name)
         if command:
             profiling_status = command.get("status")
             command_type = command.get("command_type", "N/A")
         else:
             profiling_status = "stopped"
             command_type = "N/A"
+        
         results.append(
             ProfilingHostStatus(
                 id=host.get("id", 0),
-                service_name=service_name,
+                service_name=host_service_name,
                 hostname=hostname,
                 ip_address=ip_address,
                 pids=pids,
@@ -664,4 +691,5 @@ def get_profiling_host_status():
                 heartbeat_timestamp=host.get("heartbeat_timestamp"),
             )
         )
+    
     return results

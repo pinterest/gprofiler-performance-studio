@@ -203,6 +203,13 @@ class CommandCompletionRequest(BaseModel):
         return v
 
 
+class ProfilingHostStatusRequest(BaseModel):
+    """Model for profiling host status request parameters"""
+    
+    service_name: Optional[str] = None
+    exact_match: bool = False
+
+
 class ProfilingHostStatus(BaseModel):
     id: int
     service_name: str
