@@ -1,8 +1,8 @@
 import { Box, Button, duration, Typography } from '@mui/material';
 import TextField from '@mui/material/TextField';
-import React, { useEffect, useState, useCallback } from 'react';
-import { useHistory, useLocation } from 'react-router-dom';
 import queryString from 'query-string';
+import React, { useCallback, useEffect, useState } from 'react';
+import { useHistory, useLocation } from 'react-router-dom';
 
 import { formatDate, TIME_FORMATS } from '../../utils/datetimesUtils';
 import MuiTable from '../common/dataDisplay/table/MuiTable';
@@ -65,22 +65,25 @@ const ProfilingStatusPage = () => {
     }, [location.search]);
 
     // Update URL when filter changes
-    const updateURL = useCallback((serviceName) => {
-        const searchParams = queryString.parse(location.search);
-        if (serviceName && serviceName.length >= 3) {
-            searchParams.service = serviceName;
-        } else {
-            delete searchParams.service;
-        }
-        history.push({ search: queryString.stringify(searchParams) });
-    }, [location.search, history]);
+    const updateURL = useCallback(
+        (serviceName) => {
+            const searchParams = queryString.parse(location.search);
+            if (serviceName && serviceName.length >= 3) {
+                searchParams.service = serviceName;
+            } else {
+                delete searchParams.service;
+            }
+            history.push({ search: queryString.stringify(searchParams) });
+        },
+        [location.search, history]
+    );
 
     const fetchProfilingStatus = useCallback((serviceName = null) => {
         setLoading(true);
-        const url = serviceName 
+        const url = serviceName
             ? `/api/metrics/profiling/host_status?service_name=${encodeURIComponent(serviceName)}`
             : '/api/metrics/profiling/host_status';
-            
+
         fetch(url)
             .then((res) => res.json())
             .then((data) => {
