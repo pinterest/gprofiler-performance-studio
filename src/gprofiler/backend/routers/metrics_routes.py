@@ -437,19 +437,21 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
                 for host, pids in profiling_request.target_hosts.items():
                     if pids:
                         pids_str = ", ".join(map(str, pids))
-                        hosts_info.append(f"{host}\npids: {pids_str}")
+                        hosts_info.append(f"• {host}\n  - {pids_str}")
                     else:
-                        hosts_info.append(f"{host}:\n(host level)")
+                        hosts_info.append(f"• {host}\n  - host level")
                 
                 if hosts_info:
-                    hosts_text = "\n\n".join(hosts_info)
+                    hosts_text = "\n".join(hosts_info)
                     blocks.append({
                         "type": "section", 
                         "text": {
                             "type": "mrkdwn",
-                            "text": f"*Target Hosts:*\n```{hosts_text}```"
+                            "text": f"*Target Hosts:*\n{hosts_text}"
                         }
                     })
+
+
 
             slack_notifier.send_rich_message(
                 blocks=blocks,
