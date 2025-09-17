@@ -45,6 +45,7 @@ from backend.utils.request_utils import flamegraph_base_request_params, get_metr
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
+from backend.utils.notifications import SlackNotifier
 from gprofiler_dev import S3ProfileDal
 from gprofiler_dev.postgres.db_manager import DBManager
 
@@ -401,6 +402,61 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
             message = f"{profiling_request.request_type.capitalize()} profiling request submitted successfully for service '{profiling_request.service_name}'"
         else:
             message = f"{profiling_request.request_type.capitalize()} profiling request submitted successfully for service '{profiling_request.service_name}' across {len(command_ids)} hosts"
+
+        # Send Slack notification for profiling request creation
+        try:
+            slack_notifier = SlackNotifier()
+            
+            # Create rich message blocks
+            blocks = [
+                {
+                    "type": "header",
+                    "text": {
+                        "type": "plain_text",
+                        "text": f"🔥 Profiling Request {profiling_request.request_type.capitalize()} for service {profiling_request.service_name}"
+                    }
+                },
+                {
+                    "type": "section",
+                    "fields": [
+                        {
+                            "type": "mrkdwn",
+                            "text": f"*Service Name:*\n{profiling_request.service_name}"
+                        },
+                        {
+                            "type": "mrkdwn", 
+                            "text": f"*Request ID:*\n{request_id}"
+                        }
+                    ]
+                }
+            ]
+            
+            # Add hosts and PIDs information in a single block
+            if profiling_request.target_hosts:
+                hosts_info = []
+                for host, pids in profiling_request.target_hosts.items():
+                    if pids:
+                        pids_str = ", ".join(map(str, pids))
+                        hosts_info.append(f"{host}\npids: {pids_str}")
+                    else:
+                        hosts_info.append(f"{host}:\n(host level)")
+                
+                if hosts_info:
+                    hosts_text = "\n\n".join(hosts_info)
+                    blocks.append({
+                        "type": "section", 
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*Target Hosts:*\n```{hosts_text}```"
+                        }
+                    })
+
+            slack_notifier.send_rich_message(
+                blocks=blocks,
+                text=message
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send Slack notification for profiling request {request_id}: {e}")
 
         return ProfilingResponse(
             success=True,
