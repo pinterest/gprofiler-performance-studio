@@ -427,7 +427,7 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
 
 
 @router.post("/heartbeat", response_model=HeartbeatResponse)
-def receive_heartbeat(heartbeat: HeartbeatRequest):
+def receive_heartbeat(heartbeat: HeartbeatRequest, merge_pids: bool = Query(False, alias="mergePids")):
     """
     Receive heartbeat from host and check for current profiling requests.
 
@@ -452,6 +452,8 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                 "last_command_id": heartbeat.last_command_id,
                 "status": heartbeat.status,
                 "timestamp": heartbeat.timestamp,
+                "available_pids": heartbeat.available_pids,
+                "merge_pids": merge_pids,
             },
         )
 
@@ -466,6 +468,8 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                 last_command_id=heartbeat.last_command_id,
                 status=heartbeat.status,
                 heartbeat_timestamp=heartbeat.timestamp,
+                available_pids=heartbeat.available_pids,
+                merge_pids=merge_pids,
             )
 
             # 2. Check for current profiling command for this host/service
@@ -497,7 +501,9 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                                     else:
                                         request_ids = []
                             except Exception:
-                                logger.warning(f"Failed to parse request_ids for command {current_command['command_id']}")
+                                logger.warning(
+                                    f"Failed to parse request_ids for command {current_command['command_id']}"
+                                )
                                 request_ids = []
 
                         for request_id in request_ids:
@@ -668,8 +674,15 @@ def get_profiling_host_status(
         hostname = host.get("hostname")
         host_service_name = host.get("service_name")
         ip_address = host.get("ip_address")
-        pids = "All"  # Placeholder, update if you have per-host PID info
-        
+        # Normalize available_pids to a language->pids map
+        raw_available = host.get("available_pids")
+        if isinstance(raw_available, dict):
+            available_pids_map = raw_available or {}
+        elif isinstance(raw_available, list):
+            available_pids_map = {"unknown": raw_available}
+        else:
+            available_pids_map = {}
+
         # Get current profiling command for this host/service
         command = db_manager.get_current_profiling_command(hostname, host_service_name)
         if command:
@@ -678,18 +691,32 @@ def get_profiling_host_status(
         else:
             profiling_status = "stopped"
             command_type = "N/A"
-        
+
+        # Create display string grouped by language
+        if available_pids_map:
+            parts = []
+            for lang, pid_list in available_pids_map.items():
+                try:
+                    pid_str = ", ".join(str(int(pid)) for pid in (pid_list or []))
+                except Exception:
+                    pid_str = ""
+                parts.append(f"{lang}: {pid_str}" if pid_str else f"{lang}: -")
+            pids_display = " | ".join(parts)
+        else:
+            pids_display = "N/A"
+
         results.append(
             ProfilingHostStatus(
                 id=host.get("id", 0),
                 service_name=host_service_name,
                 hostname=hostname,
                 ip_address=ip_address,
-                pids=pids,
+                pids=pids_display,
                 command_type=command_type,
                 profiling_status=profiling_status,
+                available_pids=available_pids_map,
                 heartbeat_timestamp=host.get("heartbeat_timestamp"),
             )
         )
-    
+
     return results
