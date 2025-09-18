@@ -995,18 +995,27 @@ class DBManager(metaclass=Singleton):
 
         return results
 
-    def get_host_heartbeats_by_service(self, service_name: str, limit: Optional[int] = None) -> List[Dict]:
-        """Get all host heartbeat records for a specific service"""
-        query = """
+    def get_host_heartbeats_by_service(self, service_name: str, limit: Optional[int] = None, exact_match: bool = False) -> List[Dict]:
+        """Get all host heartbeat records for a specific service with optional partial matching"""
+        if exact_match:
+            # Use exact match for backward compatibility
+            where_clause = "WHERE service_name = %(service_name)s"
+            service_param = service_name
+        else:
+            # Use partial, case-insensitive matching
+            where_clause = "WHERE service_name ILIKE %(service_name)s"
+            service_param = f"%{service_name}%"
+        
+        query = f"""
         SELECT
             ID, hostname, ip_address, service_name, last_command_id,
-            status, heartbeat_timestamp, created_at, updated_at
+            status, heartbeat_timestamp, created_at, updated_at, available_pids
         FROM HostHeartbeats
-        WHERE service_name = %(service_name)s
+        {where_clause}
         ORDER BY heartbeat_timestamp DESC
         """
 
-        values: dict[str, Any] = {"service_name": service_name}
+        values: dict[str, Any] = {"service_name": service_param}
         if limit is not None:
             query += " LIMIT %(limit)s"
             values["limit"] = limit

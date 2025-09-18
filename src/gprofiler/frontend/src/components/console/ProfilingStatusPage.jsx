@@ -11,7 +11,9 @@ import {
     Typography,
 } from '@mui/material';
 import TextField from '@mui/material/TextField';
-import React, { useEffect, useState } from 'react';
+import queryString from 'query-string';
+import React, { useCallback, useEffect, useState } from 'react';
+import { useHistory, useLocation } from 'react-router-dom';
 
 import { formatDate, TIME_FORMATS } from '../../utils/datetimesUtils';
 import MuiTable from '../common/dataDisplay/table/MuiTable';
@@ -25,6 +27,8 @@ const ProfilingStatusPage = () => {
     const [modalOpen, setModalOpen] = useState(false);
     const [currentModalRow, setCurrentModalRow] = useState(null);
     const [selectedPids, setSelectedPids] = useState({}); // { rowId: [selectedPids] }
+    const history = useHistory();
+    const location = useLocation();
 
     // Open PID selection modal
     const openPidModal = (row) => {
@@ -170,10 +174,40 @@ const ProfilingStatusPage = () => {
         }
     };
 
+    // Initialize filter from URL parameters on component mount
+    useEffect(() => {
+        const searchParams = queryString.parse(location.search);
+        const serviceParam = searchParams.service;
+        if (serviceParam) {
+            setFilter(serviceParam);
+        } else {
+            // Ensure filter is empty if no service parameter in URL
+            setFilter('');
+        }
+    }, [location.search]);
+
+    // Update URL when filter changes
+    const updateURL = useCallback(
+        (serviceName) => {
+            const searchParams = queryString.parse(location.search);
+            if (serviceName && serviceName.length >= 3) {
+                searchParams.service = serviceName;
+            } else {
+                delete searchParams.service;
+            }
+            history.push({ search: queryString.stringify(searchParams) });
+        },
+        [location.search, history]
+    );
+
     // Fetch profiling status from backend
-    const fetchProfilingStatus = () => {
+    const fetchProfilingStatus = useCallback((serviceName = null) => {
         setLoading(true);
-        fetch('/api/metrics/profiling/host_status')
+        const url = serviceName
+            ? `/api/metrics/profiling/host_status?service_name=${encodeURIComponent(serviceName)}`
+            : '/api/metrics/profiling/host_status';
+
+        fetch(url)
             .then((res) => res.json())
             .then((data) => {
                 const mappedRows = data.map((row) => ({
@@ -201,11 +235,39 @@ const ProfilingStatusPage = () => {
                 setLoading(false);
             })
             .catch(() => setLoading(false));
-    };
-
-    useEffect(() => {
-        fetchProfilingStatus();
     }, []);
+
+    // Initial data fetch - check URL first, then fetch data
+    useEffect(() => {
+        const searchParams = queryString.parse(location.search);
+        const serviceParam = searchParams.service;
+        if (serviceParam) {
+            // If there's a service parameter in URL, fetch with that filter
+            fetchProfilingStatus(serviceParam);
+        } else {
+            // Otherwise fetch all data and ensure filter is empty
+            fetchProfilingStatus();
+            setFilter(''); // Ensure filter starts empty
+        }
+    }, []); // Only run once on mount
+
+    // Debounced function to handle filter changes
+    useEffect(() => {
+        const timeoutId = setTimeout(() => {
+            if (filter.length >= 3) {
+                // Call backend with service name filter
+                fetchProfilingStatus(filter);
+                updateURL(filter);
+            } else if (filter.length === 0) {
+                // Get all hosts when filter is empty
+                fetchProfilingStatus();
+                updateURL(null); // Pass null instead of empty string to remove the parameter
+            }
+            // Do nothing if filter is 1-2 characters (show existing data)
+        }, 500); // 500ms debounce
+
+        return () => clearTimeout(timeoutId);
+    }, [filter, fetchProfilingStatus, updateURL]);
 
     // Bulk Start/Stop handlers - now includes PID-level selections
     function handleBulkAction(action) {
@@ -265,13 +327,16 @@ const ProfilingStatusPage = () => {
 
         // Wait for all requests to finish before refreshing
         Promise.all(requests).then(() => {
-            fetchProfilingStatus();
+            // Maintain current filter state when refreshing
+            if (filter.length >= 3) {
+                fetchProfilingStatus(filter);
+            } else {
+                fetchProfilingStatus();
+            }
             setSelectionModel([]); // Clear all checkboxes after API requests complete
             setSelectedPids({}); // Clear PID selections
         });
     }
-
-    const filteredRows = filter ? rows.filter((row) => row.service.toLowerCase().includes(filter.toLowerCase())) : rows;
 
     // PID Selection Modal
     const renderPidSelectionModal = () => {
@@ -362,7 +427,6 @@ const ProfilingStatusPage = () => {
             </Dialog>
         );
     };
-
     return (
         <>
             <PageHeader title='Dynamic Profiling' />
@@ -375,6 +439,7 @@ const ProfilingStatusPage = () => {
                         value={filter}
                         onChange={(e) => setFilter(e.target.value)}
                         sx={{ minWidth: 250 }}
+                        helperText={filter.length > 0 && filter.length < 3 ? 'Type 3+ characters to filter' : ''}
                     />
                     <Button
                         variant='contained'
@@ -396,7 +461,13 @@ const ProfilingStatusPage = () => {
                         variant='outlined'
                         color='primary'
                         size='small'
-                        onClick={fetchProfilingStatus}
+                        onClick={() => {
+                            if (filter.length >= 3) {
+                                fetchProfilingStatus(filter);
+                            } else {
+                                fetchProfilingStatus();
+                            }
+                        }}
                         disabled={loading}>
                         Refresh
                     </Button>
@@ -404,7 +475,7 @@ const ProfilingStatusPage = () => {
 
                 <MuiTable
                     columns={columns}
-                    data={filteredRows}
+                    data={rows}
                     isLoading={loading}
                     pageSize={50}
                     rowHeight={50}
