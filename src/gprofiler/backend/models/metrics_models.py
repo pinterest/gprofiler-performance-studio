@@ -206,8 +206,13 @@ class CommandCompletionRequest(BaseModel):
 class ProfilingHostStatusRequest(BaseModel):
     """Model for profiling host status request parameters"""
     
-    service_name: Optional[str] = None
+    service_name: Optional[List[str]] = None
     exact_match: bool = False
+    hostname: Optional[List[str]] = None
+    ip_address: Optional[List[str]] = None
+    profiling_status: Optional[List[str]] = None
+    command_type: Optional[List[str]] = None
+    pids: Optional[List[int]] = None
 
 
 class ProfilingHostStatus(BaseModel):
@@ -215,7 +220,7 @@ class ProfilingHostStatus(BaseModel):
     service_name: str
     hostname: str
     ip_address: str
-    pids: str
+    pids: List[int]
     command_type: str
     profiling_status: str
     heartbeat_timestamp: datetime

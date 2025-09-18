@@ -82,10 +82,23 @@ def get_time_interval_value(start_time: datetime, end_time: datetime, interval: 
 
 
 def profiling_host_status_params(
-    service_name: Optional[str] = Query(None, description="Filter by service name"),
+    service_name: Optional[List[str]] = Query(None, description="Filter by service name(s)"),
     exact_match: bool = Query(False, description="Use exact match for service name (default: false for partial matching)"),
+    hostname: Optional[List[str]] = Query(None, description="Filter by hostname(s)"),
+    ip_address: Optional[List[str]] = Query(None, description="Filter by IP address(es)"),
+    profiling_status: Optional[List[str]] = Query(None, description="Filter by profiling status(es) (e.g., pending, completed, stopped)"),
+    command_type: Optional[List[str]] = Query(None, description="Filter by command type(s) (e.g., start, stop)"),
+    pids: Optional[List[int]] = Query(None, description="Filter by PIDs"),
 ) -> ProfilingHostStatusRequest:
-    return ProfilingHostStatusRequest(service_name=service_name, exact_match=exact_match)
+    return ProfilingHostStatusRequest(
+        service_name=service_name,
+        exact_match=exact_match,
+        hostname=hostname,
+        ip_address=ip_address,
+        profiling_status=profiling_status,
+        command_type=command_type,
+        pids=pids,
+    )
 
 
 @router.get("/instance_type_count", response_model=List[InstanceTypeCount])
@@ -647,19 +660,31 @@ def get_profiling_host_status(
     profiling_params: ProfilingHostStatusRequest = Depends(profiling_host_status_params),
 ):
     """
-    Get profiling host status with optional service name filtering.
+    Get profiling host status with optional filtering by multiple parameters.
     
     Args:
-        profiling_params: ProfilingHostStatusRequest object containing service name and exact match flag
+        profiling_params: ProfilingHostStatusRequest object containing all filter parameters
         
     Returns:
-        List of host statuses
+        List of host statuses filtered by the specified criteria
     """
     db_manager = DBManager()
     
     # Get hosts - filter by service_name if provided
     if profiling_params.service_name:
-        hosts = db_manager.get_host_heartbeats_by_service(profiling_params.service_name, exact_match=profiling_params.exact_match)
+        # For multiple service names, we need to get hosts for each service and combine
+        all_hosts = []
+        for service_name in profiling_params.service_name:
+            hosts = db_manager.get_host_heartbeats_by_service(service_name, exact_match=profiling_params.exact_match)
+            all_hosts.extend(hosts)
+        # Remove duplicates based on hostname + service_name combination
+        seen = set()
+        hosts = []
+        for host in all_hosts:
+            key = (host.get("hostname"), host.get("service_name"))
+            if key not in seen:
+                seen.add(key)
+                hosts.append(host)
     else:
         hosts = db_manager.get_all_host_heartbeats()
     
@@ -668,16 +693,55 @@ def get_profiling_host_status(
         hostname = host.get("hostname")
         host_service_name = host.get("service_name")
         ip_address = host.get("ip_address")
-        pids = "All"  # Placeholder, update if you have per-host PID info
+        
+        # Apply hostname filter (check if hostname matches any in the list)
+        if profiling_params.hostname and not any(filter_hostname.lower() in hostname.lower() for filter_hostname in profiling_params.hostname):
+            continue
+            
+        # Apply IP address filter (check if IP matches any in the list)
+        if profiling_params.ip_address and not any(filter_ip in ip_address for filter_ip in profiling_params.ip_address):
+            continue
         
         # Get current profiling command for this host/service
         command = db_manager.get_current_profiling_command(hostname, host_service_name)
         if command:
             profiling_status = command.get("status")
             command_type = command.get("command_type", "N/A")
+            # Extract PIDs from command config if available
+            combined_config = command.get("combined_config", {})
+            if isinstance(combined_config, str):
+                try:
+                    combined_config = json.loads(combined_config)
+                except json.JSONDecodeError:
+                    combined_config = {}
+            
+            # Try to get PIDs from the command configuration
+            command_pids = []
+            if isinstance(combined_config, dict):
+                pids_in_config = combined_config.get("pids", [])
+                if isinstance(pids_in_config, list):
+                    # Convert to integers, filtering out non-numeric values
+                    command_pids = [int(pid) for pid in pids_in_config if str(pid).isdigit()]
         else:
             profiling_status = "stopped"
             command_type = "N/A"
+            command_pids = []
+        
+        # Apply profiling status filter (check if status matches any in the list)
+        if profiling_params.profiling_status and not any(filter_status.lower() == profiling_status.lower() for filter_status in profiling_params.profiling_status):
+            continue
+            
+        # Apply command type filter (check if command type matches any in the list)
+        if profiling_params.command_type and not any(filter_cmd_type.lower() == command_type.lower() for filter_cmd_type in profiling_params.command_type):
+            continue
+            
+        # Apply PIDs filter (check if any filter PID matches the command PIDs)
+        if profiling_params.pids and command_pids:
+            if not any(filter_pid in command_pids for filter_pid in profiling_params.pids):
+                continue
+        elif profiling_params.pids and not command_pids:
+            # If filtering by PIDs but no PIDs in command, skip this host
+            continue
         
         results.append(
             ProfilingHostStatus(
@@ -685,7 +749,7 @@ def get_profiling_host_status(
                 service_name=host_service_name,
                 hostname=hostname,
                 ip_address=ip_address,
-                pids=pids,
+                pids=command_pids,
                 command_type=command_type,
                 profiling_status=profiling_status,
                 heartbeat_timestamp=host.get("heartbeat_timestamp"),

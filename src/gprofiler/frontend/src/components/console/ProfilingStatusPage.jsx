@@ -4,6 +4,7 @@ import queryString from 'query-string';
 import React, { useCallback, useEffect, useState } from 'react';
 import { useHistory, useLocation } from 'react-router-dom';
 
+import { DATA_URLS } from '../../api/urls';
 import { formatDate, TIME_FORMATS } from '../../utils/datetimesUtils';
 import MuiTable from '../common/dataDisplay/table/MuiTable';
 import PageHeader from '../common/layout/PageHeader';
@@ -64,6 +65,27 @@ const ProfilingStatusPage = () => {
         }
     }, [location.search]);
 
+    // Clean up profile-specific URL parameters when entering dynamic profiling
+    useEffect(() => {
+        const searchParams = queryString.parse(location.search);
+        let hasProfileParams = false;
+        
+        // Check if any profile-specific parameters exist
+        const profileParams = ['gtab', 'view', 'time', 'startTime', 'endTime', 'filter', 'rt', 'rtms', 'p', 'pm', 'wt', 'wp', 'search', 'fullscreen'];
+        
+        profileParams.forEach(param => {
+            if (searchParams[param] !== undefined) {
+                delete searchParams[param];
+                hasProfileParams = true;
+            }
+        });
+        
+        // Only update URL if we found and removed profile-specific parameters
+        if (hasProfileParams) {
+            history.replace({ search: queryString.stringify(searchParams) });
+        }
+    }, []); // Run only once on component mount
+
     // Update URL when filter changes
     const updateURL = useCallback(
         (serviceName) => {
@@ -81,8 +103,8 @@ const ProfilingStatusPage = () => {
     const fetchProfilingStatus = useCallback((serviceName = null) => {
         setLoading(true);
         const url = serviceName
-            ? `/api/metrics/profiling/host_status?service_name=${encodeURIComponent(serviceName)}`
-            : '/api/metrics/profiling/host_status';
+            ? `${DATA_URLS.GET_PROFILING_HOST_STATUS}?service_name=${encodeURIComponent(serviceName)}`
+            : DATA_URLS.GET_PROFILING_HOST_STATUS;
 
         fetch(url)
             .then((res) => res.json())
@@ -170,7 +192,7 @@ const ProfilingStatusPage = () => {
                 submitData.stop_level = 'host';
             }
 
-            return fetch('/api/metrics/profile_request', {
+            return fetch(DATA_URLS.POST_PROFILING_REQUEST, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(submitData),
@@ -192,8 +214,8 @@ const ProfilingStatusPage = () => {
     return (
         <>
             <PageHeader title='Dynamic Profiling' />
-            <Box sx={{ p: 3 }}>
-                <Box sx={{ mb: 2, display: 'flex', gap: 2, alignItems: 'center' }}>
+            <Box sx={{ p: { xs: 2, sm: 3, md: 4 }, backgroundColor: 'white.main', minHeight: 'calc(100vh - 100px)' }}>
+                <Box sx={{ mb: 3, display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
                     <TextField
                         label='Filter by service name'
                         variant='outlined'
@@ -234,17 +256,19 @@ const ProfilingStatusPage = () => {
                         Refresh
                     </Button>
                 </Box>
-                <MuiTable
-                    columns={columns}
-                    data={rows}
-                    isLoading={loading}
-                    pageSize={50}
-                    rowHeight={50}
-                    autoPageSize
-                    checkboxSelection
-                    onSelectionModelChange={setSelectionModel}
-                    selectionModel={selectionModel}
-                />
+                <Box sx={{ '& .MuiDataGrid-root': { border: 'none' } }}>
+                    <MuiTable
+                        columns={columns}
+                        data={rows}
+                        isLoading={loading}
+                        pageSize={50}
+                        rowHeight={50}
+                        autoPageSize
+                        checkboxSelection
+                        onSelectionModelChange={setSelectionModel}
+                        selectionModel={selectionModel}
+                    />
+                </Box>
             </Box>
         </>
     );
