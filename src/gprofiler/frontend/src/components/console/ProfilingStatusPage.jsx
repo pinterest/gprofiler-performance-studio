@@ -69,17 +69,32 @@ const ProfilingStatusPage = () => {
     useEffect(() => {
         const searchParams = queryString.parse(location.search);
         let hasProfileParams = false;
-        
+
         // Check if any profile-specific parameters exist
-        const profileParams = ['gtab', 'view', 'time', 'startTime', 'endTime', 'filter', 'rt', 'rtms', 'p', 'pm', 'wt', 'wp', 'search', 'fullscreen'];
-        
-        profileParams.forEach(param => {
+        const profileParams = [
+            'gtab',
+            'view',
+            'time',
+            'startTime',
+            'endTime',
+            'filter',
+            'rt',
+            'rtms',
+            'p',
+            'pm',
+            'wt',
+            'wp',
+            'search',
+            'fullscreen',
+        ];
+
+        profileParams.forEach((param) => {
             if (searchParams[param] !== undefined) {
                 delete searchParams[param];
                 hasProfileParams = true;
             }
         });
-        
+
         // Only update URL if we found and removed profile-specific parameters
         if (hasProfileParams) {
             history.replace({ search: queryString.stringify(searchParams) });
