@@ -40,4 +40,6 @@ REST_CERTIFICATE_PATH = os.getenv("REST_CERTIFICATE_PATH", REST_VERIFY_TLS)
 REST_USERNAME = os.getenv("REST_USERNAME", "")
 REST_PASSWORD = os.getenv("REST_PASSWORD", "")
 
+SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
+
 BACKEND_ROOT = os.path.dirname(os.path.realpath(__file__))
