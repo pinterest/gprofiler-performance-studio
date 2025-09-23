@@ -63,7 +63,39 @@ const ProfilingStatusPage = () => {
     const history = useHistory();
     const location = useLocation();
 
-    // Hard refresh navigation ensures clean /profiling URL - no cleanup needed
+    // Initialize filters from URL parameters for direct URL visits (shareable links)
+    useEffect(() => {
+        const searchParams = queryString.parse(location.search);
+        const hasFilterParams = ['service', 'hostname', 'pids', 'ip', 'commandType', 'status'].some(
+            param => searchParams[param]
+        );
+        
+        // Only initialize from URL if there are actual filter parameters
+        if (hasFilterParams) {
+            const urlFilters = {
+                service: searchParams.service || '',
+                hostname: searchParams.hostname || '',
+                pids: searchParams.pids || '',
+                ip: searchParams.ip || '',
+                commandType: searchParams.commandType || '',
+                status: searchParams.status || '',
+            };
+            setFilters(urlFilters);
+        }
+        
+        // Clean up profile-specific parameters if they exist (mixed URLs)
+        const profileParams = ['gtab', 'view', 'time', 'startTime', 'endTime', 'filter', 'rt', 'rtms', 'p', 'pm', 'wt', 'wp', 'search', 'fullscreen'];
+        const hasProfileParams = profileParams.some(param => searchParams[param]);
+        
+        if (hasProfileParams) {
+            // Remove only profile params, keep filter params
+            const cleanedParams = { ...searchParams };
+            profileParams.forEach(param => {
+                delete cleanedParams[param];
+            });
+            history.replace({ search: queryString.stringify(cleanedParams) });
+        }
+    }, []); // Only run once on mount
 
     // Update URL when filters change
     const updateURL = useCallback(
