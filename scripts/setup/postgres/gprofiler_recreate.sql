@@ -279,7 +279,7 @@ CREATE TABLE ProfilingRequests (
     duration integer NULL DEFAULT 60,
     frequency integer NULL DEFAULT 11,
     profiling_mode ProfilingMode NOT NULL DEFAULT 'cpu',
-    target_hostnames text[] NOT NULL,
+    target_hostnames text[] NULL,
     pids integer[] NULL,
     stop_level text NULL DEFAULT 'process' CHECK (stop_level IN ('process', 'host')),
     additional_args jsonb NULL,
@@ -313,7 +313,7 @@ CREATE TABLE ProfilingHierarchyCommands (
     combined_config jsonb NULL,
     created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "unique_profiling_hierarchy_command" UNIQUE (service_name, container_name, pod_name, namespace)
+    CONSTRAINT "unique_profiling_hierarchy_command" UNIQUE NULLS NOT DISTINCT (service_name, container_name, pod_name, namespace)
 );
 
 CREATE INDEX idx_profilinghierarchycommands_command_id ON ProfilingHierarchyCommands (command_id);
@@ -340,7 +340,7 @@ CREATE TABLE ProfilingCommands (
     error_message text NULL,
     results_path text NULL,
     updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "unique_profiling_command_per_host" UNIQUE (hostname, service_name)
+    CONSTRAINT "unique_profiling_command_per_host" UNIQUE NULLS NOT DISTINCT (hostname, service_name)
 );
 
 -- Essential indexes for profiling commands

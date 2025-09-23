@@ -282,6 +282,7 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
         db_manager = DBManager()
         request_id = str(uuid.uuid4())
         command_ids = []  # Track all command IDs created
+        hierarchy_command_ids = []  # Track hierarchy command IDs created (for service-level commands)
 
         try:
             # Convert target_hosts to legacy format for database compatibility
@@ -322,10 +323,8 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
                 if target_hosts:
                     # Create commands for specific hosts
                     for hostname in target_hosts:
-                        command_id = str(uuid.uuid4())
-                        command_ids.append(command_id)
                         db_manager.create_or_update_profiling_command(
-                            command_id=command_id,
+                            command_ids=command_ids,
                             hostname=hostname,
                             service_name=profiling_request.service_name,
                             command_type="start",
@@ -333,16 +332,21 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
                         )
                 else:
                     # If no specific hostnames, create command for all hosts of this service
-                    command_id = str(uuid.uuid4())
-                    command_ids.append(command_id)
                     db_manager.create_or_update_profiling_command(
-                        command_id=command_id,
+                        command_ids=command_ids,
                         hostname=None,  # Will be handled for all hosts of the service
                         service_name=profiling_request.service_name,
                         command_type="start",
                         new_request_id=request_id,
                     )
-
+                    # Also create or update a command at the service level
+                    # Since this is a service-level command, we don't associate it with a specific hostname
+                    db_manager.create_or_update_profiling_hierarchy_command(
+                        command_ids=hierarchy_command_ids,
+                        service_name=profiling_request.service_name,
+                        command_type="start",
+                        new_request_id=request_id,
+                    )
             elif profiling_request.request_type == "stop":
                 # Handle stop commands with host-to-PID associations
                 target_hosts = []
@@ -353,13 +357,10 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
 
                 if target_hosts:
                     for hostname in target_hosts:
-                        command_id = str(uuid.uuid4())
-                        command_ids.append(command_id)
-
                         if profiling_request.stop_level == "host":
                             # Stop entire host
                             db_manager.create_stop_command_for_host(
-                                command_id=command_id,
+                                command_ids=command_ids,
                                 hostname=hostname,
                                 service_name=profiling_request.service_name,
                                 request_id=request_id,
@@ -372,16 +373,33 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
 
                             # Stop specific processes for this host
                             db_manager.handle_process_level_stop(
-                                command_id=command_id,
+                                command_ids=command_ids,
                                 hostname=hostname,
                                 service_name=profiling_request.service_name,
                                 pids_to_stop=host_pids,
                                 request_id=request_id,
                             )
                 else:
-                    # No specific hosts provided - this should be rare for stop commands
-                    logger.warning(f"Stop request {request_id} has no target hosts specified")
-                    raise HTTPException(status_code=400, detail="Stop commands require specific target hosts")
+                    if profiling_request.stop_level == "host":
+                        # If no specific hostnames, create command for all hosts of this service
+                        db_manager.create_stop_command_for_host(
+                            command_ids=command_ids,
+                            hostname=None,
+                            service_name=profiling_request.service_name,
+                            request_id=request_id,
+                        )
+
+                        # Also create or update a command at the service level
+                        db_manager.create_stop_hierarchy_command(
+                            command_ids=hierarchy_command_ids,
+                            request_id=request_id,
+                            service_name=profiling_request.service_name,
+                            stop_level="host",
+                        )
+                    else:  # process level stop
+                        # Process level stop without specific hosts is not supported
+                        logger.warning(f"Stop request {request_id} has no target hosts specified")
+                        raise HTTPException(status_code=400, detail="Stop commands with stop_level 'process' must specify target_hosts")
 
             logger.info(
                 f"Profiling request {request_id} ({profiling_request.request_type}) saved and commands processed. Command IDs: {command_ids}"
@@ -397,16 +415,14 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
             completion_time = datetime.now() + timedelta(seconds=profiling_request.duration or 60)
 
         # Create appropriate message based on number of commands
-        if len(command_ids) == 1:
-            message = f"{profiling_request.request_type.capitalize()} profiling request submitted successfully for service '{profiling_request.service_name}'"
-        else:
-            message = f"{profiling_request.request_type.capitalize()} profiling request submitted successfully for service '{profiling_request.service_name}' across {len(command_ids)} hosts"
+        message = f"{profiling_request.request_type.capitalize()} profiling request submitted successfully for service '{profiling_request.service_name}' across {len(command_ids)} hosts"
 
         return ProfilingResponse(
             success=True,
             message=message,
             request_id=request_id,
             command_ids=command_ids,
+            hierarchy_command_ids=hierarchy_command_ids,
             estimated_completion_time=completion_time,
         )
 
