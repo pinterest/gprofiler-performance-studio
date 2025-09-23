@@ -418,7 +418,7 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
             # Create rich message blocks
             blocks = _create_slack_blocks(profiling_request, request_id)
 
-            slack_notifier.send_rich_message(blocks=blocks, text=message)
+            slack_notifier.send_rich_message_to_all_channels(blocks=blocks, text=message)
         except Exception as e:
             logger.warning(f"Failed to send Slack notification for profiling request {request_id}: {e}")
 
@@ -454,8 +454,15 @@ def _create_slack_blocks(profiling_request: ProfilingRequest, request_id: str) -
             "type": "header",
             "text": {
                 "type": "plain_text",
-                "text": f"🔥 Profiling Request {profiling_request.request_type.capitalize()} for service {profiling_request.service_name}",
+                "text": f"🔥 Profiling Request for service {profiling_request.service_name}",
             },
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"A new request was made to {profiling_request.request_type} a profile and the details are shown below:"
+            }
         },
         {
             "type": "section",
@@ -472,9 +479,9 @@ def _create_slack_blocks(profiling_request: ProfilingRequest, request_id: str) -
         for host, pids in profiling_request.target_hosts.items():
             if pids:
                 pids_str = ", ".join(map(str, pids))
-                hosts_info.append(f"• {host}\n  - {pids_str}")
+                hosts_info.append(f"• {host} - PIDs: {pids_str}")
             else:
-                hosts_info.append(f"• {host}\n  - host level")
+                hosts_info.append(f"• {host} - Host level profiling")
 
         if hosts_info:
             hosts_text = "\n".join(hosts_info)

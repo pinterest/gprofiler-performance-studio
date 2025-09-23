@@ -42,4 +42,9 @@ REST_PASSWORD = os.getenv("REST_PASSWORD", "")
 
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 
+# Default Slack channels - can be overridden via SLACK_CHANNELS environment variable
+# Format: comma-separated list of channel names (e.g., "#general,#alerts,#notifications")
+DEFAULT_SLACK_CHANNELS = ["#gprofiler-notifications"]
+SLACK_CHANNELS = os.getenv("SLACK_CHANNELS", ",".join(DEFAULT_SLACK_CHANNELS)).split(",")
+
 BACKEND_ROOT = os.path.dirname(os.path.realpath(__file__))
