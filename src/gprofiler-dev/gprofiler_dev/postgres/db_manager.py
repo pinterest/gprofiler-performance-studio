@@ -850,6 +850,7 @@ class DBManager(metaclass=Singleton):
         hostname: str,
         ip_address: str,
         service_name: str,
+        container_runtime_info: Optional[Dict] = None,
         last_command_id: Optional[str] = None,
         status: str = "active",
         heartbeat_timestamp: Optional[datetime] = None,
@@ -860,16 +861,17 @@ class DBManager(metaclass=Singleton):
 
         query = """
         INSERT INTO HostHeartbeats (
-            hostname, ip_address, service_name, last_command_id,
+            hostname, ip_address, service_name, container_runtime_info, last_command_id,
             status, heartbeat_timestamp, created_at, updated_at
         ) VALUES (
-            %(hostname)s, %(ip_address)s::inet, %(service_name)s,
+            %(hostname)s, %(ip_address)s::inet, %(service_name)s, %(container_runtime_info)s::jsonb,
             %(last_command_id)s::uuid, %(status)s::HostStatus,
             %(heartbeat_timestamp)s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         )
         ON CONFLICT (hostname, service_name)
         DO UPDATE SET
             ip_address = EXCLUDED.ip_address,
+            container_runtime_info = EXCLUDED.container_runtime_info,
             last_command_id = EXCLUDED.last_command_id,
             status = EXCLUDED.status,
             heartbeat_timestamp = EXCLUDED.heartbeat_timestamp,
@@ -880,6 +882,7 @@ class DBManager(metaclass=Singleton):
             "hostname": hostname,
             "ip_address": ip_address,
             "service_name": service_name,
+            "container_runtime_info": json.dumps(container_runtime_info) if container_runtime_info else None,
             "last_command_id": last_command_id,
             "status": status,
             "heartbeat_timestamp": heartbeat_timestamp,
@@ -1028,6 +1031,7 @@ class DBManager(metaclass=Singleton):
         """Create or update a profiling command for a host with command_type support"""
         if hostname is None:
             active_hosts = self.get_active_hosts(service_name)
+            logger.debug(f"Creating/updating commands for all active hosts: {active_hosts}")
             success = True
             for host in active_hosts:
                 result = self.create_or_update_profiling_command(

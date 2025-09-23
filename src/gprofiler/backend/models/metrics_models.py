@@ -172,6 +172,7 @@ class HeartbeatRequest(BaseModel):
     ip_address: str
     hostname: str
     service_name: str
+    namespaces: Optional[List[Dict[str, Any]]] = None
     last_command_id: Optional[str] = None
     status: str = "active"  # active, idle, error
     timestamp: Optional[datetime] = None
