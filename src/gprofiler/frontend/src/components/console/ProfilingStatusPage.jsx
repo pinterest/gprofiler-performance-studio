@@ -1,11 +1,9 @@
-import { Box, Button, duration, Typography } from '@mui/material';
-import TextField from '@mui/material/TextField';
+import { Box, Button, Collapse, FormControl, InputLabel, MenuItem, Select, TextField, Typography } from '@mui/material';
 import queryString from 'query-string';
 import React, { useCallback, useEffect, useState } from 'react';
 import { useHistory, useLocation } from 'react-router-dom';
 
 import { DATA_URLS } from '../../api/urls';
-import { formatDate, TIME_FORMATS } from '../../utils/datetimesUtils';
 import MuiTable from '../common/dataDisplay/table/MuiTable';
 import PageHeader from '../common/layout/PageHeader';
 
@@ -52,17 +50,34 @@ const ProfilingStatusPage = () => {
     const [rows, setRows] = useState([]);
     const [loading, setLoading] = useState(false);
     const [selectionModel, setSelectionModel] = useState([]);
-    const [filter, setFilter] = useState('');
+    const [filtersOpen, setFiltersOpen] = useState(false);
+    const [filters, setFilters] = useState({
+        service: '',
+        hostname: '',
+        pids: '',
+        ip: '',
+        commandType: '',
+        status: '',
+    });
     const history = useHistory();
     const location = useLocation();
 
-    // Initialize filter from URL parameters on component mount
+    // Initialize filters from URL parameters on component mount
     useEffect(() => {
         const searchParams = queryString.parse(location.search);
-        const serviceParam = searchParams.service;
-        if (serviceParam) {
-            setFilter(serviceParam);
-        }
+        const newFilters = {
+            service: searchParams.service || '',
+            hostname: searchParams.hostname || '',
+            pids: searchParams.pids || '',
+            ip: searchParams.ip || '',
+            commandType: searchParams.commandType || '',
+            status: searchParams.status || '',
+        };
+        setFilters(newFilters);
+
+        // Open filters panel if any filters are active
+        const hasActiveFilters = Object.values(newFilters).some((value) => value);
+        setFiltersOpen(hasActiveFilters);
     }, [location.search]);
 
     // Clean up profile-specific URL parameters when entering dynamic profiling
@@ -101,76 +116,97 @@ const ProfilingStatusPage = () => {
         }
     }, []); // Run only once on component mount
 
-    // Update URL when filter changes
+    // Update URL when filters change
     const updateURL = useCallback(
-        (serviceName) => {
+        (newFilters) => {
             const searchParams = queryString.parse(location.search);
-            if (serviceName && serviceName.length >= 3) {
-                searchParams.service = serviceName;
-            } else {
-                delete searchParams.service;
-            }
+
+            // Update all filter parameters
+            Object.keys(newFilters).forEach((key) => {
+                if (newFilters[key]) {
+                    searchParams[key] = newFilters[key];
+                } else {
+                    delete searchParams[key];
+                }
+            });
+
             history.push({ search: queryString.stringify(searchParams) });
         },
         [location.search, history]
     );
 
-    const fetchProfilingStatus = useCallback((serviceName = null) => {
-        setLoading(true);
-        const url = serviceName
-            ? `${DATA_URLS.GET_PROFILING_HOST_STATUS}?service_name=${encodeURIComponent(serviceName)}`
-            : DATA_URLS.GET_PROFILING_HOST_STATUS;
+    const fetchProfilingStatus = useCallback(
+        (filterParams = filters) => {
+            setLoading(true);
 
-        fetch(url)
-            .then((res) => res.json())
-            .then((data) => {
-                setRows(
-                    data.map((row) => ({
-                        id: row.id,
-                        service: row.service_name,
-                        host: row.hostname,
-                        pids: row.pids,
-                        ip: row.ip_address,
-                        commandType: row.command_type || 'N/A',
-                        status: row.profiling_status,
-                        heartbeat_timestamp: row.heartbeat_timestamp,
-                    }))
-                );
-                setLoading(false);
-            })
-            .catch(() => setLoading(false));
-    }, []);
+            // Build query parameters
+            const params = new URLSearchParams();
 
-    // Initial data fetch - check URL first, then fetch data
+            if (filterParams.service) {
+                params.append('service_name', filterParams.service);
+            }
+            if (filterParams.hostname) {
+                params.append('hostname', filterParams.hostname);
+            }
+            if (filterParams.pids) {
+                params.append('pids', filterParams.pids);
+            }
+            if (filterParams.ip) {
+                params.append('ip_address', filterParams.ip);
+            }
+            if (filterParams.commandType) {
+                params.append('command_type', filterParams.commandType);
+            }
+            if (filterParams.status) {
+                params.append('profiling_status', filterParams.status);
+            }
+
+            const url = params.toString()
+                ? `${DATA_URLS.GET_PROFILING_HOST_STATUS}?${params.toString()}`
+                : DATA_URLS.GET_PROFILING_HOST_STATUS;
+
+            fetch(url)
+                .then((res) => res.json())
+                .then((data) => {
+                    setRows(
+                        data.map((row) => ({
+                            id: row.id,
+                            service: row.service_name,
+                            host: row.hostname,
+                            pids: row.pids,
+                            ip: row.ip_address,
+                            commandType: row.command_type || 'N/A',
+                            status: row.profiling_status,
+                            heartbeat_timestamp: row.heartbeat_timestamp,
+                        }))
+                    );
+                    setLoading(false);
+                })
+                .catch(() => setLoading(false));
+        },
+        [filters]
+    );
+
+    // Initial data fetch
     useEffect(() => {
-        const searchParams = queryString.parse(location.search);
-        const serviceParam = searchParams.service;
-        if (serviceParam) {
-            // If there's a service parameter in URL, fetch with that filter
-            fetchProfilingStatus(serviceParam);
-        } else {
-            // Otherwise fetch all data
-            fetchProfilingStatus();
-        }
+        fetchProfilingStatus(filters);
     }, []); // Only run once on mount
 
     // Debounced function to handle filter changes
     useEffect(() => {
         const timeoutId = setTimeout(() => {
-            if (filter.length >= 3) {
-                // Call backend with service name filter
-                fetchProfilingStatus(filter);
-                updateURL(filter);
-            } else if (filter.length === 0) {
-                // Get all hosts when filter is empty
-                fetchProfilingStatus();
-                updateURL('');
-            }
-            // Do nothing if filter is 1-2 characters (show existing data)
-        }, 500); // 500ms debounce
+            fetchProfilingStatus(filters);
+            updateURL(filters);
+        }, 300); // 300ms debounce
 
         return () => clearTimeout(timeoutId);
-    }, [filter, fetchProfilingStatus, updateURL]);
+    }, [filters, fetchProfilingStatus, updateURL]);
+
+    // Function to update individual filter
+    const updateFilter = (field, value) => {
+        const newFilters = { ...filters, [field]: value };
+        setFilters(newFilters);
+    };
 
     // Bulk Start/Stop handlers
     function handleBulkAction(action) {
@@ -217,11 +253,7 @@ const ProfilingStatusPage = () => {
         // Wait for all requests to finish before refreshing
         Promise.all(requests).then(() => {
             // Maintain current filter state when refreshing
-            if (filter.length >= 3) {
-                fetchProfilingStatus(filter);
-            } else {
-                fetchProfilingStatus();
-            }
+            fetchProfilingStatus(filters);
             setSelectionModel([]); // Clear all checkboxes after API requests complete
         });
     }
@@ -230,23 +262,134 @@ const ProfilingStatusPage = () => {
         <>
             <PageHeader title='Dynamic Profiling' />
             <Box sx={{ p: { xs: 2, sm: 3, md: 4 }, backgroundColor: 'white.main', minHeight: 'calc(100vh - 100px)' }}>
+                {/* Filter Panel */}
+                <Box sx={{ mb: 3 }}>
+                    <Button variant='outlined' onClick={() => setFiltersOpen(!filtersOpen)} sx={{ mb: 2 }}>
+                        🔍 Filters {filtersOpen ? '▲' : '▼'}{' '}
+                        {Object.values(filters).filter((value) => value).length > 0 &&
+                            `(${Object.values(filters).filter((value) => value).length} active)`}
+                    </Button>
+
+                    <Collapse in={filtersOpen} timeout='auto'>
+                        <Box
+                            sx={{
+                                p: 3,
+                                border: '1px solid #e0e0e0',
+                                borderRadius: 1,
+                                backgroundColor: '#fafafa',
+                                display: 'grid',
+                                gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
+                                gap: 2,
+                                mb: 2,
+                            }}>
+                            {/* Service Name Filter */}
+                            <TextField
+                                label='Service Name'
+                                variant='outlined'
+                                size='small'
+                                value={filters.service}
+                                onChange={(e) => updateFilter('service', e.target.value)}
+                                placeholder='Filter by service name...'
+                            />
+
+                            {/* Hostname Filter */}
+                            <TextField
+                                label='Hostname'
+                                variant='outlined'
+                                size='small'
+                                value={filters.hostname}
+                                onChange={(e) => updateFilter('hostname', e.target.value)}
+                                placeholder='Filter by hostname...'
+                            />
+
+                            {/* PIDs Filter */}
+                            <TextField
+                                label='PIDs'
+                                variant='outlined'
+                                size='small'
+                                value={filters.pids}
+                                onChange={(e) => updateFilter('pids', e.target.value)}
+                                placeholder='Filter by PIDs...'
+                            />
+
+                            {/* IP Address Filter */}
+                            <TextField
+                                label='IP Address'
+                                variant='outlined'
+                                size='small'
+                                value={filters.ip}
+                                onChange={(e) => updateFilter('ip', e.target.value)}
+                                placeholder='Filter by IP address...'
+                            />
+
+                            {/* Command Type Filter */}
+                            <FormControl size='small'>
+                                <InputLabel>Command Type</InputLabel>
+                                <Select
+                                    value={filters.commandType}
+                                    onChange={(e) => updateFilter('commandType', e.target.value)}
+                                    label='Command Type'>
+                                    <MenuItem value=''>All</MenuItem>
+                                    <MenuItem value='start'>start</MenuItem>
+                                    <MenuItem value='stop'>stop</MenuItem>
+                                </Select>
+                            </FormControl>
+
+                            {/* Status Filter */}
+                            <FormControl size='small'>
+                                <InputLabel>Profiling Status</InputLabel>
+                                <Select
+                                    value={filters.status}
+                                    onChange={(e) => updateFilter('status', e.target.value)}
+                                    label='Profiling Status'>
+                                    <MenuItem value=''>All</MenuItem>
+                                    <MenuItem value='pending'>pending</MenuItem>
+                                    <MenuItem value='running'>running</MenuItem>
+                                    <MenuItem value='completed'>completed</MenuItem>
+                                    <MenuItem value='failed'>failed</MenuItem>
+                                    <MenuItem value='stopped'>stopped</MenuItem>
+                                </Select>
+                            </FormControl>
+
+                            {/* Clear Filters Button */}
+                            <Box
+                                sx={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'flex-end',
+                                    gridColumn: '1 / -1',
+                                }}>
+                                <Button
+                                    variant='outlined'
+                                    size='small'
+                                    onClick={() => {
+                                        const emptyFilters = {
+                                            service: '',
+                                            hostname: '',
+                                            pids: '',
+                                            ip: '',
+                                            commandType: '',
+                                            status: '',
+                                        };
+                                        setFilters(emptyFilters);
+                                        updateURL(emptyFilters);
+                                    }}>
+                                    Clear All Filters
+                                </Button>
+                            </Box>
+                        </Box>
+                    </Collapse>
+                </Box>
+
+                {/* Action Buttons */}
                 <Box sx={{ mb: 3, display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <TextField
-                        label='Filter by service name'
-                        variant='outlined'
-                        size='small'
-                        value={filter}
-                        onChange={(e) => setFilter(e.target.value)}
-                        sx={{ minWidth: 250 }}
-                        helperText={filter.length > 0 && filter.length < 3 ? 'Type 3+ characters to filter' : ''}
-                    />
                     <Button
                         variant='contained'
                         color='success'
                         size='small'
                         onClick={() => handleBulkAction('start')}
                         disabled={selectionModel.length === 0}>
-                        Start
+                        Start ({selectionModel.length})
                     </Button>
                     <Button
                         variant='contained'
@@ -254,23 +397,22 @@ const ProfilingStatusPage = () => {
                         size='small'
                         onClick={() => handleBulkAction('stop')}
                         disabled={selectionModel.length === 0}>
-                        Stop
+                        Stop ({selectionModel.length})
                     </Button>
                     <Button
                         variant='outlined'
                         color='primary'
                         size='small'
-                        onClick={() => {
-                            if (filter.length >= 3) {
-                                fetchProfilingStatus(filter);
-                            } else {
-                                fetchProfilingStatus();
-                            }
-                        }}
+                        onClick={() => fetchProfilingStatus(filters)}
                         disabled={loading}>
                         Refresh
                     </Button>
+                    <Typography variant='body2' color='text.secondary'>
+                        {rows.length} hosts found
+                    </Typography>
                 </Box>
+
+                {/* Data Table */}
                 <Box sx={{ '& .MuiDataGrid-root': { border: 'none' } }}>
                     <MuiTable
                         columns={columns}
