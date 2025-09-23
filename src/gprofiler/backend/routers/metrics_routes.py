@@ -481,6 +481,11 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                 hostname=heartbeat.hostname,
                 service_name=heartbeat.service_name,
             )
+            if not current_command:
+                current_command = db_manager.generate_profiling_command_from_hierarchy(
+                    hostname=heartbeat.hostname,
+                    service_name=heartbeat.service_name,
+                )
 
             if current_command:
                 success = True

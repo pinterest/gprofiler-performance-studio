@@ -1324,6 +1324,66 @@ class DBManager(metaclass=Singleton):
         result = self.db.execute(query, values, one_value=True, return_dict=True)
         return result if result else None
 
+    def generate_profiling_command_from_hierarchy(
+        self,
+        hostname: str,
+        service_name: Optional[str] = None,
+        container_name: Optional[str] = None,
+        pod_name: Optional[str] = None,
+        namespace: Optional[str] = None,
+    ) -> Optional[Dict]:
+        """Generate profiling command based on hierarchy commands"""
+        query = """
+        SELECT
+            *
+        FROM
+            ProfilingHierarchyCommands
+        WHERE
+            (%(service_name)s IS NULL OR service_name = %(service_name)s)
+            AND (%(container_name)s IS NULL OR container_name = %(container_name)s)
+            AND (%(pod_name)s IS NULL OR pod_name = %(pod_name)s)
+            AND (%(namespace)s IS NULL OR namespace = %(namespace)s)
+        ORDER BY
+            service_name DESC NULLS LAST,
+            container_name DESC NULLS LAST,
+            pod_name DESC NULLS LAST,
+            namespace DESC NULLS LAST
+        LIMIT 1
+        """
+
+        values = {
+            "service_name": service_name,
+            "container_name": container_name,
+            "pod_name": pod_name,
+            "namespace": namespace,
+        }
+
+        hierarchy_command = self.db.execute(query, values, one_value=True, return_dict=True)
+        if not hierarchy_command:
+            return None
+        
+        query = """
+        INSERT INTO ProfilingCommands (
+            command_id, hostname, service_name, command_type, request_ids,
+            combined_config, status, created_at
+        ) VALUES (
+            %(new_command_id)s::uuid, %(hostname)s, %(service_name)s, %(command_type)s,
+            %(request_ids)s::uuid[], %(combined_config)s::jsonb, 'pending', CURRENT_TIMESTAMP
+        )
+        RETURNING *
+        """
+        
+        values = {
+            "new_command_id": str(uuid.uuid4()),
+            "hostname": hostname,
+            "service_name": hierarchy_command.get("service_name"),
+            "command_type": hierarchy_command.get("command_type"),
+            "request_ids": hierarchy_command.get("request_ids"),
+            "combined_config": json.dumps(hierarchy_command.get("combined_config")),
+        }
+        profiling_command = self.db.execute(query, values, one_value=True, return_dict=True)
+        return profiling_command if profiling_command else None
+
     def get_pending_profiling_command(
         self, hostname: str, service_name: str, exclude_command_id: Optional[str] = None
     ) -> Optional[Dict]:
