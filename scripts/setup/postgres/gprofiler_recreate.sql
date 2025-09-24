@@ -255,6 +255,7 @@ CREATE TABLE HostHeartbeats (
     hostname text NOT NULL,
     ip_address inet NOT NULL,
     service_name text NOT NULL,
+    container_runtime_info jsonb NULL,
     last_command_id uuid NULL,
     status HostStatus NOT NULL DEFAULT 'active',
     heartbeat_timestamp timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -268,6 +269,57 @@ CREATE INDEX idx_hostheartbeats_hostname ON HostHeartbeats (hostname);
 CREATE INDEX idx_hostheartbeats_service_name ON HostHeartbeats (service_name);
 CREATE INDEX idx_hostheartbeats_status ON HostHeartbeats (status);
 CREATE INDEX idx_hostheartbeats_heartbeat_timestamp ON HostHeartbeats (heartbeat_timestamp);
+
+-- Host Namespaces Table (simplified)
+CREATE TABLE HostNamespaces (
+    ID bigserial PRIMARY KEY,
+    hostname text NOT NULL,
+    service_name text NOT NULL,
+    namespace text NOT NULL,
+    created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "unique_host_namespace" UNIQUE (hostname, service_name, namespace)
+);
+
+-- Essential indexes for host namespaces
+CREATE INDEX idx_hostnamespaces_hostname ON HostNamespaces (hostname);
+CREATE INDEX idx_hostnamespaces_service_name ON HostNamespaces (service_name);
+CREATE INDEX idx_hostnamespaces_namespace ON HostNamespaces (namespace);
+CREATE INDEX idx_hostnamespaces_hostname_service_namespace ON HostNamespaces (hostname, service_name, namespace);
+
+-- Host Pods Table (simplified)
+CREATE TABLE HostPods (
+    ID bigserial PRIMARY KEY,
+    hostname text NOT NULL,
+    service_name text NOT NULL,
+    pod_name text NOT NULL,
+    created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "unique_host_pod" UNIQUE (hostname, service_name, pod_name)
+);
+
+-- Essential indexes for host pods
+CREATE INDEX idx_hostpods_hostname ON HostPods (hostname);
+CREATE INDEX idx_hostpods_service_name ON HostPods (service_name);
+CREATE INDEX idx_hostpods_pod_name ON HostPods (pod_name);
+CREATE INDEX idx_hostpods_hostname_service_pod ON HostPods (hostname, service_name, pod_name);
+
+-- Host Containers Table (simplified)
+CREATE TABLE HostContainers (
+    ID bigserial PRIMARY KEY,
+    hostname text NOT NULL,
+    service_name text NOT NULL,
+    container_name text NOT NULL,
+    created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "unique_host_container" UNIQUE (hostname, service_name, container_name)
+);
+
+-- Essential indexes for host containers
+CREATE INDEX idx_hostcontainers_hostname ON HostContainers (hostname);
+CREATE INDEX idx_hostcontainers_service_name ON HostContainers (service_name);
+CREATE INDEX idx_hostcontainers_container_name ON HostContainers (container_name);
+CREATE INDEX idx_hostcontainers_hostname_service_container ON HostContainers (hostname, service_name, container_name);
 
 -- Profiling Requests Table (simplified)
 CREATE TABLE ProfilingRequests (

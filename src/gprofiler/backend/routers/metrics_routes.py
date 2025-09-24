@@ -462,6 +462,7 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                 "hostname": heartbeat.hostname,
                 "ip_address": heartbeat.ip_address,
                 "service_name": heartbeat.service_name,
+                "namespaces": heartbeat.namespaces,
                 "last_command_id": heartbeat.last_command_id,
                 "status": heartbeat.status,
                 "timestamp": heartbeat.timestamp,
@@ -476,9 +477,15 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                 hostname=heartbeat.hostname,
                 ip_address=heartbeat.ip_address,
                 service_name=heartbeat.service_name,
+                container_runtime_info=heartbeat.namespaces,
                 last_command_id=heartbeat.last_command_id,
                 status=heartbeat.status,
                 heartbeat_timestamp=heartbeat.timestamp,
+            )
+            db_manager.update_heartbeat_related_tables(
+                hostname=heartbeat.hostname,
+                service_name=heartbeat.service_name,
+                container_runtime_info=heartbeat.namespaces,
             )
 
             # 2. Check for current profiling command for this host/service
