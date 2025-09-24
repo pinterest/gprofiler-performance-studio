@@ -97,10 +97,11 @@ const ProfilingStatusPage = () => {
         }
     }, []); // Only run once on mount
 
-    // Update URL when filters change
+    // Update URL when filters change (with focus preservation)
     const updateURL = useCallback(
         (newFilters) => {
-            // Start with empty search params since we want clean filter updates
+            // Use replace instead of push to avoid navigation history buildup
+            // and reduce re-render impact on focus
             const searchParams = {};
 
             // Add new filter parameters
@@ -112,11 +113,11 @@ const ProfilingStatusPage = () => {
 
             const newSearch = queryString.stringify(searchParams);
             
-            // If search string is empty, use explicit pathname to clear URL
+            // Use replace instead of push to minimize focus disruption
             if (newSearch === '') {
-                history.push('/profiling');
+                history.replace('/profiling');
             } else {
-                history.push({ pathname: '/profiling', search: newSearch });
+                history.replace({ pathname: '/profiling', search: newSearch });
             }
         },
         [history]
@@ -181,16 +182,15 @@ const ProfilingStatusPage = () => {
         const timeoutId = setTimeout(() => {
             fetchProfilingStatus(filters);
             updateURL(filters);
-        }, 300); // 300ms debounce
+        }, 800); // 800ms debounce - even longer delay for smoother typing experience
 
         return () => clearTimeout(timeoutId);
-    }, [filters, fetchProfilingStatus, updateURL]);
+    }, [filters, fetchProfilingStatus]); // Remove updateURL to prevent unnecessary re-creates
 
-    // Function to update individual filter
-    const updateFilter = (field, value) => {
-        const newFilters = { ...filters, [field]: value };
-        setFilters(newFilters);
-    };
+    // Function to update individual filter (optimized for focus preservation)
+    const updateFilter = useCallback((field, value) => {
+        setFilters(prev => ({ ...prev, [field]: value }));
+    }, []); // Stable function reference
 
     // Clear all filters function
     const clearAllFilters = () => {
