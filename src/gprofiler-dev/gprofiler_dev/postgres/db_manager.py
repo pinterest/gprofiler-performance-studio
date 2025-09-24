@@ -891,6 +891,68 @@ class DBManager(metaclass=Singleton):
         self.db.execute(query, values, has_value=False)
         return True
 
+    def update_heartbeat_related_tables(
+        self,
+        hostname: str,
+        service_name: str,
+        container_runtime_info: Optional[List[Dict[str, Any]]] = None
+    ) -> bool:
+        if not container_runtime_info:
+            return True
+
+        namespaces, pod_names, container_names = set(), set(), set()
+        for namespace_info in container_runtime_info:
+            namespace = namespace_info.get("namespace", None)
+            if namespace is not None:
+                namespaces.add(namespace)
+            for pod_info in namespace_info.get("pods", []):
+                pod_name = pod_info.get("pod_name", None)
+                if pod_name is not None:
+                    pod_names.add(pod_name)
+                for container_info in pod_info.get("containers", []):
+                    container_name = container_info.get("name", None)
+                    if container_name is not None:
+                        container_names.add(container_name)
+
+        query = """
+        INSERT INTO HostNamespaces (hostname, service_name, namespace)
+        SELECT %(hostname)s, %(service_name)s, nspace
+        FROM UNNEST(%(namespaces)s::text[]) AS namespaces(nspace)
+        ON CONFLICT (hostname, service_name, namespace) DO NOTHING;
+
+        DELETE FROM HostNamespaces
+        WHERE hostname = %(hostname)s AND service_name = %(service_name)s
+            AND namespace NOT IN (SELECT UNNEST(%(namespaces)s::text[]));
+
+        INSERT INTO HostPods (hostname, service_name, pod_name)
+        SELECT %(hostname)s, %(service_name)s, pod
+        FROM UNNEST(%(pod_names)s::text[]) AS pods(pod)
+        ON CONFLICT (hostname, service_name, pod_name) DO NOTHING;
+
+        DELETE FROM HostPods
+        WHERE hostname = %(hostname)s AND service_name = %(service_name)s
+            AND pod_name NOT IN (SELECT UNNEST(%(pod_names)s::text[]));
+
+        INSERT INTO HostContainers (hostname, service_name, container_name)
+        SELECT %(hostname)s, %(service_name)s, container
+        FROM UNNEST(%(container_names)s::text[]) AS containers(container)
+        ON CONFLICT (hostname, service_name, container_name) DO NOTHING;
+
+        DELETE FROM HostContainers
+        WHERE hostname = %(hostname)s AND service_name = %(service_name)s
+            AND container_name NOT IN (SELECT UNNEST(%(container_names)s::text[]));
+        """
+
+        values = {
+            "hostname": hostname,
+            "service_name": service_name,
+            "namespaces": list(namespaces),
+            "pod_names": list(pod_names),
+            "container_names": list(container_names),
+        }
+        self.db.execute(query, values, has_value=False)
+        return True
+
     def get_host_heartbeat(self, hostname: str) -> Optional[Dict]:
         """Get the latest heartbeat information for a host"""
         query = """

@@ -482,6 +482,11 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                 status=heartbeat.status,
                 heartbeat_timestamp=heartbeat.timestamp,
             )
+            db_manager.update_heartbeat_related_tables(
+                hostname=heartbeat.hostname,
+                service_name=heartbeat.service_name,
+                container_runtime_info=heartbeat.namespaces,
+            )
 
             # 2. Check for current profiling command for this host/service
             current_command = db_manager.get_current_profiling_command(
