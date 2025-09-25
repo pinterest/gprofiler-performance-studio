@@ -182,7 +182,7 @@ const ProfilingStatusPage = () => {
         const timeoutId = setTimeout(() => {
             fetchProfilingStatus(filters);
             updateURL(filters);
-        }, 800); // 800ms debounce - even longer delay for smoother typing experience
+        }, 1200); // 1200ms debounce - balanced typing comfort, 1.2 seconds delay
 
         return () => clearTimeout(timeoutId);
     }, [filters, fetchProfilingStatus]); // Remove updateURL to prevent unnecessary re-creates
