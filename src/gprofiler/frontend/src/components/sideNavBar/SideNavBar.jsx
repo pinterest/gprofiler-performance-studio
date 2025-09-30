@@ -99,8 +99,9 @@ const SideNavBar = ({ onSidebarToggle, isCollapsed }) => {
                                 <SideBarItem
                                     sx={{ px: isExpanded ? 5 : 6 }}
                                     selected={location.pathname === item.to}
-                                    component={Link}
-                                    to={{ pathname: item.to, search: location.search }}>
+                                    component={item.key === 'profiling' ? 'a' : Link}
+                                    href={item.key === 'profiling' ? '/profiling' : undefined}
+                                    to={item.key === 'profiling' ? undefined : item.to}>
                                     <ListItemIcon sx={{ minWidth: '35px' }}>
                                         {location.pathname === item.to ? item.selectedIcon : item.icon}
                                     </ListItemIcon>
@@ -119,7 +120,7 @@ const SideNavBar = ({ onSidebarToggle, isCollapsed }) => {
                         <SideBarTooltip title={isExpanded ? '' : PAGES.installation.label}>
                             <Box sx={{ px: 2 }}>
                                 <AddServiceButton
-                                    to={{ pathname: PAGES.installation.to, search: location.search }}
+                                    to={PAGES.installation.to}
                                     iconOnly={!isExpanded}
                                     startIcon={<Icon name={ICONS_NAMES.Plus} color={COLORS.WHITE} size={30} />}>
                                     {PAGES.installation.label}

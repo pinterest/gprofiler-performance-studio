@@ -1,13 +1,13 @@
-import { Box, Button, duration, Typography } from '@mui/material';
-import TextField from '@mui/material/TextField';
+import { Box, Typography } from '@mui/material';
 import queryString from 'query-string';
 import React, { useCallback, useEffect, useState } from 'react';
 import { useHistory, useLocation } from 'react-router-dom';
 
 import { DATA_URLS } from '../../api/urls';
-import { formatDate, TIME_FORMATS } from '../../utils/datetimesUtils';
 import MuiTable from '../common/dataDisplay/table/MuiTable';
 import PageHeader from '../common/layout/PageHeader';
+import ProfilingHeader from './header/ProfilingHeader';
+import ProfilingTopPanel from './header/ProfilingTopPanel';
 
 const columns = [
     { field: 'service', headerName: 'service name', flex: 1 },
@@ -52,73 +52,104 @@ const ProfilingStatusPage = () => {
     const [rows, setRows] = useState([]);
     const [loading, setLoading] = useState(false);
     const [selectionModel, setSelectionModel] = useState([]);
-    const [filter, setFilter] = useState('');
+    const [filters, setFilters] = useState({
+        service: '',
+        hostname: '',
+        pids: '',
+        ip: '',
+        commandType: '',
+        status: '',
+    });
     const history = useHistory();
     const location = useLocation();
 
-    // Initialize filter from URL parameters on component mount
+    // Initialize filters from URL parameters for direct URL visits (shareable links)
     useEffect(() => {
         const searchParams = queryString.parse(location.search);
-        const serviceParam = searchParams.service;
-        if (serviceParam) {
-            setFilter(serviceParam);
+        const hasFilterParams = ['service', 'hostname', 'pids', 'ip', 'commandType', 'status'].some(
+            param => searchParams[param]
+        );
+        
+        // Only initialize from URL if there are actual filter parameters
+        if (hasFilterParams) {
+            const urlFilters = {
+                service: searchParams.service || '',
+                hostname: searchParams.hostname || '',
+                pids: searchParams.pids || '',
+                ip: searchParams.ip || '',
+                commandType: searchParams.commandType || '',
+                status: searchParams.status || '',
+            };
+            setFilters(urlFilters);
         }
-    }, [location.search]);
-
-    // Clean up profile-specific URL parameters when entering dynamic profiling
-    useEffect(() => {
-        const searchParams = queryString.parse(location.search);
-        let hasProfileParams = false;
-
-        // Check if any profile-specific parameters exist
-        const profileParams = [
-            'gtab',
-            'view',
-            'time',
-            'startTime',
-            'endTime',
-            'filter',
-            'rt',
-            'rtms',
-            'p',
-            'pm',
-            'wt',
-            'wp',
-            'search',
-            'fullscreen',
-        ];
-
-        profileParams.forEach((param) => {
-            if (searchParams[param] !== undefined) {
-                delete searchParams[param];
-                hasProfileParams = true;
-            }
-        });
-
-        // Only update URL if we found and removed profile-specific parameters
+        
+        // Clean up profile-specific parameters if they exist (mixed URLs)
+        const profileParams = ['gtab', 'view', 'time', 'startTime', 'endTime', 'filter', 'rt', 'rtms', 'p', 'pm', 'wt', 'wp', 'search', 'fullscreen'];
+        const hasProfileParams = profileParams.some(param => searchParams[param]);
+        
         if (hasProfileParams) {
-            history.replace({ search: queryString.stringify(searchParams) });
+            // Remove only profile params, keep filter params
+            const cleanedParams = { ...searchParams };
+            profileParams.forEach(param => {
+                delete cleanedParams[param];
+            });
+            history.replace({ search: queryString.stringify(cleanedParams) });
         }
-    }, []); // Run only once on component mount
+    }, []); // Only run once on mount
 
-    // Update URL when filter changes
+    // Update URL when filters change (with focus preservation)
     const updateURL = useCallback(
-        (serviceName) => {
-            const searchParams = queryString.parse(location.search);
-            if (serviceName && serviceName.length >= 3) {
-                searchParams.service = serviceName;
+        (newFilters) => {
+            // Use replace instead of push to avoid navigation history buildup
+            // and reduce re-render impact on focus
+            const searchParams = {};
+
+            // Add new filter parameters
+            Object.keys(newFilters).forEach((key) => {
+                if (newFilters[key]) {
+                    searchParams[key] = newFilters[key];
+                }
+            });
+
+            const newSearch = queryString.stringify(searchParams);
+            
+            // Use replace instead of push to minimize focus disruption
+            if (newSearch === '') {
+                history.replace('/profiling');
             } else {
-                delete searchParams.service;
+                history.replace({ pathname: '/profiling', search: newSearch });
             }
-            history.push({ search: queryString.stringify(searchParams) });
         },
-        [location.search, history]
+        [history]
     );
 
-    const fetchProfilingStatus = useCallback((serviceName = null) => {
+    const fetchProfilingStatus = useCallback((filterParams) => {
         setLoading(true);
-        const url = serviceName
-            ? `${DATA_URLS.GET_PROFILING_HOST_STATUS}?service_name=${encodeURIComponent(serviceName)}`
+
+        // Build query parameters
+        const params = new URLSearchParams();
+
+        if (filterParams.service) {
+            params.append('service_name', filterParams.service);
+        }
+        if (filterParams.hostname) {
+            params.append('hostname', filterParams.hostname);
+        }
+        if (filterParams.pids) {
+            params.append('pids', filterParams.pids);
+        }
+        if (filterParams.ip) {
+            params.append('ip_address', filterParams.ip);
+        }
+        if (filterParams.commandType) {
+            params.append('command_type', filterParams.commandType);
+        }
+        if (filterParams.status) {
+            params.append('profiling_status', filterParams.status);
+        }
+
+        const url = params.toString()
+            ? `${DATA_URLS.GET_PROFILING_HOST_STATUS}?${params.toString()}`
             : DATA_URLS.GET_PROFILING_HOST_STATUS;
 
         fetch(url)
@@ -139,38 +170,41 @@ const ProfilingStatusPage = () => {
                 setLoading(false);
             })
             .catch(() => setLoading(false));
-    }, []);
+    }, []); // No dependencies needed since it takes filterParams as argument
 
-    // Initial data fetch - check URL first, then fetch data
+    // Initial data fetch
     useEffect(() => {
-        const searchParams = queryString.parse(location.search);
-        const serviceParam = searchParams.service;
-        if (serviceParam) {
-            // If there's a service parameter in URL, fetch with that filter
-            fetchProfilingStatus(serviceParam);
-        } else {
-            // Otherwise fetch all data
-            fetchProfilingStatus();
-        }
+        fetchProfilingStatus(filters);
     }, []); // Only run once on mount
 
     // Debounced function to handle filter changes
     useEffect(() => {
         const timeoutId = setTimeout(() => {
-            if (filter.length >= 3) {
-                // Call backend with service name filter
-                fetchProfilingStatus(filter);
-                updateURL(filter);
-            } else if (filter.length === 0) {
-                // Get all hosts when filter is empty
-                fetchProfilingStatus();
-                updateURL('');
-            }
-            // Do nothing if filter is 1-2 characters (show existing data)
-        }, 500); // 500ms debounce
+            fetchProfilingStatus(filters);
+            updateURL(filters);
+        }, 1200); // 1200ms debounce - balanced typing comfort, 1.2 seconds delay
 
         return () => clearTimeout(timeoutId);
-    }, [filter, fetchProfilingStatus, updateURL]);
+    }, [filters, fetchProfilingStatus]); // Remove updateURL to prevent unnecessary re-creates
+
+    // Function to update individual filter (optimized for focus preservation)
+    const updateFilter = useCallback((field, value) => {
+        setFilters(prev => ({ ...prev, [field]: value }));
+    }, []); // Stable function reference
+
+    // Clear all filters function
+    const clearAllFilters = () => {
+        const emptyFilters = {
+            service: '',
+            hostname: '',
+            pids: '',
+            ip: '',
+            commandType: '',
+            status: '',
+        };
+        setFilters(emptyFilters);
+        updateURL(emptyFilters);
+    };
 
     // Bulk Start/Stop handlers
     function handleBulkAction(action) {
@@ -217,61 +251,32 @@ const ProfilingStatusPage = () => {
         // Wait for all requests to finish before refreshing
         Promise.all(requests).then(() => {
             // Maintain current filter state when refreshing
-            if (filter.length >= 3) {
-                fetchProfilingStatus(filter);
-            } else {
-                fetchProfilingStatus();
-            }
+            fetchProfilingStatus(filters);
             setSelectionModel([]); // Clear all checkboxes after API requests complete
         });
     }
 
     return (
-        <>
-            <PageHeader title='Dynamic Profiling' />
-            <Box sx={{ p: { xs: 2, sm: 3, md: 4 }, backgroundColor: 'white.main', minHeight: 'calc(100vh - 100px)' }}>
-                <Box sx={{ mb: 3, display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <TextField
-                        label='Filter by service name'
-                        variant='outlined'
-                        size='small'
-                        value={filter}
-                        onChange={(e) => setFilter(e.target.value)}
-                        sx={{ minWidth: 250 }}
-                        helperText={filter.length > 0 && filter.length < 3 ? 'Type 3+ characters to filter' : ''}
-                    />
-                    <Button
-                        variant='contained'
-                        color='success'
-                        size='small'
-                        onClick={() => handleBulkAction('start')}
-                        disabled={selectionModel.length === 0}>
-                        Start
-                    </Button>
-                    <Button
-                        variant='contained'
-                        color='error'
-                        size='small'
-                        onClick={() => handleBulkAction('stop')}
-                        disabled={selectionModel.length === 0}>
-                        Stop
-                    </Button>
-                    <Button
-                        variant='outlined'
-                        color='primary'
-                        size='small'
-                        onClick={() => {
-                            if (filter.length >= 3) {
-                                fetchProfilingStatus(filter);
-                            } else {
-                                fetchProfilingStatus();
-                            }
-                        }}
-                        disabled={loading}>
-                        Refresh
-                    </Button>
-                </Box>
-                <Box sx={{ '& .MuiDataGrid-root': { border: 'none' } }}>
+        <Box sx={{ backgroundColor: 'white.main', height: '100%' }}>
+            <ProfilingHeader filters={filters} updateFilter={updateFilter} isLoading={loading} />
+
+            <Box
+                sx={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                }}>
+                <ProfilingTopPanel
+                    selectionModel={selectionModel}
+                    handleBulkAction={handleBulkAction}
+                    fetchProfilingStatus={fetchProfilingStatus}
+                    filters={filters}
+                    loading={loading}
+                    rowsCount={rows.length}
+                    clearAllFilters={clearAllFilters}
+                />
+
+                {/* Data Table */}
+                <Box sx={{ p: 4, '& .MuiDataGrid-root': { border: 'none' } }}>
                     <MuiTable
                         columns={columns}
                         data={rows}
@@ -285,7 +290,7 @@ const ProfilingStatusPage = () => {
                     />
                 </Box>
             </Box>
-        </>
+        </Box>
     );
 };
 
