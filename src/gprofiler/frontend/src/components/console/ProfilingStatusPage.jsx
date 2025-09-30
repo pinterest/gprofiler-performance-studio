@@ -71,67 +71,6 @@ const ProfilingStatusPage = () => {
     const history = useHistory();
     const location = useLocation();
 
-    // Initialize filters from URL parameters for direct URL visits (shareable links)
-    useEffect(() => {
-        const searchParams = queryString.parse(location.search);
-        const hasFilterParams = ['service', 'hostname', 'pids', 'ip', 'commandType', 'status'].some(
-            param => searchParams[param]
-        );
-        
-        // Only initialize from URL if there are actual filter parameters
-        if (hasFilterParams) {
-            const urlFilters = {
-                service: searchParams.service || '',
-                hostname: searchParams.hostname || '',
-                pids: searchParams.pids || '',
-                ip: searchParams.ip || '',
-                commandType: searchParams.commandType || '',
-                status: searchParams.status || '',
-            };
-            setFilters(urlFilters);
-            setAppliedFilters(urlFilters);
-        }
-        
-        // Clean up profile-specific parameters if they exist (mixed URLs)
-        const profileParams = ['gtab', 'view', 'time', 'startTime', 'endTime', 'filter', 'rt', 'rtms', 'p', 'pm', 'wt', 'wp', 'search', 'fullscreen'];
-        const hasProfileParams = profileParams.some(param => searchParams[param]);
-        
-        if (hasProfileParams) {
-            // Remove only profile params, keep filter params
-            const cleanedParams = { ...searchParams };
-            profileParams.forEach(param => {
-                delete cleanedParams[param];
-            });
-            history.replace({ search: queryString.stringify(cleanedParams) });
-        }
-    }, []); // Only run once on mount
-
-    // Update URL when filters change (with focus preservation)
-    const updateURL = useCallback(
-        (newFilters) => {
-            // Use replace instead of push to avoid navigation history buildup
-            // and reduce re-render impact on focus
-            const searchParams = {};
-
-            // Add new filter parameters
-            Object.keys(newFilters).forEach((key) => {
-                if (newFilters[key]) {
-                    searchParams[key] = newFilters[key];
-                }
-            });
-
-            const newSearch = queryString.stringify(searchParams);
-            
-            // Use replace instead of push to minimize focus disruption
-            if (newSearch === '') {
-                history.replace('/profiling');
-            } else {
-                history.replace({ pathname: '/profiling', search: newSearch });
-            }
-        },
-        [history]
-    );
-
     const fetchProfilingStatus = useCallback((filterParams) => {
         setLoading(true);
 
@@ -181,10 +120,79 @@ const ProfilingStatusPage = () => {
             .catch(() => setLoading(false));
     }, []); // No dependencies needed since it takes filterParams as argument
 
-    // Initial data fetch
+    // Initialize filters from URL parameters for direct URL visits (shareable links)
     useEffect(() => {
-        fetchProfilingStatus(appliedFilters);
-    }, []); // Only run once on mount
+        const searchParams = queryString.parse(location.search);
+        const hasFilterParams = ['service', 'hostname', 'pids', 'ip', 'commandType', 'status'].some(
+            param => searchParams[param]
+        );
+        
+        // Only initialize from URL if there are actual filter parameters
+        if (hasFilterParams) {
+            const urlFilters = {
+                service: searchParams.service || '',
+                hostname: searchParams.hostname || '',
+                pids: searchParams.pids || '',
+                ip: searchParams.ip || '',
+                commandType: searchParams.commandType || '',
+                status: searchParams.status || '',
+            };
+            setFilters(urlFilters);
+            setAppliedFilters(urlFilters);
+            // Automatically fetch data with URL filters on page load
+            fetchProfilingStatus(urlFilters);
+        } else {
+            // No URL params, fetch all data
+            const emptyFilters = {
+                service: '',
+                hostname: '',
+                pids: '',
+                ip: '',
+                commandType: '',
+                status: '',
+            };
+            fetchProfilingStatus(emptyFilters);
+        }
+        
+        // Clean up profile-specific parameters if they exist (mixed URLs)
+        const profileParams = ['gtab', 'view', 'time', 'startTime', 'endTime', 'filter', 'rt', 'rtms', 'p', 'pm', 'wt', 'wp', 'search', 'fullscreen'];
+        const hasProfileParams = profileParams.some(param => searchParams[param]);
+        
+        if (hasProfileParams) {
+            // Remove only profile params, keep filter params
+            const cleanedParams = { ...searchParams };
+            profileParams.forEach(param => {
+                delete cleanedParams[param];
+            });
+            history.replace({ search: queryString.stringify(cleanedParams) });
+        }
+    }, [fetchProfilingStatus, history, location.search]); // Add dependencies
+
+    // Update URL when filters change (with focus preservation)
+    const updateURL = useCallback(
+        (newFilters) => {
+            // Use replace instead of push to avoid navigation history buildup
+            // and reduce re-render impact on focus
+            const searchParams = {};
+
+            // Add new filter parameters
+            Object.keys(newFilters).forEach((key) => {
+                if (newFilters[key]) {
+                    searchParams[key] = newFilters[key];
+                }
+            });
+
+            const newSearch = queryString.stringify(searchParams);
+            
+            // Use replace instead of push to minimize focus disruption
+            if (newSearch === '') {
+                history.replace('/profiling');
+            } else {
+                history.replace({ pathname: '/profiling', search: newSearch });
+            }
+        },
+        [history]
+    );
 
     // Function to update individual filter (optimized for focus preservation)
     const updateFilter = useCallback((field, value) => {
