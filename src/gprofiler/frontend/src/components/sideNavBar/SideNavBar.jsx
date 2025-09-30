@@ -53,8 +53,8 @@ let navigationItems = [
         key: PAGES.profiling.key,
         label: PAGES.profiling.label,
         to: PAGES.profiling.to,
-        icon: <ProfilesPageIcon fill={COLORS.SILVER_GREY} />,
-        selectedIcon: <ProfilesPageIcon />,
+        icon: <Icon name={ICONS_NAMES.Crosshairs} color={COLORS.SILVER_GREY} />,
+        selectedIcon: <Icon name={ICONS_NAMES.Crosshairs} color={COLORS.PRIMARY_BLUE} />,
     },
     {
         key: PAGES.comparison.key,

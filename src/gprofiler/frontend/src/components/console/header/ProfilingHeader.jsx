@@ -1,27 +1,67 @@
-import { Box, FormControl, InputLabel, MenuItem, Select, TextField } from '@mui/material';
-import React from 'react';
+import { Box, Button, Collapse, FormControl, InputLabel, MenuItem, Select, TextField } from '@mui/material';
+import React, { useState } from 'react';
 
 import { COLORS } from '../../../theme/colors';
+import Icon from '../../common/icon/Icon';
+import { ICONS_NAMES } from '../../common/icon/iconsData';
 import Flexbox from '../../common/layout/Flexbox';
 
-const ProfilingHeader = ({ filters, updateFilter, isLoading = false }) => {
+const ProfilingHeader = ({ filters, updateFilter, isLoading = false, onApplyFilters, onClearFilters }) => {
+    const [filtersExpanded, setFiltersExpanded] = useState(false);
+
     return (
-        <Flexbox
-            spacing={{ xs: 1, sm: 2, md: 4 }}
-            justifyContent='start'
-            sx={{ p: 4, zIndex: 3, background: COLORS.ALMOST_WHITE, position: 'relative' }}>
-            <Box
-                sx={{
-                    display: 'grid',
-                    gridTemplateColumns: { 
-                        xs: '1fr', 
-                        sm: '1fr 1fr', 
-                        md: '1fr 1fr 1fr', 
-                        lg: '1fr 1fr 1fr 1fr 1fr 1fr' 
-                    },
-                    width: '100%',
-                    gap: { xs: 2, sm: 2, md: 3 },
-                }}>
+        <Box sx={{ background: COLORS.ALMOST_WHITE, position: 'relative' }}>
+            {/* Filter Toggle Button */}
+            <Flexbox
+                justifyContent='space-between'
+                alignItems='center'
+                sx={{ px: 4, py: 2, borderBottom: filtersExpanded ? '1px solid rgba(0, 0, 0, 0.12)' : 'none' }}>
+                <Button
+                    variant='outlined'
+                    size='large'
+                    onClick={() => setFiltersExpanded(!filtersExpanded)}
+                    startIcon={<Icon name={ICONS_NAMES.Filter} />}
+                    endIcon={
+                        <Icon 
+                            name={filtersExpanded ? ICONS_NAMES.ChevronDown : ICONS_NAMES.ChevronRight} 
+                        />
+                    }
+                    sx={{
+                        textTransform: 'none',
+                        color: COLORS.PRIMARY_BLUE,
+                        borderColor: COLORS.PRIMARY_BLUE,
+                        fontSize: '16px',
+                        fontWeight: 500,
+                        px: 3,
+                        py: 1.5,
+                        minWidth: '180px',
+                        '&:hover': {
+                            borderColor: COLORS.PRIMARY_BLUE,
+                            backgroundColor: 'rgba(30, 64, 175, 0.04)',
+                        },
+                    }}>
+                    Filters
+                </Button>
+            </Flexbox>
+
+            {/* Collapsible Filters Section */}
+            <Collapse in={filtersExpanded} timeout='auto' unmountOnExit>
+                <Flexbox
+                    spacing={{ xs: 1, sm: 2, md: 4 }}
+                    justifyContent='start'
+                    sx={{ p: 4, zIndex: 3 }}>
+                    <Box
+                        sx={{
+                            display: 'grid',
+                            gridTemplateColumns: { 
+                                xs: '1fr', 
+                                sm: '1fr 1fr', 
+                                md: '1fr 1fr 1fr', 
+                                lg: '1fr 1fr 1fr 1fr 1fr 1fr' 
+                            },
+                            width: '100%',
+                            gap: { xs: 2, sm: 2, md: 3 },
+                        }}>
                 {/* Service Name Filter */}
                 <TextField
                     label='Service Name'
@@ -206,12 +246,47 @@ const ProfilingHeader = ({ filters, updateFilter, isLoading = false }) => {
                         <MenuItem value='stopped'>stopped</MenuItem>
                     </Select>
                 </FormControl>
-            </Box>
-            <Flexbox sx={{ height: '42px' }}>
-                {/* Additional actions area - matching ProfilesPage structure */}
-                <Box />
-            </Flexbox>
-        </Flexbox>
+                    </Box>
+                    
+                    {/* Action Buttons */}
+                    <Flexbox 
+                        justifyContent='flex-end' 
+                        gap={2}
+                        sx={{ mt: 2 }}>
+                        <Button
+                            variant='outlined'
+                            size='medium'
+                            onClick={onClearFilters}
+                            disabled={isLoading}
+                            sx={{
+                                textTransform: 'none',
+                                borderColor: 'rgba(0, 0, 0, 0.23)',
+                                color: 'rgba(0, 0, 0, 0.87)',
+                                '&:hover': {
+                                    borderColor: 'rgba(0, 0, 0, 0.87)',
+                                    backgroundColor: 'rgba(0, 0, 0, 0.04)',
+                                },
+                            }}>
+                            Clear
+                        </Button>
+                        <Button
+                            variant='contained'
+                            size='medium'
+                            onClick={onApplyFilters}
+                            disabled={isLoading}
+                            sx={{
+                                textTransform: 'none',
+                                backgroundColor: COLORS.PRIMARY_BLUE,
+                                '&:hover': {
+                                    backgroundColor: '#1e3a8a',
+                                },
+                            }}>
+                            Apply Filters
+                        </Button>
+                    </Flexbox>
+                </Flexbox>
+            </Collapse>
+        </Box>
     );
 };
 

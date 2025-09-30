@@ -60,6 +60,14 @@ const ProfilingStatusPage = () => {
         commandType: '',
         status: '',
     });
+    const [appliedFilters, setAppliedFilters] = useState({
+        service: '',
+        hostname: '',
+        pids: '',
+        ip: '',
+        commandType: '',
+        status: '',
+    });
     const history = useHistory();
     const location = useLocation();
 
@@ -81,6 +89,7 @@ const ProfilingStatusPage = () => {
                 status: searchParams.status || '',
             };
             setFilters(urlFilters);
+            setAppliedFilters(urlFilters);
         }
         
         // Clean up profile-specific parameters if they exist (mixed URLs)
@@ -174,26 +183,23 @@ const ProfilingStatusPage = () => {
 
     // Initial data fetch
     useEffect(() => {
-        fetchProfilingStatus(filters);
+        fetchProfilingStatus(appliedFilters);
     }, []); // Only run once on mount
-
-    // Debounced function to handle filter changes
-    useEffect(() => {
-        const timeoutId = setTimeout(() => {
-            fetchProfilingStatus(filters);
-            updateURL(filters);
-        }, 1200); // 1200ms debounce - balanced typing comfort, 1.2 seconds delay
-
-        return () => clearTimeout(timeoutId);
-    }, [filters, fetchProfilingStatus]); // Remove updateURL to prevent unnecessary re-creates
 
     // Function to update individual filter (optimized for focus preservation)
     const updateFilter = useCallback((field, value) => {
         setFilters(prev => ({ ...prev, [field]: value }));
     }, []); // Stable function reference
 
+    // Apply filters function
+    const applyFilters = useCallback(() => {
+        setAppliedFilters(filters);
+        fetchProfilingStatus(filters);
+        updateURL(filters);
+    }, [filters, fetchProfilingStatus, updateURL]);
+
     // Clear all filters function
-    const clearAllFilters = () => {
+    const clearAllFilters = useCallback(() => {
         const emptyFilters = {
             service: '',
             hostname: '',
@@ -203,8 +209,10 @@ const ProfilingStatusPage = () => {
             status: '',
         };
         setFilters(emptyFilters);
+        setAppliedFilters(emptyFilters);
+        fetchProfilingStatus(emptyFilters);
         updateURL(emptyFilters);
-    };
+    }, [fetchProfilingStatus, updateURL]);
 
     // Bulk Start/Stop handlers
     function handleBulkAction(action) {
@@ -251,14 +259,20 @@ const ProfilingStatusPage = () => {
         // Wait for all requests to finish before refreshing
         Promise.all(requests).then(() => {
             // Maintain current filter state when refreshing
-            fetchProfilingStatus(filters);
+            fetchProfilingStatus(appliedFilters);
             setSelectionModel([]); // Clear all checkboxes after API requests complete
         });
     }
 
     return (
         <Box sx={{ backgroundColor: 'white.main', height: '100%' }}>
-            <ProfilingHeader filters={filters} updateFilter={updateFilter} isLoading={loading} />
+            <ProfilingHeader 
+                filters={filters} 
+                updateFilter={updateFilter} 
+                isLoading={loading}
+                onApplyFilters={applyFilters}
+                onClearFilters={clearAllFilters}
+            />
 
             <Box
                 sx={{
@@ -269,7 +283,7 @@ const ProfilingStatusPage = () => {
                     selectionModel={selectionModel}
                     handleBulkAction={handleBulkAction}
                     fetchProfilingStatus={fetchProfilingStatus}
-                    filters={filters}
+                    filters={appliedFilters}
                     loading={loading}
                     rowsCount={rows.length}
                     clearAllFilters={clearAllFilters}
