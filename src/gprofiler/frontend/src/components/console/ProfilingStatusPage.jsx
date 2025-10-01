@@ -60,68 +60,16 @@ const ProfilingStatusPage = () => {
         commandType: '',
         status: '',
     });
+    const [appliedFilters, setAppliedFilters] = useState({
+        service: '',
+        hostname: '',
+        pids: '',
+        ip: '',
+        commandType: '',
+        status: '',
+    });
     const history = useHistory();
     const location = useLocation();
-
-    // Initialize filters from URL parameters for direct URL visits (shareable links)
-    useEffect(() => {
-        const searchParams = queryString.parse(location.search);
-        const hasFilterParams = ['service', 'hostname', 'pids', 'ip', 'commandType', 'status'].some(
-            param => searchParams[param]
-        );
-        
-        // Only initialize from URL if there are actual filter parameters
-        if (hasFilterParams) {
-            const urlFilters = {
-                service: searchParams.service || '',
-                hostname: searchParams.hostname || '',
-                pids: searchParams.pids || '',
-                ip: searchParams.ip || '',
-                commandType: searchParams.commandType || '',
-                status: searchParams.status || '',
-            };
-            setFilters(urlFilters);
-        }
-        
-        // Clean up profile-specific parameters if they exist (mixed URLs)
-        const profileParams = ['gtab', 'view', 'time', 'startTime', 'endTime', 'filter', 'rt', 'rtms', 'p', 'pm', 'wt', 'wp', 'search', 'fullscreen'];
-        const hasProfileParams = profileParams.some(param => searchParams[param]);
-        
-        if (hasProfileParams) {
-            // Remove only profile params, keep filter params
-            const cleanedParams = { ...searchParams };
-            profileParams.forEach(param => {
-                delete cleanedParams[param];
-            });
-            history.replace({ search: queryString.stringify(cleanedParams) });
-        }
-    }, []); // Only run once on mount
-
-    // Update URL when filters change (with focus preservation)
-    const updateURL = useCallback(
-        (newFilters) => {
-            // Use replace instead of push to avoid navigation history buildup
-            // and reduce re-render impact on focus
-            const searchParams = {};
-
-            // Add new filter parameters
-            Object.keys(newFilters).forEach((key) => {
-                if (newFilters[key]) {
-                    searchParams[key] = newFilters[key];
-                }
-            });
-
-            const newSearch = queryString.stringify(searchParams);
-            
-            // Use replace instead of push to minimize focus disruption
-            if (newSearch === '') {
-                history.replace('/profiling');
-            } else {
-                history.replace({ pathname: '/profiling', search: newSearch });
-            }
-        },
-        [history]
-    );
 
     const fetchProfilingStatus = useCallback((filterParams) => {
         setLoading(true);
@@ -172,28 +120,94 @@ const ProfilingStatusPage = () => {
             .catch(() => setLoading(false));
     }, []); // No dependencies needed since it takes filterParams as argument
 
-    // Initial data fetch
+    // Initialize filters from URL parameters for direct URL visits (shareable links)
     useEffect(() => {
-        fetchProfilingStatus(filters);
-    }, []); // Only run once on mount
+        const searchParams = queryString.parse(location.search);
+        const hasFilterParams = ['service', 'hostname', 'pids', 'ip', 'commandType', 'status'].some(
+            param => searchParams[param]
+        );
+        
+        // Only initialize from URL if there are actual filter parameters
+        if (hasFilterParams) {
+            const urlFilters = {
+                service: searchParams.service || '',
+                hostname: searchParams.hostname || '',
+                pids: searchParams.pids || '',
+                ip: searchParams.ip || '',
+                commandType: searchParams.commandType || '',
+                status: searchParams.status || '',
+            };
+            setFilters(urlFilters);
+            setAppliedFilters(urlFilters);
+            // Automatically fetch data with URL filters on page load
+            fetchProfilingStatus(urlFilters);
+        } else {
+            // No URL params, fetch all data
+            const emptyFilters = {
+                service: '',
+                hostname: '',
+                pids: '',
+                ip: '',
+                commandType: '',
+                status: '',
+            };
+            fetchProfilingStatus(emptyFilters);
+        }
+        
+        // Clean up profile-specific parameters if they exist (mixed URLs)
+        const profileParams = ['gtab', 'view', 'time', 'startTime', 'endTime', 'filter', 'rt', 'rtms', 'p', 'pm', 'wt', 'wp', 'search', 'fullscreen'];
+        const hasProfileParams = profileParams.some(param => searchParams[param]);
+        
+        if (hasProfileParams) {
+            // Remove only profile params, keep filter params
+            const cleanedParams = { ...searchParams };
+            profileParams.forEach(param => {
+                delete cleanedParams[param];
+            });
+            history.replace({ search: queryString.stringify(cleanedParams) });
+        }
+    }, [fetchProfilingStatus, history, location.search]); // Add dependencies
 
-    // Debounced function to handle filter changes
-    useEffect(() => {
-        const timeoutId = setTimeout(() => {
-            fetchProfilingStatus(filters);
-            updateURL(filters);
-        }, 1200); // 1200ms debounce - balanced typing comfort, 1.2 seconds delay
+    // Update URL when filters change (with focus preservation)
+    const updateURL = useCallback(
+        (newFilters) => {
+            // Use replace instead of push to avoid navigation history buildup
+            // and reduce re-render impact on focus
+            const searchParams = {};
 
-        return () => clearTimeout(timeoutId);
-    }, [filters, fetchProfilingStatus]); // Remove updateURL to prevent unnecessary re-creates
+            // Add new filter parameters
+            Object.keys(newFilters).forEach((key) => {
+                if (newFilters[key]) {
+                    searchParams[key] = newFilters[key];
+                }
+            });
+
+            const newSearch = queryString.stringify(searchParams);
+            
+            // Use replace instead of push to minimize focus disruption
+            if (newSearch === '') {
+                history.replace('/profiling');
+            } else {
+                history.replace({ pathname: '/profiling', search: newSearch });
+            }
+        },
+        [history]
+    );
 
     // Function to update individual filter (optimized for focus preservation)
     const updateFilter = useCallback((field, value) => {
         setFilters(prev => ({ ...prev, [field]: value }));
     }, []); // Stable function reference
 
+    // Apply filters function
+    const applyFilters = useCallback(() => {
+        setAppliedFilters(filters);
+        fetchProfilingStatus(filters);
+        updateURL(filters);
+    }, [filters, fetchProfilingStatus, updateURL]);
+
     // Clear all filters function
-    const clearAllFilters = () => {
+    const clearAllFilters = useCallback(() => {
         const emptyFilters = {
             service: '',
             hostname: '',
@@ -203,8 +217,10 @@ const ProfilingStatusPage = () => {
             status: '',
         };
         setFilters(emptyFilters);
+        setAppliedFilters(emptyFilters);
+        fetchProfilingStatus(emptyFilters);
         updateURL(emptyFilters);
-    };
+    }, [fetchProfilingStatus, updateURL]);
 
     // Bulk Start/Stop handlers
     function handleBulkAction(action) {
@@ -251,14 +267,20 @@ const ProfilingStatusPage = () => {
         // Wait for all requests to finish before refreshing
         Promise.all(requests).then(() => {
             // Maintain current filter state when refreshing
-            fetchProfilingStatus(filters);
+            fetchProfilingStatus(appliedFilters);
             setSelectionModel([]); // Clear all checkboxes after API requests complete
         });
     }
 
     return (
         <Box sx={{ backgroundColor: 'white.main', height: '100%' }}>
-            <ProfilingHeader filters={filters} updateFilter={updateFilter} isLoading={loading} />
+            <ProfilingHeader 
+                filters={filters} 
+                updateFilter={updateFilter} 
+                isLoading={loading}
+                onApplyFilters={applyFilters}
+                onClearFilters={clearAllFilters}
+            />
 
             <Box
                 sx={{
@@ -269,7 +291,7 @@ const ProfilingStatusPage = () => {
                     selectionModel={selectionModel}
                     handleBulkAction={handleBulkAction}
                     fetchProfilingStatus={fetchProfilingStatus}
-                    filters={filters}
+                    filters={appliedFilters}
                     loading={loading}
                     rowsCount={rows.length}
                     clearAllFilters={clearAllFilters}
