@@ -18,8 +18,10 @@ import hashlib
 import json
 import threading
 import time
+import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta
+from logging import getLogger
 from secrets import token_urlsafe
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
@@ -84,6 +86,9 @@ class Singleton(type):
             with cls._lock:
                 cls._instances[cls] = super(Singleton, cls).__call__(*args, **kwargs)
         return cls._instances[cls]
+
+
+logger = getLogger(__name__)
 
 
 class DBManager(metaclass=Singleton):
@@ -1018,7 +1023,50 @@ class DBManager(metaclass=Singleton):
 
     def create_or_update_profiling_command(
         self,
-        command_id: str,
+        command_ids: List[str],
+        hostname: str,
+        service_name: str,
+        command_type: str,
+        new_request_id: str,
+        final_config: Dict,
+    ) -> bool:
+        """Create or update a profiling command for a specific host/service"""
+        # Use INSERT ... ON CONFLICT for atomic upsert
+        upsert_query = """
+        INSERT INTO ProfilingCommands (
+            command_id, hostname, service_name, command_type, request_ids,
+            combined_config, status, created_at
+        ) VALUES (
+            %(new_command_id)s::uuid, %(hostname)s, %(service_name)s, %(command_type)s,
+            ARRAY[%(request_id)s::uuid], %(final_config)s::jsonb,
+            'pending', CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (hostname, service_name)
+        DO UPDATE SET
+            command_id = %(new_command_id)s::uuid,
+            command_type = %(command_type)s,
+            request_ids = array_append(ProfilingCommands.request_ids, %(request_id)s::uuid),
+            combined_config = %(final_config)s::jsonb,
+            status = 'pending',
+            created_at = CURRENT_TIMESTAMP
+        """
+
+        values = {
+            "new_command_id": str(uuid.uuid4()),
+            "hostname": hostname,
+            "service_name": service_name,
+            "command_type": command_type,
+            "request_id": new_request_id,
+            "final_config": json.dumps(final_config),
+        }
+
+        self.db.execute(upsert_query, values, has_value=False)
+        command_ids.append(values["new_command_id"])
+        return True
+
+    def create_or_merge_profiling_command(
+        self,
+        command_ids: List[str],
         hostname: Optional[str],
         service_name: str,
         command_type: str,
@@ -1030,8 +1078,8 @@ class DBManager(metaclass=Singleton):
             active_hosts = self.get_active_hosts(service_name)
             success = True
             for host in active_hosts:
-                result = self.create_or_update_profiling_command(
-                    command_id, host["hostname"], service_name, command_type, new_request_id, stop_level
+                result = self.create_or_merge_profiling_command(
+                    command_ids, host["hostname"], service_name, command_type, new_request_id, stop_level
                 )
                 success = success and result
             return success
@@ -1075,20 +1123,7 @@ class DBManager(metaclass=Singleton):
 
         # Use proper upsert with ON CONFLICT to handle race conditions
         # First, check if there's an existing command to merge with
-        existing_command_query = """
-        SELECT command_id, combined_config, request_ids
-        FROM ProfilingCommands
-        WHERE hostname = %(hostname)s
-          AND service_name = %(service_name)s
-          AND status = 'pending'
-        """
-
-        existing_command = self.db.execute(
-            existing_command_query,
-            {"hostname": hostname, "service_name": service_name},
-            one_value=True,
-            return_dict=True,
-        )
+        existing_command = self.get_current_profiling_command(hostname, service_name)
 
         # Only merge the command when there is an existing command and
         # the command status is 'pending' or 'sent'
@@ -1106,43 +1141,13 @@ class DBManager(metaclass=Singleton):
             # Merge configurations
             merged_config = self._merge_profiling_configs(existing_config, new_config)
             final_config = merged_config
-            final_request_ids = existing_command["request_ids"] + [new_request_id]
         else:
             # No existing command, use new config as-is
             final_config = new_config
-            final_request_ids = [new_request_id]
 
-        # Use INSERT ... ON CONFLICT for atomic upsert
-        upsert_query = """
-        INSERT INTO ProfilingCommands (
-            command_id, hostname, service_name, command_type, request_ids,
-            combined_config, status, created_at
-        ) VALUES (
-            %(command_id)s::uuid, %(hostname)s, %(service_name)s, %(command_type)s,
-            %(final_request_ids)s::uuid[], %(final_config)s::jsonb,
-            'pending', CURRENT_TIMESTAMP
+        return self.create_or_update_profiling_command(
+            command_ids, hostname, service_name, command_type, new_request_id, final_config
         )
-        ON CONFLICT (hostname, service_name)
-        DO UPDATE SET
-            command_id = %(command_id)s::uuid,
-            command_type = %(command_type)s,
-            request_ids = %(final_request_ids)s::uuid[],
-            combined_config = %(final_config)s::jsonb,
-            status = 'pending',
-            created_at = CURRENT_TIMESTAMP
-        """
-
-        values = {
-            "command_id": command_id,
-            "hostname": hostname,
-            "service_name": service_name,
-            "command_type": command_type,
-            "final_request_ids": final_request_ids,
-            "final_config": json.dumps(final_config),
-        }
-
-        self.db.execute(upsert_query, values, has_value=False)
-        return True
 
     def _merge_profiling_configs(self, existing_config: Dict, new_config: Dict) -> Dict:
         """Merge two profiling configurations, combining parameters appropriately"""
@@ -1195,22 +1200,32 @@ class DBManager(metaclass=Singleton):
         return merged
 
     def create_stop_command_for_host(
-        self, command_id: str, hostname: str, service_name: str, request_id: str, stop_level: str = "host"
+        self, command_ids: List[str], hostname: Optional[str], service_name: str, request_id: str, stop_level: str = "host"
     ) -> bool:
-        """Create a stop command for an entire host"""
+        """Create a stop command for a specific host or all active hosts of a service"""
+        if hostname is None:  # Broadcast to all active hosts of the service
+            active_hosts = self.get_active_hosts(service_name)
+            success = True
+            for host in active_hosts:
+                result = self.create_stop_command_for_host(
+                    command_ids, host["hostname"], service_name, request_id, stop_level
+                )
+                success = success and result
+            return success
+
         query = """
         INSERT INTO ProfilingCommands (
             command_id, hostname, service_name, command_type, request_ids,
             combined_config, status, created_at
         ) VALUES (
-            %(command_id)s::uuid, %(hostname)s, %(service_name)s, 'stop',
+            %(new_command_id)s::uuid, %(hostname)s, %(service_name)s, 'stop',
             ARRAY[%(request_id)s::uuid],
             %(combined_config)s::jsonb,
             'pending', CURRENT_TIMESTAMP
         )
         ON CONFLICT (hostname, service_name)
         DO UPDATE SET
-            command_id = %(command_id)s::uuid,
+            command_id = %(new_command_id)s::uuid,
             command_type = 'stop',
             request_ids = array_append(ProfilingCommands.request_ids, %(request_id)s::uuid),
             combined_config = %(combined_config)s::jsonb,
@@ -1221,7 +1236,7 @@ class DBManager(metaclass=Singleton):
         combined_config = {"stop_level": stop_level}
 
         values = {
-            "command_id": command_id,
+            "new_command_id": str(uuid.uuid4()),
             "hostname": hostname,
             "service_name": service_name,
             "request_id": request_id,
@@ -1229,11 +1244,12 @@ class DBManager(metaclass=Singleton):
         }
 
         self.db.execute(query, values, has_value=False)
+        command_ids.append(values["new_command_id"])
         return True
 
     def handle_process_level_stop(
         self,
-        command_id: str,
+        command_ids: List[str],
         hostname: str,
         service_name: str,
         pids_to_stop: Optional[List[int]],
@@ -1252,12 +1268,12 @@ class DBManager(metaclass=Singleton):
 
                 if len(remaining_pids) < 1:
                     # Convert to host-level stop if no PIDs remain
-                    return self.create_stop_command_for_host(command_id, hostname, service_name, request_id)
+                    return self.create_stop_command_for_host(command_ids, hostname, service_name, request_id)
                 else:
                     # Update command with remaining PIDs
                     query = """
                     UPDATE ProfilingCommands
-                    SET command_id = %(command_id)s::uuid,
+                    SET command_id = %(new_command_id)s::uuid,
                         combined_config = jsonb_set(
                             jsonb_set(combined_config, '{pids}', %(remaining_pids)s::jsonb),
                             '{stop_level}', %(stop_level)s::jsonb
@@ -1269,7 +1285,7 @@ class DBManager(metaclass=Singleton):
                     """
 
                     values = {
-                        "command_id": command_id,
+                        "new_command_id": str(uuid.uuid4()),
                         "hostname": hostname,
                         "service_name": service_name,
                         "request_id": request_id,
@@ -1278,6 +1294,7 @@ class DBManager(metaclass=Singleton):
                     }
 
                     self.db.execute(query, values, has_value=False)
+                    command_ids.append(values["new_command_id"])
                     return True
 
         # Default: create stop command with specific PIDs
@@ -1286,14 +1303,14 @@ class DBManager(metaclass=Singleton):
             command_id, hostname, service_name, command_type, request_ids,
             combined_config, status, created_at
         ) VALUES (
-            %(command_id)s::uuid, %(hostname)s, %(service_name)s, 'stop',
+            %(new_command_id)s::uuid, %(hostname)s, %(service_name)s, 'stop',
             ARRAY[%(request_id)s::uuid],
             %(combined_config)s::jsonb,
             'pending', CURRENT_TIMESTAMP
         )
         ON CONFLICT (hostname, service_name)
         DO UPDATE SET
-            command_id = %(command_id)s::uuid,
+            command_id = %(new_command_id)s::uuid,
             command_type = 'stop',
             request_ids = array_append(ProfilingCommands.request_ids, %(request_id)s::uuid),
             combined_config = %(combined_config)s::jsonb,
@@ -1304,7 +1321,7 @@ class DBManager(metaclass=Singleton):
         combined_config = {"stop_level": stop_level, "pids": pids_to_stop}
 
         values = {
-            "command_id": command_id,
+            "new_command_id": str(uuid.uuid4()),
             "hostname": hostname,
             "service_name": service_name,
             "request_id": request_id,
@@ -1312,10 +1329,11 @@ class DBManager(metaclass=Singleton):
         }
 
         self.db.execute(query, values, has_value=False)
+        command_ids.append(values["new_command_id"])
         return True
 
-    def get_current_profiling_command(self, hostname: str, service_name: str) -> Optional[Dict]:
-        """Get the current profiling command for a host/service"""
+    def get_current_profiling_command(self, hostname: str, service_name: str, generate_from_hierarchy: bool = False) -> Optional[Dict]:
+        """Get the current profiling command for a host/service, optionally generating from hierarchy if none exists"""
         query = """
         SELECT command_id, command_type, combined_config, request_ids, status, created_at
         FROM ProfilingCommands
@@ -1327,7 +1345,71 @@ class DBManager(metaclass=Singleton):
         values = {"hostname": hostname, "service_name": service_name}
 
         result = self.db.execute(query, values, one_value=True, return_dict=True)
+
+        if not result and generate_from_hierarchy:
+            result = self.generate_profiling_command_from_hierarchy(hostname, service_name)
+
         return result if result else None
+
+    def generate_profiling_command_from_hierarchy(
+        self,
+        hostname: str,
+        service_name: Optional[str] = None,
+        container_name: Optional[str] = None,
+        pod_name: Optional[str] = None,
+        namespace: Optional[str] = None,
+    ) -> Optional[Dict]:
+        """Generate profiling command based on hierarchy commands"""
+        query = """
+        SELECT
+            *
+        FROM
+            ProfilingHierarchyCommands
+        WHERE
+            (%(service_name)s IS NULL OR service_name = %(service_name)s)
+            AND (%(container_name)s IS NULL OR container_name = %(container_name)s)
+            AND (%(pod_name)s IS NULL OR pod_name = %(pod_name)s)
+            AND (%(namespace)s IS NULL OR namespace = %(namespace)s)
+        ORDER BY
+            service_name DESC NULLS LAST,
+            container_name DESC NULLS LAST,
+            pod_name DESC NULLS LAST,
+            namespace DESC NULLS LAST
+        LIMIT 1
+        """
+
+        values = {
+            "service_name": service_name,
+            "container_name": container_name,
+            "pod_name": pod_name,
+            "namespace": namespace,
+        }
+
+        hierarchy_command = self.db.execute(query, values, one_value=True, return_dict=True)
+        if not hierarchy_command:
+            return None
+        
+        query = """
+        INSERT INTO ProfilingCommands (
+            command_id, hostname, service_name, command_type, request_ids,
+            combined_config, status, created_at
+        ) VALUES (
+            %(new_command_id)s::uuid, %(hostname)s, %(service_name)s, %(command_type)s,
+            %(request_ids)s::uuid[], %(combined_config)s::jsonb, 'pending', CURRENT_TIMESTAMP
+        )
+        RETURNING *
+        """
+        
+        values = {
+            "new_command_id": str(uuid.uuid4()),
+            "hostname": hostname,
+            "service_name": hierarchy_command.get("service_name"),
+            "command_type": hierarchy_command.get("command_type"),
+            "request_ids": hierarchy_command.get("request_ids"),
+            "combined_config": json.dumps(hierarchy_command.get("combined_config")),
+        }
+        profiling_command = self.db.execute(query, values, one_value=True, return_dict=True)
+        return profiling_command if profiling_command else None
 
     def get_pending_profiling_command(
         self, hostname: str, service_name: str, exclude_command_id: Optional[str] = None
@@ -1531,6 +1613,367 @@ class DBManager(metaclass=Singleton):
         values = {"request_id": request_id}
         result = self.db.execute(query, values, one_value=True, return_dict=True)
         return result if result else None
+
+    def create_or_update_profiling_hierarchy_command(
+        self,
+        command_ids: List[str],
+        service_name: Optional[str] = None,
+        container_name: Optional[str] = None,
+        pod_name: Optional[str] = None,
+        namespace: Optional[str] = None,
+        command_type: str = "start",
+        new_request_id: str = None,
+    ) -> bool:
+        """
+        Create or update a profiling hierarchy command for service-level profiling.
+        This method handles exactly one row in ProfilingHierarchyCommands table.
+        
+        Args:
+            command_ids: Unique command identifiers
+            service_name: Service name (can be None for container/pod level commands)
+            container_name: Container name (optional)
+            pod_name: Pod name (optional)
+            namespace: Namespace (optional)
+            command_type: Command type ('start' or 'stop')
+            new_request_id: Request ID to add to this command
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Check if there's already a command for this hierarchy level
+            existing_command = self._get_existing_hierarchy_command(
+                service_name, container_name, pod_name, namespace
+            )
+            
+            logger.debug(f"Existing hierarchy command: {existing_command}")
+            if existing_command:
+                # Update existing command by adding new request
+                return self._update_hierarchy_command(command_ids, existing_command["command_id"], new_request_id)
+            else:
+                # Create new hierarchy command
+                return self._create_new_hierarchy_command(
+                    command_ids, service_name, container_name, pod_name, namespace, command_type, [new_request_id]
+                )
+                
+        except Exception as e:
+            logger.error(f"Failed to create or update hierarchy command: {e}")
+            return False
+
+    def _get_existing_hierarchy_command(
+        self,
+        service_name: Optional[str],
+        container_name: Optional[str],
+        pod_name: Optional[str],
+        namespace: Optional[str]
+    ) -> Optional[Dict]:
+        """Get existing hierarchy command for the specified hierarchy level"""
+        query = """
+            SELECT command_id, combined_config, request_ids, command_type
+            FROM ProfilingHierarchyCommands
+            WHERE (service_name = %(service_name)s OR (service_name IS NULL AND %(service_name)s IS NULL))
+              AND (container_name = %(container_name)s OR (container_name IS NULL AND %(container_name)s IS NULL))
+              AND (pod_name = %(pod_name)s OR (pod_name IS NULL AND %(pod_name)s IS NULL))
+              AND (namespace = %(namespace)s OR (namespace IS NULL AND %(namespace)s IS NULL))
+            ORDER BY created_at DESC
+            LIMIT 1
+        """
+        
+        values = {
+            "service_name": service_name,
+            "container_name": container_name,
+            "pod_name": pod_name,
+            "namespace": namespace,
+        }
+        
+        try:
+            result = self.db.execute(query, values, one_value=True, return_dict=True)
+            return result if result else None
+        except Exception as e:
+            logger.error(f"Failed to get existing hierarchy command: {e}")
+            return None
+
+    def _update_hierarchy_command(self, command_ids: List[str], current_command_id: str, new_request_id: str) -> bool:
+        """Add a new request to an existing hierarchy command"""
+        try:
+            # Get new request details
+            request_details = self._get_profiling_request_details(new_request_id)
+            if not request_details:
+                logger.error(f"Request {new_request_id} not found")
+                return False
+
+            # Get current command config
+            get_config_query = """
+                SELECT combined_config FROM ProfilingHierarchyCommands WHERE command_id = %(command_id)s::uuid
+            """
+            current_config_result = self.db.execute(
+                get_config_query, {"command_id": current_command_id}, one_value=True, return_dict=True
+            )
+            
+            if not current_config_result:
+                logger.error(f"Hierarchy command {current_command_id} not found")
+                return False
+                
+            current_config = current_config_result.get("combined_config", {}) or {}
+
+            # Create new config by merging with request details
+            logger.debug(f"Current config for command {current_command_id}: {current_config}")
+            new_config = self._merge_hierarchy_configs(current_config, request_details)
+            logger.debug(f"New merged config for command {current_command_id}: {new_config}")
+
+            # Update command with new request
+            update_query = """
+                UPDATE ProfilingHierarchyCommands
+                SET command_id = %(new_command_id)s::uuid,
+                    request_ids = array_append(request_ids, %(new_request_id)s::uuid),
+                    combined_config = %(combined_config)s,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE command_id = %(current_command_id)s::uuid
+            """
+
+            new_command_id = str(uuid.uuid4())
+            self.db.execute(
+                update_query,
+                {
+                    "new_command_id": new_command_id,
+                    "current_command_id": current_command_id,
+                    "new_request_id": new_request_id,
+                    "combined_config": json.dumps(new_config),
+                },
+                has_value=False,
+            )
+
+            logger.info(f"Added request {new_request_id} to hierarchy command {new_command_id}")
+            command_ids.append(new_command_id)
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to update hierarchy command {current_command_id}: {e}")
+            return False
+
+    def _create_new_hierarchy_command(
+        self,
+        command_ids: List[str],
+        service_name: Optional[str],
+        container_name: Optional[str],
+        pod_name: Optional[str],
+        namespace: Optional[str],
+        command_type: str,
+        request_ids: List[str],
+    ) -> bool:
+        """Create a new profiling hierarchy command"""
+        try:
+            # Build combined configuration from all request IDs
+            combined_config = self._build_hierarchy_combined_config(request_ids)
+
+            query = """
+                INSERT INTO ProfilingHierarchyCommands (
+                    command_id, service_name, container_name, pod_name, namespace,
+                    command_type, request_ids, combined_config
+                ) VALUES (
+                    %(new_command_id)s::uuid, %(service_name)s, %(container_name)s, %(pod_name)s, %(namespace)s,
+                    %(command_type)s, %(request_ids)s::uuid[], %(combined_config)s
+                )
+            """
+
+            values = {
+                "new_command_id": str(uuid.uuid4()),
+                "service_name": service_name,
+                "container_name": container_name,
+                "pod_name": pod_name,
+                "namespace": namespace,
+                "command_type": command_type,
+                "request_ids": request_ids,
+                "combined_config": json.dumps(combined_config),
+            }
+
+            self.db.execute(query, values, has_value=False)
+            logger.info(f"Created new hierarchy command {values['new_command_id']} for service: {service_name}")
+            command_ids.append(values["new_command_id"])
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to create hierarchy command {values['new_command_id']}: {e}")
+            return False
+
+    def _build_hierarchy_combined_config(self, request_ids: List[str]) -> Dict:
+        """Build combined configuration from multiple requests for hierarchy commands"""
+        if not request_ids:
+            return {}
+
+        try:
+            # Get all request details
+            query = """
+                SELECT duration, frequency, profiling_mode, pids, additional_args
+                FROM ProfilingRequests
+                WHERE request_id = ANY(%(request_ids)s::uuid[])
+            """
+
+            results = self.db.execute(
+                query, {"request_ids": request_ids}, one_value=False, return_dict=True, fetch_all=True
+            )
+
+            if not results:
+                return {}
+
+            # Start with the first request's config
+            combined_config = {
+                "duration": results[0].get("duration"),
+                "frequency": results[0].get("frequency"),
+                "profiling_mode": results[0].get("profiling_mode"),
+                "pids": results[0].get("pids", []),
+                "additional_args": results[0].get("additional_args", {}),
+            }
+
+            # Merge configurations from all requests
+            for request_data in results[1:]:
+                combined_config = self._merge_hierarchy_configs(combined_config, request_data)
+
+            return combined_config
+
+        except Exception as e:
+            logger.error(f"Failed to build hierarchy combined config for requests {request_ids}: {e}")
+            return {}
+
+    def _merge_hierarchy_configs(self, existing_config: Dict, new_request: Dict) -> Dict:
+        """Merge hierarchy configurations, similar to host-level merge but simplified"""
+        merged_config = existing_config.copy()
+
+        # Use the longest duration
+        if new_request.get("duration"):
+            merged_config["duration"] = max(
+                merged_config.get("duration", 0), new_request["duration"]
+            )
+
+        # Use the highest frequency
+        if new_request.get("frequency"):
+            merged_config["frequency"] = max(
+                merged_config.get("frequency", 0), new_request["frequency"]
+            )
+
+        # Keep the most comprehensive profiling mode (cpu > allocation > none)
+        mode_priority = {"cpu": 3, "allocation": 2, "none": 1}
+        current_mode = merged_config.get("profiling_mode", "none")
+        new_mode = new_request.get("profiling_mode", "none")
+        
+        if mode_priority.get(new_mode, 1) > mode_priority.get(current_mode, 1):
+            merged_config["profiling_mode"] = new_mode
+
+        # Merge PIDs if present
+        current_pids = set(merged_config.get("pids", None) or [])
+        new_pids = set(new_request.get("pids", None) or [])
+        if new_pids:
+            merged_config["pids"] = list(current_pids.union(new_pids)) or None
+
+        # Merge additional args
+        current_args = merged_config.get("additional_args", {})
+        new_args = new_request.get("additional_args", {})
+        if new_args:
+            merged_config["additional_args"] = {**current_args, **new_args}
+
+        return merged_config
+
+    def get_profiling_hierarchy_command(
+        self,
+        service_name: Optional[str] = None,
+        container_name: Optional[str] = None,
+        pod_name: Optional[str] = None,
+        namespace: Optional[str] = None,
+    ) -> Optional[Dict]:
+        """Get hierarchy command for the specified hierarchy level"""
+        query = """
+            SELECT command_id, service_name, container_name, pod_name, namespace,
+                   command_type, request_ids, combined_config, created_at, updated_at
+            FROM ProfilingHierarchyCommands
+            WHERE (service_name = %(service_name)s OR (service_name IS NULL AND %(service_name)s IS NULL))
+              AND (container_name = %(container_name)s OR (container_name IS NULL AND %(container_name)s IS NULL))
+              AND (pod_name = %(pod_name)s OR (pod_name IS NULL AND %(pod_name)s IS NULL))
+              AND (namespace = %(namespace)s OR (namespace IS NULL AND %(namespace)s IS NULL))
+            ORDER BY created_at DESC
+            LIMIT 1
+        """
+
+        values = {
+            "service_name": service_name,
+            "container_name": container_name,
+            "pod_name": pod_name,
+            "namespace": namespace,
+        }
+
+        try:
+            result = self.db.execute(query, values, one_value=True, return_dict=True)
+            return result if result else None
+        except Exception as e:
+            logger.error(f"Failed to get hierarchy command: {e}")
+            return None
+
+    def create_stop_hierarchy_command(
+        self,
+        command_ids: List[str],
+        request_id: str,
+        service_name: Optional[str] = None,
+        container_name: Optional[str] = None,
+        pod_name: Optional[str] = None,
+        namespace: Optional[str] = None,
+        stop_level: str = "host",
+    ) -> bool:
+        """
+        Create a stop command for a specific hierarchy level (service/container/pod/namespace).
+        This creates commands in the ProfilingHierarchyCommands table for service-level profiling.
+        
+        Args:
+            command_ids: Unique command identifiers
+            service_name: Service name (can be None for container/pod level commands)
+            request_id: Request ID for the stop command
+            container_name: Container name (optional)
+            pod_name: Pod name (optional)
+            namespace: Namespace (optional)
+            stop_level: Level of stop operation ('host', 'process')
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            query = """
+            INSERT INTO ProfilingHierarchyCommands (
+                command_id, service_name, container_name, pod_name, namespace,
+                command_type, request_ids, combined_config, created_at
+            ) VALUES (
+                %(new_command_id)s::uuid, %(service_name)s, %(container_name)s, %(pod_name)s, %(namespace)s,
+                'stop', ARRAY[%(request_id)s::uuid], %(combined_config)s::jsonb, CURRENT_TIMESTAMP
+            )
+            ON CONFLICT (service_name, container_name, pod_name, namespace)
+            DO UPDATE SET
+                command_id = %(new_command_id)s::uuid,
+                command_type = 'stop',
+                request_ids = array_append(ProfilingHierarchyCommands.request_ids, %(request_id)s::uuid),
+                combined_config = %(combined_config)s::jsonb,
+                updated_at = CURRENT_TIMESTAMP
+            """
+
+            # Create combined config with stop level information
+            combined_config = {
+                "stop_level": stop_level,
+            }
+
+            values = {
+                "new_command_id": str(uuid.uuid4()),
+                "service_name": service_name,
+                "container_name": container_name,
+                "pod_name": pod_name,
+                "namespace": namespace,
+                "request_id": request_id,
+                "combined_config": json.dumps(combined_config),
+            }
+
+            self.db.execute(query, values, has_value=False)
+            logger.info(f"Created stop hierarchy command {values['new_command_id']} for service: {service_name}")
+            command_ids.append(values["new_command_id"])
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to create stop hierarchy command {values['new_command_id']}: {e}")
+            return False
 
     def _build_combined_config(self, request_ids: List[str], hostname: str, service_name: str) -> Dict:
         """Build combined configuration from multiple profiling requests"""

@@ -163,6 +163,7 @@ class ProfilingResponse(BaseModel):
     message: str
     request_id: Optional[str] = None
     command_ids: Optional[List[str]] = None
+    hierarchy_command_ids: Optional[List[str]] = None
     estimated_completion_time: Optional[datetime] = None
 
 

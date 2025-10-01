@@ -279,7 +279,7 @@ CREATE TABLE ProfilingRequests (
     duration integer NULL DEFAULT 60,
     frequency integer NULL DEFAULT 11,
     profiling_mode ProfilingMode NOT NULL DEFAULT 'cpu',
-    target_hostnames text[] NOT NULL,
+    target_hostnames text[] NULL,
     pids integer[] NULL,
     stop_level text NULL DEFAULT 'process' CHECK (stop_level IN ('process', 'host')),
     additional_args jsonb NULL,
@@ -300,6 +300,29 @@ CREATE INDEX idx_profilingrequests_status ON ProfilingRequests (status);
 CREATE INDEX idx_profilingrequests_request_type ON ProfilingRequests (request_type);
 CREATE INDEX idx_profilingrequests_created_at ON ProfilingRequests (created_at);
 
+-- Profiling Hierarchy Commands Table
+CREATE TABLE ProfilingHierarchyCommands (
+    ID bigserial PRIMARY KEY,
+    command_id uuid NOT NULL,
+    service_name text NULL,
+    container_name text NULL,
+    pod_name text NULL,
+    namespace text NULL,
+    command_type text NOT NULL CHECK (command_type IN ('start', 'stop')),
+    request_ids uuid[] NOT NULL,
+    combined_config jsonb NULL,
+    created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "unique_profiling_hierarchy_command" UNIQUE NULLS NOT DISTINCT (service_name, container_name, pod_name, namespace)
+);
+
+CREATE INDEX idx_profilinghierarchycommands_command_id ON ProfilingHierarchyCommands (command_id);
+CREATE INDEX idx_profilinghierarchycommands_service_name ON ProfilingHierarchyCommands (service_name);
+CREATE INDEX idx_profilinghierarchycommands_container_name ON ProfilingHierarchyCommands (container_name);
+CREATE INDEX idx_profilinghierarchycommands_pod_name ON ProfilingHierarchyCommands (pod_name);
+CREATE INDEX idx_profilinghierarchycommands_namespace ON ProfilingHierarchyCommands (namespace);
+CREATE INDEX idx_profilinghierarchycommands_service_container_pod_namespace ON ProfilingHierarchyCommands (service_name, container_name, pod_name, namespace);
+
 -- Profiling Commands Table (simplified)
 CREATE TABLE ProfilingCommands (
     ID bigserial PRIMARY KEY,
@@ -317,7 +340,7 @@ CREATE TABLE ProfilingCommands (
     error_message text NULL,
     results_path text NULL,
     updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "unique_profiling_command_per_host" UNIQUE (hostname, service_name)
+    CONSTRAINT "unique_profiling_command_per_host" UNIQUE NULLS NOT DISTINCT (hostname, service_name)
 );
 
 -- Essential indexes for profiling commands
