@@ -323,7 +323,7 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
                 if target_hosts:
                     # Create commands for specific hosts
                     for hostname in target_hosts:
-                        db_manager.create_or_update_profiling_command(
+                        db_manager.create_or_merge_profiling_command(
                             command_ids=command_ids,
                             hostname=hostname,
                             service_name=profiling_request.service_name,
@@ -332,7 +332,7 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
                         )
                 else:
                     # If no specific hostnames, create command for all hosts of this service
-                    db_manager.create_or_update_profiling_command(
+                    db_manager.create_or_merge_profiling_command(
                         command_ids=command_ids,
                         hostname=None,  # Will be handled for all hosts of the service
                         service_name=profiling_request.service_name,
@@ -480,12 +480,8 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
             current_command = db_manager.get_current_profiling_command(
                 hostname=heartbeat.hostname,
                 service_name=heartbeat.service_name,
+                generate_from_hierarchy=True,
             )
-            if not current_command:
-                current_command = db_manager.generate_profiling_command_from_hierarchy(
-                    hostname=heartbeat.hostname,
-                    service_name=heartbeat.service_name,
-                )
 
             if current_command:
                 success = True

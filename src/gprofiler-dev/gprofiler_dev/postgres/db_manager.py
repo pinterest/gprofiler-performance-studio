@@ -1015,6 +1015,49 @@ class DBManager(metaclass=Singleton):
     def create_or_update_profiling_command(
         self,
         command_ids: List[str],
+        hostname: str,
+        service_name: str,
+        command_type: str,
+        new_request_id: str,
+        final_config: Dict,
+    ) -> bool:
+        """Create or update a profiling command for a specific host/service"""
+        # Use INSERT ... ON CONFLICT for atomic upsert
+        upsert_query = """
+        INSERT INTO ProfilingCommands (
+            command_id, hostname, service_name, command_type, request_ids,
+            combined_config, status, created_at
+        ) VALUES (
+            %(new_command_id)s::uuid, %(hostname)s, %(service_name)s, %(command_type)s,
+            ARRAY[%(request_id)s::uuid], %(final_config)s::jsonb,
+            'pending', CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (hostname, service_name)
+        DO UPDATE SET
+            command_id = %(new_command_id)s::uuid,
+            command_type = %(command_type)s,
+            request_ids = array_append(ProfilingCommands.request_ids, %(request_id)s::uuid),
+            combined_config = %(final_config)s::jsonb,
+            status = 'pending',
+            created_at = CURRENT_TIMESTAMP
+        """
+
+        values = {
+            "new_command_id": str(uuid.uuid4()),
+            "hostname": hostname,
+            "service_name": service_name,
+            "command_type": command_type,
+            "request_id": new_request_id,
+            "final_config": json.dumps(final_config),
+        }
+
+        self.db.execute(upsert_query, values, has_value=False)
+        command_ids.append(values["new_command_id"])
+        return True
+
+    def create_or_merge_profiling_command(
+        self,
+        command_ids: List[str],
         hostname: Optional[str],
         service_name: str,
         command_type: str,
@@ -1026,7 +1069,7 @@ class DBManager(metaclass=Singleton):
             active_hosts = self.get_active_hosts(service_name)
             success = True
             for host in active_hosts:
-                result = self.create_or_update_profiling_command(
+                result = self.create_or_merge_profiling_command(
                     command_ids, host["hostname"], service_name, command_type, new_request_id, stop_level
                 )
                 success = success and result
@@ -1093,38 +1136,9 @@ class DBManager(metaclass=Singleton):
             # No existing command, use new config as-is
             final_config = new_config
 
-        # Use INSERT ... ON CONFLICT for atomic upsert
-        upsert_query = """
-        INSERT INTO ProfilingCommands (
-            command_id, hostname, service_name, command_type, request_ids,
-            combined_config, status, created_at
-        ) VALUES (
-            %(new_command_id)s::uuid, %(hostname)s, %(service_name)s, %(command_type)s,
-            ARRAY[%(request_id)s::uuid], %(final_config)s::jsonb,
-            'pending', CURRENT_TIMESTAMP
+        return self.create_or_update_profiling_command(
+            command_ids, hostname, service_name, command_type, new_request_id, final_config
         )
-        ON CONFLICT (hostname, service_name)
-        DO UPDATE SET
-            command_id = %(new_command_id)s::uuid,
-            command_type = %(command_type)s,
-            request_ids = array_append(ProfilingCommands.request_ids, %(request_id)s::uuid),
-            combined_config = %(final_config)s::jsonb,
-            status = 'pending',
-            created_at = CURRENT_TIMESTAMP
-        """
-
-        values = {
-            "new_command_id": str(uuid.uuid4()),
-            "hostname": hostname,
-            "service_name": service_name,
-            "command_type": command_type,
-            "request_id": new_request_id,
-            "final_config": json.dumps(final_config),
-        }
-
-        self.db.execute(upsert_query, values, has_value=False)
-        command_ids.append(values["new_command_id"])
-        return True
 
     def _merge_profiling_configs(self, existing_config: Dict, new_config: Dict) -> Dict:
         """Merge two profiling configurations, combining parameters appropriately"""
@@ -1309,8 +1323,8 @@ class DBManager(metaclass=Singleton):
         command_ids.append(values["new_command_id"])
         return True
 
-    def get_current_profiling_command(self, hostname: str, service_name: str) -> Optional[Dict]:
-        """Get the current profiling command for a host/service"""
+    def get_current_profiling_command(self, hostname: str, service_name: str, generate_from_hierarchy: bool = False) -> Optional[Dict]:
+        """Get the current profiling command for a host/service, optionally generating from hierarchy if none exists"""
         query = """
         SELECT command_id, command_type, combined_config, request_ids, status, created_at
         FROM ProfilingCommands
@@ -1322,6 +1336,10 @@ class DBManager(metaclass=Singleton):
         values = {"hostname": hostname, "service_name": service_name}
 
         result = self.db.execute(query, values, one_value=True, return_dict=True)
+
+        if not result and generate_from_hierarchy:
+            result = self.generate_profiling_command_from_hierarchy(hostname, service_name)
+
         return result if result else None
 
     def generate_profiling_command_from_hierarchy(
