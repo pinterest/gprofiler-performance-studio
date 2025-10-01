@@ -42,6 +42,7 @@ from backend.models.metrics_models import (
     SampleCount,
 )
 from backend.utils.filters_utils import get_rql_first_eq_key, get_rql_only_for_one_key
+from backend.utils.notifications import SlackNotifier
 from backend.utils.request_utils import flamegraph_base_request_params, get_metrics_response, get_query_response
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -423,6 +424,17 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
         else:
             message = f"{profiling_request.request_type.capitalize()} profiling request submitted successfully for service '{profiling_request.service_name}' across {len(command_ids)} hosts"
 
+        # Send Slack notification for profiling request creation
+        try:
+            slack_notifier = SlackNotifier()
+
+            # Create rich message blocks
+            blocks = _create_slack_blocks(profiling_request, request_id)
+
+            slack_notifier.send_rich_message_to_all_channels(blocks=blocks, text=message)
+        except Exception as e:
+            logger.warning(f"Failed to send Slack notification for profiling request {request_id}: {e}")
+
         return ProfilingResponse(
             success=True,
             message=message,
@@ -437,6 +449,58 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
     except Exception as e:
         logger.error(f"Failed to create profiling request: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error while processing profiling request")
+
+
+def _create_slack_blocks(profiling_request: ProfilingRequest, request_id: str) -> list:
+    """
+    Create Slack message blocks for profiling request notifications.
+
+    Args:
+        profiling_request: The profiling request object
+        request_id: The unique request identifier
+
+    Returns:
+        List of Slack message blocks
+    """
+    blocks = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f"🔥 Profiling Request for service {profiling_request.service_name}",
+            },
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"A new request was made to {profiling_request.request_type} a profile and the details are shown below:"
+            }
+        },
+        {
+            "type": "section",
+            "fields": [
+                {"type": "mrkdwn", "text": f"*Service Name:*\n{profiling_request.service_name}"},
+                {"type": "mrkdwn", "text": f"*Request ID:*\n{request_id}"},
+            ],
+        },
+    ]
+
+    # Add hosts and PIDs information in a single block
+    if profiling_request.target_hosts:
+        hosts_info = []
+        for host, pids in profiling_request.target_hosts.items():
+            if pids:
+                pids_str = ", ".join(map(str, pids))
+                hosts_info.append(f"• {host} - PIDs: {pids_str}")
+            else:
+                hosts_info.append(f"• {host} - Host level profiling")
+
+        if hosts_info:
+            hosts_text = "\n".join(hosts_info)
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*Target Hosts:*\n{hosts_text}"}})
+
+    return blocks
 
 
 @router.post("/heartbeat", response_model=HeartbeatResponse)
@@ -510,7 +574,9 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                                     else:
                                         request_ids = []
                             except Exception:
-                                logger.warning(f"Failed to parse request_ids for command {current_command['command_id']}")
+                                logger.warning(
+                                    f"Failed to parse request_ids for command {current_command['command_id']}"
+                                )
                                 request_ids = []
 
                         for request_id in request_ids:
