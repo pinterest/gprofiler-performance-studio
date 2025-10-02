@@ -210,11 +210,50 @@ func GetTimeRanges(start time.Time, end time.Time, resolution string) map[string
 
 	delta := end.Sub(start)
 	fullRange := makeTimeRange(start, trimEndTime(end))
-	retentionInterval := time.Hour * 24 * 14
 	now := time.Now().UTC()
-	if now.Sub(start) >= retentionInterval {
+	
+	// Retention thresholds from configurable settings
+	rawRetentionInterval := time.Hour * 24 * time.Duration(config.RawRetentionDays)       // Raw data TTL
+	hourlyRetentionInterval := time.Hour * 24 * time.Duration(config.HourlyRetentionDays) // Hourly data TTL
+	dailyThreshold := time.Hour * 24 * time.Duration(config.HourlyRetentionDays)          // Switch to daily aggregation
+	
+	// Debug logging for table selection
+	dataAge := now.Sub(start)
+	log.Printf("📊 Table Selection: range=%v, delta=%v, age=%v, resolution=%s", 
+		start.Format("2006-01-02"), delta, dataAge, resolution)
+	
+	// For very old data (>90 days), use daily aggregation with day boundaries
+	if now.Sub(start) >= dailyThreshold {
 		result["1day_historical"] = append(result["1day_historical"], makeTimeRange(makeStartOfDay(start), makeEndOfDay(end)))
 		return result
+	}
+	
+	// For 7-90 day old data, raw is expired but hourly is available
+	if now.Sub(start) >= rawRetentionInterval && now.Sub(start) < hourlyRetentionInterval {
+		switch resolution {
+		case "hour", "day":
+			// Keep requested resolution for older data
+			result[tableMapping[resolution]] = append(result[tableMapping[resolution]], fullRange)
+			return result
+		case "raw":
+			// Force raw requests to use hourly when raw data is expired
+			result["1hour"] = append(result["1hour"], fullRange)
+			return result
+		case "multi":
+			if delta.Seconds() > time.Hour.Seconds() {
+				// For multi-hour ranges, use sliceMultiRange but replace raw with hourly
+				sliceMultiRange(result, start, end)
+				// Move any raw ranges to hourly since raw data is expired
+				if len(result["raw"]) > 0 {
+					result["1hour"] = append(result["1hour"], result["raw"]...)
+					result["raw"] = make([]TimeRange, 0)
+				}
+			} else {
+				// For single-hour ranges, use hourly directly
+				result["1hour"] = append(result["1hour"], fullRange)
+			}
+			return result
+		}
 	}
 
 	switch resolution {
@@ -227,6 +266,14 @@ func GetTimeRanges(start time.Time, end time.Time, resolution string) map[string
 			sliceMultiRange(result, start, end)
 		} else {
 			result["raw"] = append(result["raw"], fullRange)
+		}
+	}
+
+	// Log final table selection
+	log.Printf("📋 Final table selection:")
+	for table, ranges := range result {
+		if len(ranges) > 0 {
+			log.Printf("  %s: %d ranges", table, len(ranges))
 		}
 	}
 
@@ -342,6 +389,7 @@ func (c *ClickHouseClient) GetTopFrames(ctx context.Context, params common.Flame
 		params.K8SObject, filterQuery)
 
 	for table, timeRanges := range allTimeRanges {
+		log.Printf("🔍 Service %d: Querying table type '%s' with %d time ranges", params.ServiceId, table, len(timeRanges))
 		for _, timeRange := range timeRanges {
 			wg.Add(1)
 			tableNew := getTableName(table, tablePrefix)
@@ -354,8 +402,12 @@ func (c *ClickHouseClient) GetTopFrames(ctx context.Context, params common.Flame
 				GROUP BY CallStackHash
 				ORDER BY SumNumSamples DESC
 				LIMIT %d`, sTable, params.ServiceId, sStart, sEnd, conditions, params.StacksNum)
-				log.Printf("SELECT query: %s", query)
+				
+				queryStart := time.Now()
+				log.Printf("🚀 Service %d: Starting query on %s (%s to %s)", params.ServiceId, sTable, sStart, sEnd)
 				rows, err := c.client.Query(query)
+				queryDuration := time.Since(queryStart)
+				
 				if err == nil {
 					defer rows.Close()
 					frames := make(map[uint64]Frame)
@@ -366,9 +418,9 @@ func (c *ClickHouseClient) GetTopFrames(ctx context.Context, params common.Flame
 						minValue = 0
 					}
 					graph.updateFrames(frames, minValue)
-					log.Printf("Fetch %d rows", nRows)
+					log.Printf("✅ Service %d: Query completed on %s in %v - fetched %d rows", params.ServiceId, sTable, queryDuration, nRows)
 				} else {
-					log.Println(err)
+					log.Printf("❌ Service %d: Query failed on %s after %v: %v", params.ServiceId, sTable, queryDuration, err)
 				}
 				mutex.Lock()
 				queryErrors = append(queryErrors, err)

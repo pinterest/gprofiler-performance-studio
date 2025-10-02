@@ -24,4 +24,10 @@ var (
 	CertFilePath           = ""
 	KeyFilePath            = ""
 	Credentials            = "user:password"
+	
+	// Data retention periods (in days)
+	RawRetentionDays     = 7   // Raw data retention period
+	MinuteRetentionDays  = 30  // Minute aggregation retention period
+	HourlyRetentionDays  = 90  // Hourly aggregation retention period
+	DailyRetentionDays   = 365 // Daily aggregation retention period
 )
