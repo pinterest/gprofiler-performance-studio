@@ -318,16 +318,28 @@ type OptimizationResponse struct {
 func (h Handlers) GetOptimizationRecommendations(c *gin.Context) {
 	// Parse query parameters
 	serviceId := c.Query("service_id")
+	namespace := c.Query("namespace") 
 	technology := c.Query("technology")
 	complexity := c.Query("complexity")
+	optimizationType := c.Query("optimization_type")
+	ruleName := c.Query("rule_name")
 	minImpact := c.DefaultQuery("min_impact", "0")
-	limit := c.DefaultQuery("limit", "100")
+	minPrecision := c.DefaultQuery("min_precision", "0")
+	minHosts := c.DefaultQuery("min_hosts", "0")
+	limit := c.DefaultQuery("limit", "1000")
+
+	// Debug logging
+	log.Printf("DEBUG: Received filters - serviceId='%s', namespace='%s', technology='%s', complexity='%s', optimizationType='%s', ruleName='%s', minImpact='%s', minPrecision='%s', minHosts='%s'", 
+		serviceId, namespace, technology, complexity, optimizationType, ruleName, minImpact, minPrecision, minHosts)
 
 	// Build WHERE clause (simplified - remove date filtering for now)
 	whereConditions := []string{}
 	
 	if serviceId != "" {
-		whereConditions = append(whereConditions, fmt.Sprintf("ServiceId = '%s'", serviceId))
+		whereConditions = append(whereConditions, fmt.Sprintf("ServiceId = '%s'", serviceId)) // ServiceId is stored as string
+	}
+	if namespace != "" {
+		whereConditions = append(whereConditions, fmt.Sprintf("namespace = '%s'", namespace))
 	}
 	if technology != "" {
 		whereConditions = append(whereConditions, fmt.Sprintf("Technology = '%s'", technology))
@@ -335,8 +347,20 @@ func (h Handlers) GetOptimizationRecommendations(c *gin.Context) {
 	if complexity != "" {
 		whereConditions = append(whereConditions, fmt.Sprintf("ImplementationComplexity = '%s'", complexity))
 	}
+	if optimizationType != "" {
+		whereConditions = append(whereConditions, fmt.Sprintf("OptimizationType = '%s'", optimizationType))
+	}
+	if ruleName != "" {
+		whereConditions = append(whereConditions, fmt.Sprintf("RuleName ILIKE '%%%s%%'", ruleName))
+	}
 	if minImpact != "0" {
 		whereConditions = append(whereConditions, fmt.Sprintf("RelativeResourceReductionPercentInService >= %s", minImpact))
+	}
+	if minPrecision != "0" {
+		whereConditions = append(whereConditions, fmt.Sprintf("PrecisionScore >= %s", minPrecision))
+	}
+	if minHosts != "0" {
+		whereConditions = append(whereConditions, fmt.Sprintf("NumHosts >= %s", minHosts))
 	}
 	
 	whereClause := ""
@@ -348,6 +372,7 @@ func (h Handlers) GetOptimizationRecommendations(c *gin.Context) {
 	query := fmt.Sprintf(`
 		SELECT
 			ServiceId,
+			namespace,
 			Technology,
 			OptimizationPattern,
 			ActionableRecommendation,

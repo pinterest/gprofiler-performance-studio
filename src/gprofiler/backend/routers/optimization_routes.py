@@ -46,21 +46,36 @@ def get_optimization_request(endpoint: str, params: dict = None):
 
 @router.get("/v1/optimization")
 def get_optimization_recommendations(
-    service_id: Optional[str] = Query(None, alias="serviceId"),
+    service_id: Optional[str] = Query(None, alias="service_id"),
+    namespace: Optional[str] = Query(None),
     technology: Optional[str] = Query(None),
     complexity: Optional[str] = Query(None),
-    min_impact: Optional[float] = Query(None, alias="minImpact"),
+    optimization_type: Optional[str] = Query(None, alias="optimization_type"),
+    rule_name: Optional[str] = Query(None, alias="rule_name"),
+    min_impact: Optional[float] = Query(None, alias="min_impact"),
+    min_precision: Optional[float] = Query(None, alias="min_precision"),
+    min_hosts: Optional[int] = Query(None, alias="min_hosts"),
 ):
     """Get optimization recommendations with optional filters"""
     params = {}
     if service_id:
-        params["serviceId"] = service_id
+        params["service_id"] = service_id
+    if namespace:
+        params["namespace"] = namespace
     if technology:
         params["technology"] = technology
     if complexity:
         params["complexity"] = complexity
+    if optimization_type:
+        params["optimization_type"] = optimization_type
+    if rule_name:
+        params["rule_name"] = rule_name
     if min_impact is not None:
-        params["minImpact"] = min_impact
+        params["min_impact"] = min_impact
+    if min_precision is not None:
+        params["min_precision"] = min_precision
+    if min_hosts is not None:
+        params["min_hosts"] = min_hosts
     
     return get_optimization_request("", params)
 

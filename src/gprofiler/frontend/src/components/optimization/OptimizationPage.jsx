@@ -28,9 +28,14 @@ import OptimizationSummary from './OptimizationSummary';
 const OptimizationPage = () => {
     const [filters, setFilters] = useState({
         serviceId: '',
+        namespace: '',
         technology: '',
         complexity: '',
+        optimizationType: '',
+        ruleName: '',
         minImpact: 0,
+        minPrecision: 0,
+        minHosts: '',
     });
 
     const { recommendations = [], loading } = useGetOptimizationRecommendations(filters);
@@ -41,7 +46,9 @@ const OptimizationPage = () => {
         const totalRecommendations = recommendations.length;
         const uniqueServices = new Set(recommendations.map(r => r.ServiceId)).size;
         const uniqueTechnologies = new Set(recommendations.map(r => r.Technology)).size;
+        const uniqueOptimizationTypes = new Set(recommendations.map(r => r.OptimizationType)).size;
         const totalStacks = recommendations.reduce((sum, r) => sum + r.AffectedStacks, 0);
+        const totalHosts = recommendations.reduce((sum, r) => sum + (r.NumHosts || 0), 0);
         const avgImpact = recommendations.reduce((sum, r) => sum + r.RelativeResourceReductionPercentInService, 0) / totalRecommendations;
         const maxImpact = Math.max(...recommendations.map(r => r.RelativeResourceReductionPercentInService));
 
@@ -54,7 +61,9 @@ const OptimizationPage = () => {
             totalRecommendations,
             uniqueServices,
             uniqueTechnologies,
+            uniqueOptimizationTypes,
             totalStacks,
+            totalHosts,
             avgImpact: avgImpact.toFixed(4),
             maxImpact: maxImpact.toFixed(4),
             easyFixes: complexityBreakdown.EASY || 0,
@@ -122,7 +131,7 @@ const OptimizationPage = () => {
                                     <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #e0e0e0' }}>Technology</th>
                                     <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #e0e0e0' }}>Recommendation</th>
                                     <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #e0e0e0' }}>Complexity</th>
-                                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #e0e0e0' }}>CPU Impact</th>
+                                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #e0e0e0' }}>Percent Impact</th>
                                     <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #e0e0e0' }}>Affected Stacks</th>
                                 </tr>
                             </thead>

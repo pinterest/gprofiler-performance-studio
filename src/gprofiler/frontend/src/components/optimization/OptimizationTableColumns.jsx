@@ -91,7 +91,7 @@ const OptimizationTypeCell = ({ cell }) => (
 
 const ImpactCell = ({ cell }) => (
     <Flexbox alignItems="center" spacing={1}>
-        <span>📈</span>
+        <span>📊</span>
         <Typography variant="body2" sx={{ fontWeight: 'medium', color: 'success.main' }}>
             {cell.value.toFixed(4)}%
         </Typography>
@@ -171,12 +171,27 @@ export const OPTIMIZATION_TABLE_COLUMNS = [
         sortable: true,
     },
     {
-        headerName: 'CPU Impact',
+        headerName: 'Percent Impact',
         field: 'RelativeResourceReductionPercentInService',
         renderCell: ImpactCell,
         width: 120,
         sortable: true,
         type: 'number',
+    },
+    {
+        headerName: 'Precision %',
+        field: 'PrecisionScore',
+        width: 120,
+        sortable: true,
+        type: 'number',
+        renderCell: ({ cell }) => (
+            <Flexbox alignItems="center" spacing={1}>
+                <span>🎯</span>
+                <Typography variant="body2" sx={{ fontWeight: 'medium', color: 'info.main' }}>
+                    {cell.value ? `${(cell.value * 100).toFixed(1)}%` : 'N/A'}
+                </Typography>
+            </Flexbox>
+        ),
     },
     {
         headerName: 'Affected Stacks',

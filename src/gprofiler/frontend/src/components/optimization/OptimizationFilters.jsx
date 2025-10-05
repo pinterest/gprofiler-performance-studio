@@ -50,6 +50,12 @@ const TECHNOLOGY_OPTIONS = [
     { value: 'C++', label: 'C++' },
 ];
 
+const OPTIMIZATION_TYPE_OPTIONS = [
+    { value: '', label: 'All Types' },
+    { value: 'SOFTWARE', label: 'Software' },
+    { value: 'UTILIZATION', label: 'Utilization' },
+];
+
 const DAYS_BACK_OPTIONS = [
     { value: 1, label: 'Last 24 hours' },
     { value: 3, label: 'Last 3 days' },
@@ -74,6 +80,7 @@ const OptimizationFilters = ({ filters, onFilterChange, loading }) => {
                 </Typography>
                 
                 <Grid container spacing={3}>
+                    {/* First Row - Primary Filters */}
                     <Grid item xs={12} sm={6} md={3}>
                         <TextField
                             fullWidth
@@ -82,6 +89,18 @@ const OptimizationFilters = ({ filters, onFilterChange, loading }) => {
                             onChange={handleChange('serviceId')}
                             disabled={loading}
                             placeholder="e.g., 10, 20, 30"
+                            size="small"
+                        />
+                    </Grid>
+                    
+                    <Grid item xs={12} sm={6} md={3}>
+                        <TextField
+                            fullWidth
+                            label="Namespace"
+                            value={filters.namespace}
+                            onChange={handleChange('namespace')}
+                            disabled={loading}
+                            placeholder="e.g., default, prod"
                             size="small"
                         />
                     </Grid>
@@ -105,6 +124,20 @@ const OptimizationFilters = ({ filters, onFilterChange, loading }) => {
                     </Grid>
                     
                     <Grid item xs={12} sm={6} md={3}>
+                        <TextField
+                            fullWidth
+                            label="Minimum Hosts"
+                            value={filters.minHosts}
+                            onChange={handleChange('minHosts')}
+                            disabled={loading}
+                            placeholder="e.g., 1, 5, 10"
+                            type="number"
+                            size="small"
+                        />
+                    </Grid>
+
+                    {/* Second Row - Secondary Filters */}
+                    <Grid item xs={12} sm={6} md={3}>
                         <FormControl fullWidth size="small">
                             <InputLabel>Complexity</InputLabel>
                             <Select
@@ -122,23 +155,79 @@ const OptimizationFilters = ({ filters, onFilterChange, loading }) => {
                         </FormControl>
                     </Grid>
                     
+                    <Grid item xs={12} sm={6} md={3}>
+                        <FormControl fullWidth size="small">
+                            <InputLabel>Optimization Type</InputLabel>
+                            <Select
+                                value={filters.optimizationType}
+                                onChange={handleChange('optimizationType')}
+                                disabled={loading}
+                                label="Optimization Type"
+                            >
+                                {OPTIMIZATION_TYPE_OPTIONS.map((option) => (
+                                    <MenuItem key={option.value} value={option.value}>
+                                        {option.label}
+                                    </MenuItem>
+                                ))}
+                            </Select>
+                        </FormControl>
+                    </Grid>
+
+                    <Grid item xs={12} sm={6} md={3}>
+                        <TextField
+                            fullWidth
+                            label="Rule Name"
+                            value={filters.ruleName}
+                            onChange={handleChange('ruleName')}
+                            disabled={loading}
+                            placeholder="e.g., Finagle Filter Chain"
+                            size="small"
+                        />
+                    </Grid>
+                    
                     <Grid item xs={12} md={6}>
-                        <Flexbox column spacing={1}>
+                        <Flexbox column spacing={1} sx={{ pr: 6 }}>
                             <Typography variant="body2" color="text.secondary">
-                                Minimum CPU Impact: {filters.minImpact}%
+                                Minimum Percent Impact: {filters.minImpact}%
                             </Typography>
                             <Slider
                                 value={filters.minImpact}
                                 onChange={handleSliderChange('minImpact')}
                                 disabled={loading}
                                 min={0}
-                                max={10}
-                                step={0.1}
+                                max={100}
+                                step={1}
                                 marks={[
                                     { value: 0, label: '0%' },
-                                    { value: 1, label: '1%' },
-                                    { value: 5, label: '5%' },
-                                    { value: 10, label: '10%' },
+                                    { value: 25, label: '25%' },
+                                    { value: 50, label: '50%' },
+                                    { value: 75, label: '75%' },
+                                    { value: 100, label: '100%' },
+                                ]}
+                                valueLabelDisplay="auto"
+                                valueLabelFormat={(value) => `${value}%`}
+                            />
+                        </Flexbox>
+                    </Grid>
+                    
+                    <Grid item xs={12} md={6}>
+                        <Flexbox column spacing={1} sx={{ pl: 6 }}>
+                            <Typography variant="body2" color="text.secondary">
+                                Minimum Precision: {filters.minPrecision}%
+                            </Typography>
+                            <Slider
+                                value={filters.minPrecision}
+                                onChange={handleSliderChange('minPrecision')}
+                                disabled={loading}
+                                min={0}
+                                max={100}
+                                step={1}
+                                marks={[
+                                    { value: 0, label: '0%' },
+                                    { value: 25, label: '25%' },
+                                    { value: 50, label: '50%' },
+                                    { value: 75, label: '75%' },
+                                    { value: 100, label: '100%' },
                                 ]}
                                 valueLabelDisplay="auto"
                                 valueLabelFormat={(value) => `${value}%`}

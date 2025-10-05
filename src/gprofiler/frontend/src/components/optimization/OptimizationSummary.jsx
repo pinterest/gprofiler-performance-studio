@@ -102,6 +102,7 @@ const ComplexityBreakdown = ({ data }) => {
 const OptimizationSummary = ({ data }) => {
     return (
         <Grid container spacing={3} sx={{ mb: 3 }}>
+            {/* First Row - Main Metrics */}
             <Grid item xs={12} sm={6} md={2}>
                 <SummaryCard
                     icon="📊"
@@ -146,7 +147,7 @@ const OptimizationSummary = ({ data }) => {
                     icon="📈"
                     title="Avg Impact"
                     value={`${data.avgImpact}%`}
-                    subtitle="CPU reduction"
+                    subtitle="Percent reduction"
                     color="success"
                 />
             </Grid>
@@ -160,8 +161,29 @@ const OptimizationSummary = ({ data }) => {
                     color="success"
                 />
             </Grid>
+
+            {/* Second Row - Additional Metrics */}
+            <Grid item xs={12} sm={6} md={2}>
+                <SummaryCard
+                    icon="🏠"
+                    title="Total Hosts"
+                    value={data.totalHosts}
+                    subtitle="Affected hosts"
+                    color="info"
+                />
+            </Grid>
+
+            <Grid item xs={12} sm={6} md={2}>
+                <SummaryCard
+                    icon="⚙️"
+                    title="Optimization Types"
+                    value={data.uniqueOptimizationTypes}
+                    subtitle="Different types"
+                    color="secondary"
+                />
+            </Grid>
             
-            <Grid item xs={12} md={6}>
+            <Grid item xs={12} md={8}>
                 <ComplexityBreakdown data={data} />
             </Grid>
         </Grid>
@@ -176,6 +198,8 @@ OptimizationSummary.propTypes = {
         totalStacks: PropTypes.number.isRequired,
         avgImpact: PropTypes.string.isRequired,
         maxImpact: PropTypes.string.isRequired,
+        totalHosts: PropTypes.number.isRequired,
+        uniqueOptimizationTypes: PropTypes.number.isRequired,
         easyFixes: PropTypes.number.isRequired,
         mediumFixes: PropTypes.number.isRequired,
         complexFixes: PropTypes.number.isRequired,

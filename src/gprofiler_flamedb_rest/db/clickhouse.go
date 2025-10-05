@@ -1102,6 +1102,7 @@ func (c *ClickHouseClient) FetchLastHTML(ctx context.Context, params common.Metr
 // OptimizationRecommendation represents a single optimization recommendation
 type OptimizationRecommendation struct {
 	ServiceId                                string   `json:"ServiceId"`
+	Namespace                                string   `json:"namespace"`
 	Technology                               string   `json:"Technology"`
 	OptimizationPattern                      string   `json:"OptimizationPattern"`
 	ActionableRecommendation                 string   `json:"ActionableRecommendation"`
@@ -1143,6 +1144,7 @@ func (c *ClickHouseClient) FetchOptimizationRecommendations(ctx context.Context,
 		
 		err = rows.Scan(
 			&rec.ServiceId,
+			&rec.Namespace,
 			&rec.Technology,
 			&rec.OptimizationPattern,
 			&rec.ActionableRecommendation,
