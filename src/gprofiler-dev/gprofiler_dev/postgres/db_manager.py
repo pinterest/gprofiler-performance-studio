@@ -1329,6 +1329,192 @@ class DBManager(metaclass=Singleton):
         result = self.db.execute(query, values, one_value=True, return_dict=True)
         return result if result else None
 
+    def get_profiling_host_status_optimized(
+        self,
+        service_names: Optional[List[str]] = None,
+        hostnames: Optional[List[str]] = None,
+        ip_addresses: Optional[List[str]] = None,
+        profiling_statuses: Optional[List[str]] = None,
+        command_types: Optional[List[str]] = None,
+        pids: Optional[List[int]] = None,
+        exact_match: bool = False
+    ) -> List[Dict]:
+        """
+        Get profiling host status with all filters applied in a single optimized query.
+        Uses JOIN to combine HostHeartbeats and ProfilingCommands data efficiently.
+        
+        This method solves the N+1 query problem by using a single SQL query with:
+        - Common Table Expressions (CTEs) for readability
+        - LEFT JOIN to combine HostHeartbeats and ProfilingCommands
+        - Window functions (ROW_NUMBER()) to get latest command per host
+        - Database-side filtering for all parameters
+        
+        Args:
+            service_names: List of service names to filter by
+            hostnames: List of hostnames to filter by (partial match)
+            ip_addresses: List of IP addresses to filter by (partial match)
+            profiling_statuses: List of profiling statuses to filter by
+            command_types: List of command types to filter by
+            pids: List of PIDs to filter by
+            exact_match: Whether to use exact match for service names
+            
+        Returns:
+            List of dictionaries with host status information
+        """
+        # Build the query with CTEs for better readability and performance
+        query = """
+        WITH latest_commands AS (
+            SELECT 
+                pc.hostname,
+                pc.service_name,
+                pc.command_type,
+                pc.status,
+                pc.combined_config,
+                pc.created_at,
+                ROW_NUMBER() OVER (PARTITION BY pc.hostname, pc.service_name ORDER BY pc.created_at DESC) as rn
+            FROM ProfilingCommands pc
+        ),
+        current_commands AS (
+            SELECT 
+                hostname,
+                service_name,
+                command_type,
+                status,
+                combined_config
+            FROM latest_commands
+            WHERE rn = 1
+        )
+        SELECT 
+            h.id,
+            h.hostname,
+            h.ip_address,
+            h.service_name,
+            h.heartbeat_timestamp,
+            c.command_type,
+            c.status,
+            c.combined_config
+        FROM HostHeartbeats h
+        LEFT JOIN current_commands c 
+            ON h.hostname = c.hostname AND h.service_name = c.service_name
+        WHERE 1=1
+        """
+        
+        values: Dict[str, Any] = {}
+        
+        # Apply service_name filter
+        if service_names:
+            if exact_match:
+                query += " AND h.service_name = ANY(%(service_names)s)"
+                values["service_names"] = service_names
+            else:
+                # Use ILIKE with OR for partial matching across multiple service names
+                service_conditions = []
+                for idx, service_name in enumerate(service_names):
+                    param_name = f"service_name_{idx}"
+                    service_conditions.append(f"h.service_name ILIKE %({param_name})s")
+                    values[param_name] = f"%{service_name}%"
+                query += f" AND ({' OR '.join(service_conditions)})"
+        
+        # Apply hostname filter (partial match with ILIKE)
+        if hostnames:
+            hostname_conditions = []
+            for idx, hostname in enumerate(hostnames):
+                param_name = f"hostname_{idx}"
+                hostname_conditions.append(f"h.hostname ILIKE %({param_name})s")
+                values[param_name] = f"%{hostname}%"
+            query += f" AND ({' OR '.join(hostname_conditions)})"
+        
+        # Apply IP address filter (partial match)
+        # Note: ip_address is inet type, so we cast to text for LIKE matching
+        if ip_addresses:
+            ip_conditions = []
+            for idx, ip_addr in enumerate(ip_addresses):
+                param_name = f"ip_address_{idx}"
+                ip_conditions.append(f"h.ip_address::text LIKE %({param_name})s")
+                values[param_name] = f"%{ip_addr}%"
+            query += f" AND ({' OR '.join(ip_conditions)})"
+        
+        # Apply profiling status filter
+        if profiling_statuses:
+            # Convert to lowercase for case-insensitive comparison
+            # Handle 'stopped' as NULL status (no command exists)
+            status_conditions = []
+            has_stopped = False
+            for idx, status in enumerate(profiling_statuses):
+                if status.lower() == 'stopped':
+                    has_stopped = True
+                else:
+                    param_name = f"status_{idx}"
+                    status_conditions.append(f"LOWER(c.status::text) = LOWER(%({param_name})s)")
+                    values[param_name] = status
+            
+            if has_stopped:
+                status_conditions.append("c.status IS NULL")
+            
+            if status_conditions:
+                query += f" AND ({' OR '.join(status_conditions)})"
+        
+        # Apply command type filter
+        if command_types:
+            command_type_conditions = []
+            has_na = False
+            for idx, cmd_type in enumerate(command_types):
+                if cmd_type.lower() == 'n/a':
+                    has_na = True
+                else:
+                    param_name = f"command_type_{idx}"
+                    command_type_conditions.append(f"LOWER(c.command_type) = LOWER(%({param_name})s)")
+                    values[param_name] = cmd_type
+            
+            if has_na:
+                command_type_conditions.append("c.command_type IS NULL")
+            
+            if command_type_conditions:
+                query += f" AND ({' OR '.join(command_type_conditions)})"
+        
+        # For PIDs filter, we need to check inside the JSONB combined_config
+        # This is more complex and might still need some post-processing
+        if pids:
+            # Check if any of the requested PIDs exist in the combined_config->pids array
+            query += " AND c.combined_config IS NOT NULL"
+            query += " AND c.combined_config ? 'pids'"
+        
+        query += " ORDER BY h.heartbeat_timestamp DESC"
+        
+        results = self.db.execute(query, values, one_value=False, return_dict=True, fetch_all=True)
+        
+        # Post-process for PID filtering if needed (this is still more efficient than N queries)
+        if pids and results:
+            filtered_results = []
+            for row in results:
+                combined_config = row.get("combined_config")
+                if combined_config:
+                    if isinstance(combined_config, str):
+                        try:
+                            combined_config = json.loads(combined_config)
+                        except json.JSONDecodeError:
+                            combined_config = {}
+                    
+                    if isinstance(combined_config, dict):
+                        pids_in_config = combined_config.get("pids", [])
+                        if isinstance(pids_in_config, list):
+                            command_pids = [int(pid) for pid in pids_in_config if str(pid).isdigit()]
+                            # Check if any filter PID matches command PIDs
+                            if any(filter_pid in command_pids for filter_pid in pids):
+                                filtered_results.append(row)
+                        else:
+                            # No PIDs in config, skip
+                            continue
+                    else:
+                        # Invalid config, skip
+                        continue
+                else:
+                    # No config, skip when filtering by PIDs
+                    continue
+            return filtered_results
+        
+        return results
+
     def get_pending_profiling_command(
         self, hostname: str, service_name: str, exclude_command_id: Optional[str] = None
     ) -> Optional[Dict]:
