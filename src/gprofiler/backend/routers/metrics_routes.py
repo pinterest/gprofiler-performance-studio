@@ -662,21 +662,21 @@ def get_profiling_host_status(
     """
     Get profiling host status with optional filtering by multiple parameters.
     Uses optimized single-query approach with JOINs instead of N+1 queries.
-    
+
     Performance improvements:
     - Single database query instead of N+1 (1 query + 1 per host)
     - Database-side filtering for all parameters
     - LEFT JOIN between HostHeartbeats and ProfilingCommands
     - 10-50x faster response time
-    
+
     Args:
         profiling_params: ProfilingHostStatusRequest object containing all filter parameters
-        
+
     Returns:
         List of host statuses filtered by the specified criteria
     """
     db_manager = DBManager()
-    
+
     # Use the optimized method that performs filtering and joining in the database
     hosts = db_manager.get_profiling_host_status_optimized(
         service_names=profiling_params.service_name,
@@ -687,30 +687,30 @@ def get_profiling_host_status(
         pids=profiling_params.pids,
         exact_match=profiling_params.exact_match
     )
-    
+
     # Convert database results to response model
     results = []
     for host in hosts:
         # Extract PIDs from combined_config
         combined_config = host.get("combined_config")
         command_pids = []
-        
+
         if combined_config:
             if isinstance(combined_config, str):
                 try:
                     combined_config = json.loads(combined_config)
                 except json.JSONDecodeError:
                     combined_config = {}
-            
+
             if isinstance(combined_config, dict):
                 pids_in_config = combined_config.get("pids", [])
                 if isinstance(pids_in_config, list):
                     command_pids = [int(pid) for pid in pids_in_config if str(pid).isdigit()]
-        
+
         # Handle NULL status (no command) as "stopped"
         profiling_status = host.get("status") or "stopped"
         command_type = host.get("command_type") or "N/A"
-        
+
         results.append(
             ProfilingHostStatus(
                 id=host.get("id", 0),
@@ -723,5 +723,5 @@ def get_profiling_host_status(
                 heartbeat_timestamp=host.get("heartbeat_timestamp"),
             )
         )
-    
+
     return results

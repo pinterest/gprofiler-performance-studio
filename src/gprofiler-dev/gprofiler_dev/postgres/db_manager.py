@@ -952,7 +952,7 @@ class DBManager(metaclass=Singleton):
             # Use partial, case-insensitive matching
             where_clause = "WHERE service_name ILIKE %(service_name)s"
             service_param = f"%{service_name}%"
-        
+
         query = f"""
         SELECT
             ID, hostname, ip_address, service_name, last_command_id,
@@ -1342,13 +1342,13 @@ class DBManager(metaclass=Singleton):
         """
         Get profiling host status with all filters applied in a single optimized query.
         Uses JOIN to combine HostHeartbeats and ProfilingCommands data efficiently.
-        
+
         This method solves the N+1 query problem by using a single SQL query with:
         - Common Table Expressions (CTEs) for readability
         - LEFT JOIN to combine HostHeartbeats and ProfilingCommands
         - Window functions (ROW_NUMBER()) to get latest command per host
         - Database-side filtering for all parameters
-        
+
         Args:
             service_names: List of service names to filter by
             hostnames: List of hostnames to filter by (partial match)
@@ -1357,14 +1357,14 @@ class DBManager(metaclass=Singleton):
             command_types: List of command types to filter by
             pids: List of PIDs to filter by
             exact_match: Whether to use exact match for service names
-            
+
         Returns:
             List of dictionaries with host status information
         """
         # Build the query with CTEs for better readability and performance
         query = """
         WITH latest_commands AS (
-            SELECT 
+            SELECT
                 pc.hostname,
                 pc.service_name,
                 pc.command_type,
@@ -1375,7 +1375,7 @@ class DBManager(metaclass=Singleton):
             FROM ProfilingCommands pc
         ),
         current_commands AS (
-            SELECT 
+            SELECT
                 hostname,
                 service_name,
                 command_type,
@@ -1384,7 +1384,7 @@ class DBManager(metaclass=Singleton):
             FROM latest_commands
             WHERE rn = 1
         )
-        SELECT 
+        SELECT
             h.id,
             h.hostname,
             h.ip_address,
@@ -1394,13 +1394,13 @@ class DBManager(metaclass=Singleton):
             c.status,
             c.combined_config
         FROM HostHeartbeats h
-        LEFT JOIN current_commands c 
+        LEFT JOIN current_commands c
             ON h.hostname = c.hostname AND h.service_name = c.service_name
         WHERE 1=1
         """
-        
+
         values: Dict[str, Any] = {}
-        
+
         # Apply service_name filter
         if service_names:
             if exact_match:
@@ -1414,7 +1414,7 @@ class DBManager(metaclass=Singleton):
                     service_conditions.append(f"h.service_name ILIKE %({param_name})s")
                     values[param_name] = f"%{service_name}%"
                 query += f" AND ({' OR '.join(service_conditions)})"
-        
+
         # Apply hostname filter (partial match with ILIKE)
         if hostnames:
             hostname_conditions = []
@@ -1423,7 +1423,7 @@ class DBManager(metaclass=Singleton):
                 hostname_conditions.append(f"h.hostname ILIKE %({param_name})s")
                 values[param_name] = f"%{hostname}%"
             query += f" AND ({' OR '.join(hostname_conditions)})"
-        
+
         # Apply IP address filter (partial match)
         # Note: ip_address is inet type, so we cast to text for LIKE matching
         if ip_addresses:
@@ -1433,7 +1433,7 @@ class DBManager(metaclass=Singleton):
                 ip_conditions.append(f"h.ip_address::text LIKE %({param_name})s")
                 values[param_name] = f"%{ip_addr}%"
             query += f" AND ({' OR '.join(ip_conditions)})"
-        
+
         # Apply profiling status filter
         if profiling_statuses:
             # Convert to lowercase for case-insensitive comparison
@@ -1447,13 +1447,13 @@ class DBManager(metaclass=Singleton):
                     param_name = f"status_{idx}"
                     status_conditions.append(f"LOWER(c.status::text) = LOWER(%({param_name})s)")
                     values[param_name] = status
-            
+
             if has_stopped:
                 status_conditions.append("c.status IS NULL")
-            
+
             if status_conditions:
                 query += f" AND ({' OR '.join(status_conditions)})"
-        
+
         # Apply command type filter
         if command_types:
             command_type_conditions = []
@@ -1465,24 +1465,24 @@ class DBManager(metaclass=Singleton):
                     param_name = f"command_type_{idx}"
                     command_type_conditions.append(f"LOWER(c.command_type) = LOWER(%({param_name})s)")
                     values[param_name] = cmd_type
-            
+
             if has_na:
                 command_type_conditions.append("c.command_type IS NULL")
-            
+
             if command_type_conditions:
                 query += f" AND ({' OR '.join(command_type_conditions)})"
-        
+
         # For PIDs filter, we need to check inside the JSONB combined_config
         # This is more complex and might still need some post-processing
         if pids:
             # Check if any of the requested PIDs exist in the combined_config->pids array
             query += " AND c.combined_config IS NOT NULL"
             query += " AND c.combined_config ? 'pids'"
-        
+
         query += " ORDER BY h.heartbeat_timestamp DESC"
-        
+
         results = self.db.execute(query, values, one_value=False, return_dict=True, fetch_all=True)
-        
+
         # Post-process for PID filtering if needed (this is still more efficient than N queries)
         if pids and results:
             filtered_results = []
@@ -1494,7 +1494,7 @@ class DBManager(metaclass=Singleton):
                             combined_config = json.loads(combined_config)
                         except json.JSONDecodeError:
                             combined_config = {}
-                    
+
                     if isinstance(combined_config, dict):
                         pids_in_config = combined_config.get("pids", [])
                         if isinstance(pids_in_config, list):
@@ -1512,7 +1512,7 @@ class DBManager(metaclass=Singleton):
                     # No config, skip when filtering by PIDs
                     continue
             return filtered_results
-        
+
         return results
 
     def get_pending_profiling_command(
