@@ -273,10 +273,10 @@ class ProfilingDBMethods:
             if additional_args:
                 if "additional_args" not in combined:
                     combined["additional_args"] = {}
-                combined["additional_args"].update(additional_args)
+                combined["additional_args"].update(additional_args)  # type: ignore[attr-defined]
 
         # Remove duplicates from PIDs
-        combined["pids"] = list(set(combined["pids"]))
+        combined["pids"] = list(set(combined["pids"]))  # type: ignore[arg-type]
 
         return combined
 
