@@ -107,6 +107,80 @@ Host <remote-host-alias-for-ssh-client>
 ssh <remote-host-alias-for-ssh-client>
 ```
 
+### 1.5 Environment Configuration
+Before running the stack, you need to configure the environment variables in the `.env` file located in the `deploy` directory. This file contains all the necessary configuration for the services to communicate with each other and external dependencies.
+
+#### 1.5.1 Required AWS Configuration
+```bash
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=<your-aws-access-key>
+AWS_SECRET_ACCESS_KEY=<your-aws-secret-key>
+AWS_SESSION_TOKEN=<your-session-token>  # Optional, only if using temporary credentials
+
+# S3 and SQS resources
+BUCKET_NAME=<your-s3-bucket-name>
+SQS_INDEXER_QUEUE_URL=<your-sqs-queue-url>
+```
+
+#### 1.5.2 Database Configuration
+```bash
+# PostgreSQL (main application database)
+POSTGRES_USER=<postgres-username>
+POSTGRES_PASSWORD=<postgres-password>
+POSTGRES_DB=<postgres-database-name>
+POSTGRES_PORT=5432
+POSTGRES_HOST=db_postgres  # Docker service name for local development
+
+# ClickHouse (analytics database)
+CLICKHOUSE_USER=<clickhouse-username>
+CLICKHOUSE_PASSWORD=<clickhouse-password>
+CLICKHOUSE_HOST=db_clickhouse  # Docker service name for local development
+```
+
+#### 1.5.3 Service Authentication
+```bash
+# REST API service credentials
+REST_USERNAME=<rest-api-username>
+REST_PASSWORD=<rest-api-password>
+
+# Domain configuration
+DOMAIN=http://localhost  # Used in agent installation templates
+```
+
+#### 1.5.4 Slack Integration (New)
+The gProfiler service now supports Slack notifications for profiling activities:
+
+```bash
+# Slack Bot Token - obtain from your Slack app configuration
+SLACK_BOT_TOKEN=<your-slack-bot-token>
+
+# Slack Channels - comma-separated list of channels for notifications
+SLACK_CHANNELS="<#channel1>,<#channel2>"
+```
+
+**Setting up Slack Integration:**
+1. Create a Slack App in your workspace or use an existing one
+2. Add the following OAuth scopes to your bot: `chat:write`, `channels:read`, `groups:read`
+3. Install the app to your workspace and copy the Bot User OAuth Token
+4. Set the `SLACK_BOT_TOKEN` with your token (starts with `xoxb-`)
+5. Configure `SLACK_CHANNELS` with the channels where you want notifications (use comma-separated format)
+
+#### 1.5.5 Logging Configuration
+```bash
+# Common logging directory for all services
+COMMON_LOGS_DIR=/logs
+
+# Service-specific log file paths
+WEBAPP_APP_LOG_FILE_PATH="webapp.log"
+AGENTS_LOGS_APP_LOG_FILE_PATH="${COMMON_LOGS_DIR}/agents-logs-app.log"
+AGENTS_LOGS_LOG_FILE_PATH="${COMMON_LOGS_DIR}/agents-logs.log"
+```
+
+**Note:** The `.env` file comes with sensible defaults for local development. You primarily need to:
+1. Configure your AWS credentials and resources
+2. Set up Slack integration (if desired)
+3. Adjust database passwords for production environments
+
 ## 2. Running the stack
 To run the entire stack built from source, use the docker-compose project located in the `deploy` directory.
 
