@@ -57,7 +57,7 @@ func NewCliArgs() *CLIArgs {
 		FrameReplaceFileName:       ConfPrefix + "replace.yaml",
 		LogMaxSize:                 100,   // 100 MB
 		LogMaxBackups:              5,     // keep 5 backup files
-		LogMaxAge:                  30,    // keep logs for 30 days
+		LogMaxAge:                  1,    // keep logs for 1 day
 		LogCompress:                true,  // compress rotated files
 	}
 }
@@ -103,7 +103,7 @@ func (ca *CLIArgs) ParseArgs() {
 		"Maximum number of backup log files to keep (default 5)")
 	flag.IntVar(&ca.LogMaxAge, "log-max-age", LookupEnvOrInt("LOG_MAX_AGE",
 		ca.LogMaxAge),
-		"Maximum age in days to keep log files (default 30)")
+		"Maximum age in days to keep log files (default 1)")
 	flag.BoolVar(&ca.LogCompress, "log-compress", LookupEnvOrBool("LOG_COMPRESS",
 		ca.LogCompress),
 		"Compress rotated log files (default true)")

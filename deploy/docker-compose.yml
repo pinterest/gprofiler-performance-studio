@@ -181,7 +181,7 @@ services:
       - LOG_FILE_PATH=/logs/gprofiler_indexer.log
       - LOG_MAX_SIZE=100
       - LOG_MAX_BACKUPS=5
-      - LOG_MAX_AGE=30
+      - LOG_MAX_AGE=1
       - LOG_COMPRESS=false
     volumes:
       - "/var/log/gprofiler_indexer:/logs"
