@@ -75,7 +75,7 @@ services:
       - GPROFILER_POSTGRES_HOST=$POSTGRES_HOST
       - GPROFILER_POSTGRES_USERNAME=$POSTGRES_USER
       - GPROFILER_POSTGRES_PASSWORD=$POSTGRES_PASSWORD
-      - APP_LOG_FILE_PATH=$WEBAPP_APP_LOG_FILE_PATH
+      - APP_LOG_FILE_PATH=/var/log/gprofiler_frontend/gprofiler_frontend.log
       - APP_LOG_LEVEL=INFO
       - AWS_METADATA_SERVICE_NUM_ATTEMPTS=100
       - REDIRECT_DOMAIN=$DOMAIN
@@ -86,8 +86,6 @@ services:
       - AWS_DEFAULT_REGION=$AWS_REGION
       - SLACK_BOT_TOKEN=$SLACK_BOT_TOKEN
       - SLACK_CHANNELS=$SLACK_CHANNEL
-    entrypoint: []
-    command: ["sh", "-c", "./run.sh 2>&1 | tee -a /var/log/gprofiler_frontend/gprofiler_frontend.log"]
     volumes:
       - "/var/log/gprofiler_frontend:/var/log/gprofiler_frontend"
 # for debug

@@ -171,7 +171,6 @@ SLACK_CHANNELS="<#channel1>,<#channel2>"
 COMMON_LOGS_DIR=/logs
 
 # Service-specific log file paths
-WEBAPP_APP_LOG_FILE_PATH="webapp.log"
 AGENTS_LOGS_APP_LOG_FILE_PATH="${COMMON_LOGS_DIR}/agents-logs-app.log"
 AGENTS_LOGS_LOG_FILE_PATH="${COMMON_LOGS_DIR}/agents-logs.log"
 ```
