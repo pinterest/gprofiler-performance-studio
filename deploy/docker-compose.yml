@@ -62,6 +62,7 @@ services:
       dockerfile: gprofiler/Dockerfile
     container_name: gprofiler-ps-webapp
     restart: always
+    user: root
     environment:
       - BUCKET_NAME=$BUCKET_NAME
       - QUERY_API_BASE_URL=https://ch-rest-service:4433
@@ -84,7 +85,11 @@ services:
       - AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN
       - AWS_DEFAULT_REGION=$AWS_REGION
       - SLACK_BOT_TOKEN=$SLACK_BOT_TOKEN
-      - SLACK_CHANNELS=$SLACK_CHANNELS
+      - SLACK_CHANNELS=$SLACK_CHANNEL
+    entrypoint: []
+    command: ["sh", "-c", "./run.sh 2>&1 | tee -a /var/log/gprofiler_frontend/gprofiler_frontend.log"]
+    volumes:
+      - "/var/log/gprofiler_frontend:/var/log/gprofiler_frontend"
 # for debug
 #    ports:
 #      - "8888:80"
@@ -96,6 +101,7 @@ services:
       dockerfile: Dockerfile
     container_name: gprofiler-ps-ch-rest-service
     restart: always
+    user: root
     environment:
       - CLICKHOUSE_ADDR=${CLICKHOUSE_HOST}:9000?username=${CLICKHOUSE_USER}&password=${CLICKHOUSE_PASSWORD}
       - CLICKHOUSE_STACKS_TABLE=flamedb.samples
@@ -106,8 +112,11 @@ services:
       - CERT_FILE_PATH=/tls/ch_rest_cert.pem
       - KEY_FILE_PATH=/tls/ch_rest_key.pem
       - BASIC_AUTH_CREDENTIALS=${REST_USERNAME}:${REST_PASSWORD}
+    entrypoint: []
+    command: ["sh", "-c", "/usr/local/bin/app 2>&1 | tee -a /var/log/gprofiler_rest/gprofiler_rest.log"]
     volumes:
       - "./tls:/tls"
+      - "/var/log/gprofiler_rest:/var/log/gprofiler_rest"
     healthcheck:
       test: echo 'SELECT database,name from system.tables' | curl -s 'http://$CLICKHOUSE_USER:$CLICKHOUSE_PASSWORD@$CLICKHOUSE_HOST:8123/?query=' --data-binary @- | grep -q "samples"
       interval: 10s
@@ -160,6 +169,7 @@ services:
       dockerfile: Dockerfile
     container_name: gprofiler-ps-ch-indexer
     restart: always
+    user: root
     environment:
       - SQS_QUEUE_URL=$SQS_INDEXER_QUEUE_URL
       - AWS_REGION=$AWS_REGION
@@ -177,6 +187,10 @@ services:
       - AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
       - AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
       - AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN
+    entrypoint: []
+    command: ["sh", "-c", "/indexer 2>&1 | tee -a /var/log/gprofiler_indexer/gprofiler_indexer.log"]
+    volumes:
+      - "/var/log/gprofiler_indexer:/var/log/gprofiler_indexer"
   #---
   nginx-load-balancer:
     image: nginx:1.23.3

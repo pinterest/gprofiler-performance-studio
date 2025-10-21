@@ -63,6 +63,7 @@ services:
     profiles: ["with-webapp", "with-all"]
     container_name: gprofiler-ps-webapp
     restart: always
+    user: root
     # Uncomment the following lines to expose webapp ports
     # ports:
     #   - "80:80"
@@ -87,6 +88,10 @@ services:
       - AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
       - AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN
       - AWS_DEFAULT_REGION=$AWS_REGION
+    entrypoint: []
+    command: ["sh", "-c", "./run.sh 2>&1 | tee -a /var/log/gprofiler_frontend/gprofiler_frontend.log"]
+    volumes:
+      - "/var/log/gprofiler_frontend:/var/log/gprofiler_frontend"
 
   # ---
   ch-rest-service:
@@ -96,6 +101,7 @@ services:
     profiles: ["with-ch-rest-service", "with-all"]
     container_name: gprofiler-ps-ch-rest-service
     restart: always
+    user: root
     # Uncomment the following lines to expose ClickHouse REST service ports
     # ports:
     #   - "8080:8080"
@@ -109,8 +115,11 @@ services:
       - CERT_FILE_PATH=/tls/ch_rest_cert.pem
       - KEY_FILE_PATH=/tls/ch_rest_key.pem
       - BASIC_AUTH_CREDENTIALS=${REST_USERNAME}:${REST_PASSWORD}
+    entrypoint: []
+    command: ["sh", "-c", "/usr/local/bin/app 2>&1 | tee -a /var/log/gprofiler_rest/gprofiler_rest.log"]
     volumes:
       - "../deploy/tls:/tls"
+      - "/var/log/gprofiler_rest:/var/log/gprofiler_rest"
     healthcheck:
       test: echo 'SELECT database,name from system.tables' | curl -s 'http://$CLICKHOUSE_USER:$CLICKHOUSE_PASSWORD@$CLICKHOUSE_HOST:8123/?query=' --data-binary @- | grep -q "samples"
       interval: 10s
@@ -170,6 +179,7 @@ services:
     profiles: ["with-ch-indexer", "with-all"]
     container_name: gprofiler-ps-ch-indexer
     restart: always
+    user: root
     environment:
       - SQS_QUEUE_URL=$SQS_INDEXER_QUEUE_URL
       - AWS_REGION=$AWS_REGION
@@ -187,6 +197,10 @@ services:
       - AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
       - AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
       - AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN
+    entrypoint: []
+    command: ["sh", "-c", "/indexer 2>&1 | tee -a /var/log/gprofiler_indexer/gprofiler_indexer.log"]
+    volumes:
+      - "/var/log/gprofiler_indexer:/var/log/gprofiler_indexer"
 
   #---
   nginx-load-balancer:
