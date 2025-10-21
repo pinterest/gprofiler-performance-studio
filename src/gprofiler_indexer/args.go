@@ -37,6 +37,10 @@ type CLIArgs struct {
 	AWSEndpoint                string
 	AWSRegion                  string
 	LogFilePath                string
+	LogMaxSize                 int    // MB
+	LogMaxBackups              int    // number of backup files
+	LogMaxAge                  int    // days
+	LogCompress                bool   // compress rotated files
 }
 
 func NewCliArgs() *CLIArgs {
@@ -51,6 +55,10 @@ func NewCliArgs() *CLIArgs {
 		ClickHouseStacksBatchSize:  10000,
 		ClickHouseMetricsBatchSize: 100,
 		FrameReplaceFileName:       ConfPrefix + "replace.yaml",
+		LogMaxSize:                 100,   // 100 MB
+		LogMaxBackups:              5,     // keep 5 backup files
+		LogMaxAge:                  30,    // keep logs for 30 days
+		LogCompress:                true,  // compress rotated files
 	}
 }
 
@@ -87,6 +95,18 @@ func (ca *CLIArgs) ParseArgs() {
 	flag.StringVar(&ca.LogFilePath, "log-file", LookupEnvOrString("LOG_FILE_PATH",
 		ca.LogFilePath),
 		"Log file path (optional, logs to stdout/stderr if not specified)")
+	flag.IntVar(&ca.LogMaxSize, "log-max-size", LookupEnvOrInt("LOG_MAX_SIZE",
+		ca.LogMaxSize),
+		"Maximum size of log file in MB before rotation (default 100)")
+	flag.IntVar(&ca.LogMaxBackups, "log-max-backups", LookupEnvOrInt("LOG_MAX_BACKUPS",
+		ca.LogMaxBackups),
+		"Maximum number of backup log files to keep (default 5)")
+	flag.IntVar(&ca.LogMaxAge, "log-max-age", LookupEnvOrInt("LOG_MAX_AGE",
+		ca.LogMaxAge),
+		"Maximum age in days to keep log files (default 30)")
+	flag.BoolVar(&ca.LogCompress, "log-compress", LookupEnvOrBool("LOG_COMPRESS",
+		ca.LogCompress),
+		"Compress rotated log files (default true)")
 	flag.Parse()
 
 	if ca.SQSQueue == "" && ca.InputFolder == "" {

@@ -19,6 +19,8 @@ package main
 import (
 	"context"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"gopkg.in/natefinch/lumberjack.v2"
 	"os"
 	"os/signal"
 	"sync"
@@ -35,16 +37,50 @@ type RecordChannels struct {
 	MetricsRecords chan MetricRecord
 }
 
-func InitLogs(logFilePath string) {
+func InitLogs(args *CLIArgs) {
 	var zapLogger *zap.Logger
 	var err error
 	
-	if logFilePath != "" {
-		// Configure zap to write to both console and file
-		config := zap.NewDevelopmentConfig()
-		config.OutputPaths = []string{"stdout", logFilePath}
-		config.ErrorOutputPaths = []string{"stderr", logFilePath}
-		zapLogger, err = config.Build()
+	if args.LogFilePath != "" {
+		// Configure zap with log rotation using lumberjack
+		logRotator := &lumberjack.Logger{
+			Filename:   args.LogFilePath,
+			MaxSize:    args.LogMaxSize,    // MB
+			MaxBackups: args.LogMaxBackups, // number of backup files
+			MaxAge:     args.LogMaxAge,     // days
+			Compress:   args.LogCompress,   // compress rotated files
+		}
+		
+		// Create a write syncer for file output with rotation
+		fileWriteSyncer := zapcore.AddSync(logRotator)
+		
+		// Create write syncers for console output
+		consoleWriteSyncer := zapcore.AddSync(os.Stdout)
+		consoleErrorWriteSyncer := zapcore.AddSync(os.Stderr)
+		
+		// Create encoder config
+		encoderConfig := zap.NewDevelopmentEncoderConfig()
+		
+		// Console encoder (human readable)
+		consoleEncoder := zapcore.NewConsoleEncoder(encoderConfig)
+		
+		// File encoder (JSON format for better parsing)
+		fileEncoderConfig := zap.NewProductionEncoderConfig()
+		fileEncoderConfig.TimeKey = "timestamp"
+		fileEncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+		fileEncoder := zapcore.NewJSONEncoder(fileEncoderConfig)
+		
+		// Create cores for different outputs
+		consoleCore := zapcore.NewCore(consoleEncoder, consoleWriteSyncer, zapcore.DebugLevel)
+		consoleErrorCore := zapcore.NewCore(consoleEncoder, consoleErrorWriteSyncer, zapcore.ErrorLevel)
+		fileCore := zapcore.NewCore(fileEncoder, fileWriteSyncer, zapcore.DebugLevel)
+		
+		// Combine cores
+		core := zapcore.NewTee(consoleCore, consoleErrorCore, fileCore)
+		
+		// Create logger
+		zapLogger = zap.New(core, zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel))
+		
 		if err != nil {
 			// Fallback to development logger if file logging fails
 			zapLogger, _ = zap.NewDevelopment()
@@ -59,15 +95,15 @@ func InitLogs(logFilePath string) {
 }
 
 func main() {
-	// Initialize with basic logging first
-	InitLogs("")
+	// Initialize with basic logging first (no file logging yet)
+	basicArgs := &CLIArgs{}
+	InitLogs(basicArgs)
+	
 	args := NewCliArgs()
 	args.ParseArgs()
 	
-	// Re-initialize logging with file path if specified
-	if args.LogFilePath != "" {
-		InitLogs(args.LogFilePath)
-	}
+	// Re-initialize logging with full configuration including rotation
+	InitLogs(args)
 
 	logger.Infof("Starting %s", AppName)
 	tasks := make(chan SQSMessage, args.Concurrency)
