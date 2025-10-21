@@ -23,10 +23,13 @@ RUN mkdir -p /data
 COPY --from=build /go/src/main /indexer
 COPY conf /conf
 
+RUN mkdir -p /logs
+
 RUN useradd -m -s /bin/bash -u 888 non_root && \
     chown -R non_root:non_root /data && \
     chown -R non_root:non_root /indexer && \
-    chown -R non_root:non_root /conf
+    chown -R non_root:non_root /conf && \
+    chown -R non_root:non_root /logs
 
 USER non_root
 

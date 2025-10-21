@@ -35,15 +35,39 @@ type RecordChannels struct {
 	MetricsRecords chan MetricRecord
 }
 
-func InitLogs() {
-	prodLogger, _ := zap.NewDevelopment()
-	logger = prodLogger.Sugar()
+func InitLogs(logFilePath string) {
+	var zapLogger *zap.Logger
+	var err error
+	
+	if logFilePath != "" {
+		// Configure zap to write to both console and file
+		config := zap.NewDevelopmentConfig()
+		config.OutputPaths = []string{"stdout", logFilePath}
+		config.ErrorOutputPaths = []string{"stderr", logFilePath}
+		zapLogger, err = config.Build()
+		if err != nil {
+			// Fallback to development logger if file logging fails
+			zapLogger, _ = zap.NewDevelopment()
+			zapLogger.Error("Failed to initialize file logging, falling back to console only", zap.Error(err))
+		}
+	} else {
+		// Use default development logger (console only)
+		zapLogger, _ = zap.NewDevelopment()
+	}
+	
+	logger = zapLogger.Sugar()
 }
 
 func main() {
-	InitLogs()
+	// Initialize with basic logging first
+	InitLogs("")
 	args := NewCliArgs()
 	args.ParseArgs()
+	
+	// Re-initialize logging with file path if specified
+	if args.LogFilePath != "" {
+		InitLogs(args.LogFilePath)
+	}
 
 	logger.Infof("Starting %s", AppName)
 	tasks := make(chan SQSMessage, args.Concurrency)

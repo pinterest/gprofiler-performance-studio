@@ -160,6 +160,7 @@ services:
       dockerfile: Dockerfile
     container_name: gprofiler-ps-ch-indexer
     restart: always
+    user: root
     environment:
       - SQS_QUEUE_URL=$SQS_INDEXER_QUEUE_URL
       - AWS_REGION=$AWS_REGION
@@ -177,6 +178,9 @@ services:
       - AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
       - AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
       - AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN
+      - LOG_FILE_PATH=/logs/gprofiler_indexer.log
+    volumes:
+      - "/var/log/gprofiler_indexer:/logs"
   #---
   nginx-load-balancer:
     image: nginx:1.23.3

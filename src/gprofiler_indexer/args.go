@@ -36,6 +36,7 @@ type CLIArgs struct {
 	FrameReplaceFileName       string
 	AWSEndpoint                string
 	AWSRegion                  string
+	LogFilePath                string
 }
 
 func NewCliArgs() *CLIArgs {
@@ -83,6 +84,9 @@ func (ca *CLIArgs) ParseArgs() {
 	flag.StringVar(&ca.FrameReplaceFileName, "replace-file", LookupEnvOrString("REPLACE_FILE",
 		ca.FrameReplaceFileName),
 		"replace.yaml")
+	flag.StringVar(&ca.LogFilePath, "log-file", LookupEnvOrString("LOG_FILE_PATH",
+		ca.LogFilePath),
+		"Log file path (optional, logs to stdout/stderr if not specified)")
 	flag.Parse()
 
 	if ca.SQSQueue == "" && ca.InputFolder == "" {
