@@ -263,7 +263,7 @@ class MetricsPublisher:
             # Backend SLI metrics
             publisher.send_sli_metric("success", "profile_upload", {"service": "devapp"})
             publisher.send_sli_metric("failure", "send_heartbeat", {"status_code": 500})
-            publisher.send_sli_metric("ignored_failure", "profile_upload", {"reason": "invalid_api_key"})
+            publisher.send_sli_metric("ignored_failure", "profile_upload", {"reason": "authentication_failed"})
         """
         if not self._enabled or not self._sli_metric_uuid:
             return False

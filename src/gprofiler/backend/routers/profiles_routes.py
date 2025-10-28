@@ -64,11 +64,11 @@ def new_profile_v2(
     try:
         service_name, token_id = get_service_by_api_key(gprofiler_api_key, gprofiler_service_name)
         if not service_name:
-            # Client error - invalid API key
+            # Client error - authentication failed (invalid API key or service name)
             MetricsPublisher.get_instance().send_sli_metric(
                 response_type=RESPONSE_TYPE_IGNORED_FAILURE,
                 method_name='profile_upload',
-                extra_tags={'reason': 'invalid_api_key'}
+                extra_tags={'reason': 'authentication_failed'}
             )
             raise HTTPException(400, {"message": f"Invalid {config.GPROFILER_SERVICE_NAME} header"})
 
@@ -223,6 +223,10 @@ def new_profile_v2(
             extra_tags={'reason': 'missing_parameter', 'parameter': str(key_error)}
         )
         raise HTTPException(400, {"message": f"Missing parameter {key_error}"})
+    except HTTPException:
+        # HTTPException already handled above (with ignored_failure metric)
+        # Let FastAPI handle it without sending additional metrics
+        raise
     except Exception as e:
         # Server error - counts against SLO
         MetricsPublisher.get_instance().send_sli_metric(
