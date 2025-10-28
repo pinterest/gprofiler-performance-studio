@@ -16,7 +16,6 @@
 
 import json
 import math
-import time
 import uuid
 from datetime import datetime, timedelta
 from logging import getLogger
@@ -742,58 +741,53 @@ def get_profiling_host_status(
     Returns:
         List of host statuses filtered by the specified criteria
     """
-    try:
-        db_manager = DBManager()
+    db_manager = DBManager()
 
-        # Use the optimized method that performs filtering and joining in the database
-        hosts = db_manager.get_profiling_host_status_optimized(
-            service_names=profiling_params.service_name,
-            hostnames=profiling_params.hostname,
-            ip_addresses=profiling_params.ip_address,
-            profiling_statuses=profiling_params.profiling_status,
-            command_types=profiling_params.command_type,
-            pids=profiling_params.pids,
-            exact_match=profiling_params.exact_match
+    # Use the optimized method that performs filtering and joining in the database
+    hosts = db_manager.get_profiling_host_status_optimized(
+        service_names=profiling_params.service_name,
+        hostnames=profiling_params.hostname,
+        ip_addresses=profiling_params.ip_address,
+        profiling_statuses=profiling_params.profiling_status,
+        command_types=profiling_params.command_type,
+        pids=profiling_params.pids,
+        exact_match=profiling_params.exact_match
+    )
+
+    # Convert database results to response model
+    results = []
+    for host in hosts:
+        # Extract PIDs from combined_config
+        combined_config = host.get("combined_config")
+        command_pids = []
+
+        if combined_config:
+            if isinstance(combined_config, str):
+                try:
+                    combined_config = json.loads(combined_config)
+                except json.JSONDecodeError:
+                    combined_config = {}
+
+            if isinstance(combined_config, dict):
+                pids_in_config = combined_config.get("pids", [])
+                if isinstance(pids_in_config, list):
+                    command_pids = [int(pid) for pid in pids_in_config if str(pid).isdigit()]
+
+        # Handle NULL status (no command) as "stopped"
+        profiling_status = host.get("status") or "stopped"
+        command_type = host.get("command_type") or "N/A"
+
+        results.append(
+            ProfilingHostStatus(
+                id=host.get("id", 0),
+                service_name=host.get("service_name"),
+                hostname=host.get("hostname"),
+                ip_address=host.get("ip_address"),
+                pids=command_pids,
+                command_type=command_type,
+                profiling_status=profiling_status,
+                heartbeat_timestamp=host.get("heartbeat_timestamp"),
+            )
         )
 
-        # Convert database results to response model
-        results = []
-        for host in hosts:
-            # Extract PIDs from combined_config
-            combined_config = host.get("combined_config")
-            command_pids = []
-
-            if combined_config:
-                if isinstance(combined_config, str):
-                    try:
-                        combined_config = json.loads(combined_config)
-                    except json.JSONDecodeError:
-                        combined_config = {}
-
-                if isinstance(combined_config, dict):
-                    pids_in_config = combined_config.get("pids", [])
-                    if isinstance(pids_in_config, list):
-                        command_pids = [int(pid) for pid in pids_in_config if str(pid).isdigit()]
-
-            # Handle NULL status (no command) as "stopped"
-            profiling_status = host.get("status") or "stopped"
-            command_type = host.get("command_type") or "N/A"
-
-            results.append(
-                ProfilingHostStatus(
-                    id=host.get("id", 0),
-                    service_name=host.get("service_name"),
-                    hostname=host.get("hostname"),
-                    ip_address=host.get("ip_address"),
-                    pids=command_pids,
-                    command_type=command_type,
-                    profiling_status=profiling_status,
-                    heartbeat_timestamp=host.get("heartbeat_timestamp"),
-                )
-            )
-
-        return results
-        
-    except Exception as e:
-        logger.error(f"Failed to get host status: {str(e)}", exc_info=True)
-        raise
+    return results
