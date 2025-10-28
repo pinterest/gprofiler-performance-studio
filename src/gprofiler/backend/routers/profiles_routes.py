@@ -18,7 +18,6 @@ import gzip
 import json
 import os
 import random
-import time
 from logging import getLogger
 from typing import List, Union
 
@@ -60,8 +59,6 @@ def new_profile_v2(
     gprofiler_api_key: str = Header(...),
     gprofiler_service_name: str = Header(...),
 ):
-    # SLI Metric: Track HTTP success rate for profiler uploads from agents
-    start_time = time.time()
     hostname = "unknown"
     
     try:
@@ -215,7 +212,6 @@ def new_profile_v2(
                 logger.info("send task to queue", extra=extra_info)
             except sqs.exceptions.QueueDoesNotExist:
                 logger.error(f"Queue `{config.SQS_INDEXER_QUEUE_URL}` does not exist, failed to send message {msg}")
-                # Infrastructure issue - logged for troubleshooting (profile still uploaded successfully)
         else:
             logger.info("drop task due sampling", extra=extra_info)
 

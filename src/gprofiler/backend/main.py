@@ -39,7 +39,7 @@ app = FastAPI(openapi_url="/api/v1/openapi.json", docs_url="/api/v1/docs")
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on application startup."""
-    # Initialize MetricsPublisher (matches agent pattern from PR #36)
+    # Initialize MetricsPublisher
     metrics_publisher = MetricsPublisher(
         server_url=config.METRICS_AGENT_URL,
         service_name=config.METRICS_SERVICE_NAME,
@@ -61,7 +61,7 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup services on application shutdown."""
-    # Cleanup MetricsPublisher (matches agent pattern)
+    # Cleanup MetricsPublisher
     publisher = MetricsPublisher.get_instance()
     if publisher:
         publisher.flush_and_close()

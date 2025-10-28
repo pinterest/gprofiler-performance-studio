@@ -4,14 +4,12 @@ Metrics Publisher - Singleton class for publishing metrics to metrics agent.
 This module provides a thread-safe singleton class for publishing SLI (Service Level
 Indicator) metrics to a metrics agent for monitoring and alerting.
 
-Matches agent implementation from: https://github.com/pinterest/gprofiler/pull/36
-
 Metric Types:
     - SLI Metrics (Primary): Track success/failure rates for SLO monitoring
     - Error Metrics: Available for operational error tracking (not currently used)
 
 Usage:
-    # Initialize once (typically in main application startup) - matches agent pattern
+    # Initialize once (typically in main application startup)
     metrics_publisher = MetricsPublisher(
         server_url="tcp://localhost:18126",
         service_name="gprofiler-backend",
@@ -46,14 +44,7 @@ class MetricCategory(str, Enum):
     EXTERNAL_SERVICE = "external_service"  # Calls to external services (if any)
 
 
-class SLIResponseType(str, Enum):
-    """Response types for SLI metrics"""
-    SUCCESS = "success"
-    FAILURE = "failure"
-    IGNORED_FAILURE = "ignored_failure"
-
-
-# Constants for SLI response types (matches agent pattern from PR#36)
+# Constants for SLI response types
 RESPONSE_TYPE_SUCCESS = "success"
 RESPONSE_TYPE_FAILURE = "failure"
 RESPONSE_TYPE_IGNORED_FAILURE = "ignored_failure"
@@ -91,7 +82,7 @@ class MetricsPublisher:
     _lock = threading.Lock()
     
     def __new__(cls, *args, **kwargs):
-        """Thread-safe singleton implementation - matches agent pattern"""
+        """Thread-safe singleton implementation"""
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -106,7 +97,7 @@ class MetricsPublisher:
         enabled: bool = True
     ):
         """
-        Initialize MetricsPublisher with configuration (matches agent pattern).
+        Initialize MetricsPublisher with configuration.
         
         Args:
             server_url: TCP endpoint URL for metrics agent (default: tcp://localhost:18126)
@@ -127,7 +118,7 @@ class MetricsPublisher:
         self._last_error_log_time = 0
         self._error_log_interval = 300  # Log connection errors at most once per 5 minutes
         
-        # Parse server URL (only matters if enabled) - matches agent pattern
+        # Parse server URL (only matters if enabled)
         if server_url.startswith('tcp://'):
             url_parts = server_url[6:].split(':')
             self.host = url_parts[0]
@@ -151,10 +142,10 @@ class MetricsPublisher:
     @classmethod
     def get_instance(cls) -> 'MetricsPublisher':
         """
-        Get the MetricsPublisher singleton instance (matches agent pattern).
+        Get the MetricsPublisher singleton instance.
         
         Returns the instance even if disabled - methods check _enabled internally.
-        This matches agent's pattern where get_instance() is always safe to call.
+        get_instance() is always safe to call.
         
         Returns:
             MetricsPublisher instance (or NoopMetricsPublisher if not initialized)
@@ -269,7 +260,7 @@ class MetricsPublisher:
             True if sent successfully, False otherwise
             
         Example:
-            # Backend SLI metrics (matches agent pattern)
+            # Backend SLI metrics
             publisher.send_sli_metric("success", "profile_upload", {"service": "devapp"})
             publisher.send_sli_metric("failure", "send_heartbeat", {"status_code": 500})
             publisher.send_sli_metric("ignored_failure", "profile_upload", {"reason": "invalid_api_key"})
@@ -307,7 +298,7 @@ class MetricsPublisher:
     
     def flush_and_close(self):
         """
-        Flush any pending metrics and close the publisher (matches agent pattern).
+        Flush any pending metrics and close the publisher.
         
         Note: Backend sends metrics synchronously over TCP (no buffering),
         so there's nothing to flush, but we keep the method name consistent
@@ -320,7 +311,7 @@ class MetricsPublisher:
             self._enabled = False
     
     def __del__(self):
-        """Cleanup on deletion (matches agent pattern)"""
+        """Cleanup on deletion"""
         try:
             self.flush_and_close()
         except Exception:
@@ -341,7 +332,7 @@ def send_error_metric(category: str, error_type: str, tags: Optional[Dict[str, A
 
 def send_sli_metric(response_type: str, method_name: str, extra_tags: Optional[Dict[str, Any]] = None) -> bool:
     """
-    Convenience function to send an SLI metric (matches agent pattern).
+    Convenience function to send an SLI metric.
     
     Usage:
         from backend.utils.metrics_publisher import send_sli_metric
