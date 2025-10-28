@@ -25,7 +25,12 @@ from typing import List, Union
 import boto3
 from backend import config
 from backend.models.profiles_models import AgentData, ProfileResponse
-from backend.utils.metrics_publisher import MetricsPublisher
+from backend.utils.metrics_publisher import (
+    MetricsPublisher,
+    RESPONSE_TYPE_SUCCESS,
+    RESPONSE_TYPE_FAILURE,
+    RESPONSE_TYPE_IGNORED_FAILURE,
+)
 from backend.utils.profiles_utils import GzipRoute, get_profile_file_name
 from botocore.config import Config
 from cmp_version import VersionString
@@ -56,16 +61,18 @@ def new_profile_v2(
     gprofiler_service_name: str = Header(...),
 ):
     # SLI Metric: Track HTTP success rate for profiler uploads from agents
-    publisher = MetricsPublisher.get_instance()
     start_time = time.time()
     hostname = "unknown"
     
     try:
         service_name, token_id = get_service_by_api_key(gprofiler_api_key, gprofiler_service_name)
         if not service_name:
-            # Client error - doesn't count against SLO
-            if publisher:
-                publisher.send_sli_metric("ignored_failure", "profile_upload", {"reason": "invalid_api_key"})
+            # Client error - invalid API key
+            MetricsPublisher.get_instance().send_sli_metric(
+                response_type=RESPONSE_TYPE_IGNORED_FAILURE,
+                method_name='profile_upload',
+                extra_tags={'reason': 'invalid_api_key'}
+            )
             raise HTTPException(400, {"message": f"Invalid {config.GPROFILER_SERVICE_NAME} header"})
 
         db_manager = DBManager()
@@ -159,8 +166,11 @@ def new_profile_v2(
             exception_msg = "Failed to parse v2 metadata"
             logger.exception(exception_msg)
             # Client error - invalid metadata format
-            if publisher:
-                publisher.send_sli_metric("ignored_failure", "profile_upload", {"reason": "invalid_metadata", "hostname": hostname})
+            MetricsPublisher.get_instance().send_sli_metric(
+                response_type=RESPONSE_TYPE_IGNORED_FAILURE,
+                method_name='profile_upload',
+                extra_tags={'reason': 'invalid_metadata', 'hostname': hostname}
+            )
             raise HTTPException(400, {"message": exception_msg})
 
         service_id = service_response.service_id
@@ -211,14 +221,19 @@ def new_profile_v2(
 
     except KeyError as key_error:
         # Client error - missing parameter
-        if publisher:
-            publisher.send_sli_metric("ignored_failure", "profile_upload", {"reason": "missing_parameter", "parameter": str(key_error)})
+        MetricsPublisher.get_instance().send_sli_metric(
+            response_type=RESPONSE_TYPE_IGNORED_FAILURE,
+            method_name='profile_upload',
+            extra_tags={'reason': 'missing_parameter', 'parameter': str(key_error)}
+        )
         raise HTTPException(400, {"message": f"Missing parameter {key_error}"})
     except Exception as e:
         # Server error - counts against SLO
-        if publisher:
-            # SLI metric for SLO tracking
-            publisher.send_sli_metric("failure", "profile_upload", {"error": type(e).__name__})
+        MetricsPublisher.get_instance().send_sli_metric(
+            response_type=RESPONSE_TYPE_FAILURE,
+            method_name='profile_upload',
+            extra_tags={'error': type(e).__name__}
+        )
         
         if os.path.exists(".debug"):
             import sys
@@ -239,14 +254,18 @@ def new_profile_v2(
                 f"client: {client_handler} " + repr(e)
             )
             # Server error - counts against SLO
-            if publisher:
-                # SLI metric for SLO tracking
-                publisher.send_sli_metric("failure", "profile_upload", {"reason": "service_registration_failed"})
+            MetricsPublisher.get_instance().send_sli_metric(
+                response_type=RESPONSE_TYPE_FAILURE,
+                method_name='profile_upload',
+                extra_tags={'reason': 'service_registration_failed'}
+            )
             raise HTTPException(400, {"message": "Failed to register the new service"})
     
     # Success - profile uploaded and processed successfully
-    if publisher:
-        # SLI success metric (critical for HTTP success rate tracking)
-        publisher.send_sli_metric("success", "profile_upload", {"service": service_name, "hostname": hostname})
+    MetricsPublisher.get_instance().send_sli_metric(
+        response_type=RESPONSE_TYPE_SUCCESS,
+        method_name='profile_upload',
+        extra_tags={'service': service_name, 'hostname': hostname}
+    )
     
     return ProfileResponse(message="ok", gpid=int(gpid))

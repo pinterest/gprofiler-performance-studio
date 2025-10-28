@@ -53,6 +53,12 @@ class SLIResponseType(str, Enum):
     IGNORED_FAILURE = "ignored_failure"
 
 
+# Constants for SLI response types (matches agent pattern from PR#36)
+RESPONSE_TYPE_SUCCESS = "success"
+RESPONSE_TYPE_FAILURE = "failure"
+RESPONSE_TYPE_IGNORED_FAILURE = "ignored_failure"
+
+
 class NoopMetricsPublisher:
     """
     No-op metrics publisher for graceful degradation.
