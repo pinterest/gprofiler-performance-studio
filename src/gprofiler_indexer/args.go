@@ -36,6 +36,11 @@ type CLIArgs struct {
 	FrameReplaceFileName       string
 	AWSEndpoint                string
 	AWSRegion                  string
+	// Metrics Publisher Configuration
+	MetricsEnabled     bool
+	MetricsAgentURL    string
+	MetricsServiceName string
+	MetricsSLIUUID     string
 }
 
 func NewCliArgs() *CLIArgs {
@@ -50,6 +55,11 @@ func NewCliArgs() *CLIArgs {
 		ClickHouseStacksBatchSize:  10000,
 		ClickHouseMetricsBatchSize: 100,
 		FrameReplaceFileName:       ConfPrefix + "replace.yaml",
+		// Metrics defaults
+		MetricsEnabled:     false,
+		MetricsAgentURL:    "tcp://localhost:18126",
+		MetricsServiceName: "gprofiler-indexer",
+		MetricsSLIUUID:     "",
 	}
 }
 
@@ -57,7 +67,7 @@ func (ca *CLIArgs) ParseArgs() {
 	flag.StringVar(&ca.SQSQueue, "sqs-queue", LookupEnvOrString("SQS_QUEUE_URL", ca.SQSQueue),
 		"SQS Queue name to listen")
 	flag.StringVar(&ca.S3Bucket, "s3-bucket", LookupEnvOrString("S3_BUCKET", ca.S3Bucket), "S3 bucket name")
-	flag.StringVar(&ca.AWSEndpoint, "aws-endpoint", LookupEnvOrString("S3_ENDPOINT", ca.AWSEndpoint), "AWS Endpoint URL")
+	flag.StringVar(&ca.AWSEndpoint, "aws-endpoint", LookupEnvOrString("AWS_ENDPOINT_URL", ca.AWSEndpoint), "AWS Endpoint URL")
 	flag.StringVar(&ca.AWSRegion, "aws-region", LookupEnvOrString("AWS_REGION", ca.AWSRegion), "AWS Region")
 	flag.StringVar(&ca.ClickHouseAddr, "clickhouse-addr", LookupEnvOrString("CLICKHOUSE_ADDR", ca.ClickHouseAddr),
 		"ClickHouse address like 127.0.0.1:9000")
@@ -83,6 +93,15 @@ func (ca *CLIArgs) ParseArgs() {
 	flag.StringVar(&ca.FrameReplaceFileName, "replace-file", LookupEnvOrString("REPLACE_FILE",
 		ca.FrameReplaceFileName),
 		"replace.yaml")
+	// Metrics Publisher Configuration
+	flag.BoolVar(&ca.MetricsEnabled, "metrics-enabled", LookupEnvOrBool("METRICS_ENABLED", ca.MetricsEnabled),
+		"Enable metrics publishing (default false)")
+	flag.StringVar(&ca.MetricsAgentURL, "metrics-agent-url", LookupEnvOrString("METRICS_AGENT_URL", ca.MetricsAgentURL),
+		"Metrics agent URL (default tcp://localhost:18126)")
+	flag.StringVar(&ca.MetricsServiceName, "metrics-service-name", LookupEnvOrString("METRICS_SERVICE_NAME", ca.MetricsServiceName),
+		"Service name for metrics (default gprofiler-indexer)")
+	flag.StringVar(&ca.MetricsSLIUUID, "metrics-sli-uuid", LookupEnvOrString("METRICS_SLI_UUID", ca.MetricsSLIUUID),
+		"SLI metric UUID")
 	flag.Parse()
 
 	if ca.SQSQueue == "" && ca.InputFolder == "" {
