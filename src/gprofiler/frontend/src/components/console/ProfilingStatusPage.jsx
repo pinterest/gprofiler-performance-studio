@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useHistory, useLocation } from 'react-router-dom';
 
 import { DATA_URLS } from '../../api/urls';
+import { PAGES } from '../../utils/consts';
 import MuiTable from '../common/dataDisplay/table/MuiTable';
 import PageHeader from '../common/layout/PageHeader';
 import ProfilingHeader from './header/ProfilingHeader';
@@ -44,6 +45,31 @@ const columns = [
             } catch (error) {
                 return 'Invalid date';
             }
+        },
+    },
+    {
+        field: 'profile',
+        headerName: 'profile',
+        flex: 1,
+        renderCell: (params) => {
+            const { host, service } = params.row;
+            if (!host || !service) return 'N/A';
+            
+            const baseUrl = `${window.location.protocol}//${window.location.host}`;
+            const profileUrl = `${baseUrl}${PAGES.profiles.to}?filter=hn,is,${encodeURIComponent(host)}&gtab=1&pm=1&rtms=1&service=${encodeURIComponent(service)}&time=1h&view=flamegraph&wp=100`;
+            
+            return (
+                <a
+                    href={profileUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: '#1976d2', textDecoration: 'none' }}
+                    onMouseOver={(e) => e.target.style.textDecoration = 'underline'}
+                    onMouseOut={(e) => e.target.style.textDecoration = 'none'}
+                >
+                    View Profile
+                </a>
+            );
         },
     },
 ];
