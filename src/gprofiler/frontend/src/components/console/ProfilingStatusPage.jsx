@@ -168,6 +168,17 @@ const ProfilingStatusPage = () => {
         }
     }, [fetchProfilingStatus, history, location.search]); // Add dependencies
 
+    // Auto-refresh every 30 seconds for dynamic profiling
+    useEffect(() => {
+        const refreshInterval = setInterval(() => {
+            // Refresh with current applied filters
+            fetchProfilingStatus(appliedFilters);
+        }, 30000); // 30 seconds
+
+        // Cleanup interval on component unmount
+        return () => clearInterval(refreshInterval);
+    }, [appliedFilters, fetchProfilingStatus]); // Re-create interval when filters change
+
     // Update URL when filters change (with focus preservation)
     const updateURL = useCallback(
         (newFilters) => {
