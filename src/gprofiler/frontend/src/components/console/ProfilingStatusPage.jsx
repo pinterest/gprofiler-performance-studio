@@ -11,16 +11,17 @@ import ProfilingHeader from './header/ProfilingHeader';
 import ProfilingTopPanel from './header/ProfilingTopPanel';
 
 const columns = [
-    { field: 'service', headerName: 'service name', flex: 1 },
-    { field: 'host', headerName: 'host name', flex: 1 },
-    { field: 'pids', headerName: 'pids (if profiled)', flex: 1 },
-    { field: 'ip', headerName: 'IP', flex: 1 },
-    { field: 'commandType', headerName: 'command type', flex: 1 },
-    { field: 'status', headerName: 'profiling status', flex: 1 },
+    { field: 'service', headerName: 'service name', flex: 1, sortable: true },
+    { field: 'host', headerName: 'host name', flex: 1, sortable: true },
+    { field: 'pids', headerName: 'pids (if profiled)', flex: 1, sortable: true },
+    { field: 'ip', headerName: 'IP', flex: 1, sortable: true },
+    { field: 'commandType', headerName: 'command type', flex: 1, sortable: true },
+    { field: 'status', headerName: 'profiling status', flex: 1, sortable: true },
     {
         field: 'heartbeat_timestamp',
         headerName: 'last heartbeat',
         flex: 1,
+        sortable: true,
         renderCell: (params) => {
             if (!params.value) return 'N/A';
             try {
@@ -346,6 +347,11 @@ const ProfilingStatusPage = () => {
                         checkboxSelection
                         onSelectionModelChange={setSelectionModel}
                         selectionModel={selectionModel}
+                        initialState={{
+                            sorting: {
+                                sortModel: [{ field: 'host', sort: 'asc' }],
+                            },
+                        }}
                     />
                 </Box>
             </Box>
