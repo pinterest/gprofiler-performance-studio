@@ -52,8 +52,14 @@ const columns = [
         headerName: 'profile',
         flex: 1,
         renderCell: (params) => {
-            const { host, service } = params.row;
-            if (!host || !service) return 'N/A';
+            const { host, service, commandType, status } = params.row;
+            
+            // Only show profile link for rows with commandType="start" and status="completed"
+            if (commandType !== 'start' || status !== 'completed') {
+                return '';
+            }
+            
+            if (!host || !service) return '';
             
             const baseUrl = `${window.location.protocol}//${window.location.host}`;
             const profileUrl = `${baseUrl}${PAGES.profiles.to}?filter=hn,is,${encodeURIComponent(host)}&gtab=1&pm=1&rtms=1&service=${encodeURIComponent(service)}&time=1h&view=flamegraph&wp=100`;
