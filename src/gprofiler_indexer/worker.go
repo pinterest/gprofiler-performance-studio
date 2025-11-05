@@ -75,11 +75,9 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 					},
 				)
 				
-				// Clean up the message even though processing failed
-				errDelete := deleteMessage(sess, task.QueueURL, task.MessageHandle)
-				if errDelete != nil {
-					log.Errorf("Unable to delete message from %s, err %v", task.QueueURL, errDelete)
-				}
+				// Do NOT delete message - let SQS retry for transient S3 failures
+				// Message will retry automatically via SQS visibility timeout
+				log.Warnf("S3 fetch failed for %s, message will retry via SQS", task.Filename)
 				continue
 			}
 			temp = strings.Split(task.Filename, "_")[0]
@@ -104,7 +102,7 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 		if err != nil {
 			log.Errorf("Error while parsing stack frame file: %v", err)
 			
-			// SLI Metric: Parse/Write failure (server error - counts against SLO)
+			// SLI Metric: Parse event failure or write profile to column DB failure (server error - counts against SLO)
 			// Only tracks SQS events; SendSLIMetric handles nil/enabled checks internally
 			if useSQS {
 				GetMetricsPublisher().SendSLIMetric(
@@ -118,12 +116,10 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 				)
 			}
 			
-			// Still delete the message to avoid reprocessing
+			// Do NOT delete message - let SQS retry for transient ClickHouse/parsing failures
+			// Message will retry automatically via SQS visibility timeout  
 			if useSQS {
-				errDelete := deleteMessage(sess, task.QueueURL, task.MessageHandle)
-				if errDelete != nil {
-					log.Errorf("Unable to delete message from %s, err %v", task.QueueURL, errDelete)
-				}
+				log.Warnf("Parse/write failed for %s, message will retry via SQS", task.Filename)
 			}
 			continue
 		}

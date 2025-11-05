@@ -334,7 +334,7 @@ GetMetricsPublisher().SendSLIMetric(
 #### 4. Error Budget Tracking
 
 ```go
-// S3 fetch failed (counts against SLO)
+// S3 fetch failed (counts against SLO) - NO MESSAGE DELETION
 if err != nil {
     GetMetricsPublisher().SendSLIMetric(
         ResponseTypeFailure,  // ← Counts against error budget
@@ -345,19 +345,37 @@ if err != nil {
             "filename": task.Filename,
         },
     )
+    // Do NOT delete message - let SQS retry for transient failures
+    log.Warnf("S3 fetch failed for %s, message will retry via SQS", task.Filename)
+    return err
 }
 
-// SQS delete failed (still counts as failure)
-if errDelete != nil {
+// SQS infrastructure failures (counts against SLO)
+if recvErr != nil {
     GetMetricsPublisher().SendSLIMetric(
-        ResponseTypeFailure,  // ← Also counts against SLO
+        ResponseTypeFailure,  // ← Infrastructure failure
         "event_processing",
         map[string]string{
-            "service":  serviceName,
-            "error":    "sqs_delete_failed",
-            "filename": task.Filename,
+            "service": "sqs_infrastructure",
+            "error":   "sqs_receive_failed",
         },
     )
+    continue  // Keep polling
+}
+
+// Malformed messages (client error - doesn't count against SLO)
+if parseErr != nil {
+    GetMetricsPublisher().SendSLIMetric(
+        ResponseTypeIgnoredFailure,  // ← Client error, doesn't impact SLO
+        "event_processing",
+        map[string]string{
+            "service": "sqs_infrastructure", 
+            "error":   "sqs_message_parse_failed",
+        },
+    )
+    // Delete malformed messages to prevent infinite retry
+    deleteMessage(sess, queueURL, messageHandle)
+    continue
 }
 ```
 
@@ -525,7 +543,7 @@ func ProcessEvent(event SQSMessage) error {
 }
 ```
 
-### Example 2: Multi-Stage Processing with Detailed Tracking
+### Example 2: Multi-Stage Processing with Proper SQS Retry Strategy
 
 ```go
 func ProcessProfile(task SQSMessage) error {
@@ -541,10 +559,14 @@ func ProcessProfile(task SQSMessage) error {
                 "filename": task.Filename,
             },
         )
+        
+        // Do NOT delete message - let SQS retry for transient S3 failures
+        // Message will retry automatically via SQS visibility timeout
+        log.Warnf("S3 fetch failed for %s, message will retry via SQS", task.Filename)
         return err
     }
     
-    // Stage 2: Parse and insert
+    // Stage 2: Parse and insert into ClickHouse
     err = ParseAndInsert(buf)
     if err != nil {
         GetMetricsPublisher().SendSLIMetric(
@@ -552,14 +574,18 @@ func ProcessProfile(task SQSMessage) error {
             "event_processing",
             map[string]string{
                 "service":  task.Service,
-                "error":    "parse_or_insert_failed",
+                "error":    "parse_or_write_failed",
                 "filename": task.Filename,
             },
         )
+        
+        // Do NOT delete message - let SQS retry for transient ClickHouse/parsing failures
+        // Message will retry automatically via SQS visibility timeout
+        log.Warnf("Parse/write failed for %s, message will retry via SQS", task.Filename)
         return err
     }
     
-    // Stage 3: Cleanup
+    // Stage 3: Cleanup (only on success)
     err = deleteMessage(sess, task.QueueURL, task.MessageHandle)
     if err != nil {
         GetMetricsPublisher().SendSLIMetric(
@@ -571,7 +597,9 @@ func ProcessProfile(task SQSMessage) error {
                 "filename": task.Filename,
             },
         )
-        return err
+        // Continue anyway - message was processed successfully
+        // SQS will eventually make message visible again, but that's better than data loss
+        log.Errorf("Failed to delete processed message: %v", err)
     }
     
     // Success!
@@ -587,7 +615,74 @@ func ProcessProfile(task SQSMessage) error {
 }
 ```
 
-### Example 3: Conditional Metrics (Only for Production Traffic)
+### Example 3: SQS Infrastructure Monitoring
+
+```go
+// In queue.go - SQS polling and connection monitoring
+func ListenSqs(ctx context.Context, args *CLIArgs, ch chan<- SQSMessage, wg *sync.WaitGroup) {
+    // ... SQS setup ...
+    
+    urlResult, err := getQueueURL(sess, args.SQSQueue)
+    if err != nil {
+        logger.Errorf("Got an error getting the queue URL: %v", err)
+        
+        // SLI Metric: SQS queue URL resolution failure (infrastructure error)
+        GetMetricsPublisher().SendSLIMetric(
+            ResponseTypeFailure,
+            "event_processing",
+            map[string]string{
+                "service": "sqs_infrastructure",
+                "error":   "sqs_queue_url_failed",
+            },
+        )
+        return
+    }
+    
+    for {
+        output, recvErr := svc.ReceiveMessage(&sqs.ReceiveMessageInput{...})
+        if recvErr != nil {
+            logger.Error(recvErr)
+            
+            // SLI Metric: SQS message receive failure (infrastructure error)
+            GetMetricsPublisher().SendSLIMetric(
+                ResponseTypeFailure,
+                "event_processing",
+                map[string]string{
+                    "service": "sqs_infrastructure",
+                    "error":   "sqs_receive_failed",
+                },
+            )
+            continue
+        }
+        
+        for _, message := range output.Messages {
+            var sqsMessage SQSMessage
+            parseErr := json.Unmarshal([]byte(*message.Body), &sqsMessage)
+            if parseErr != nil {
+                // SLI Metric: Malformed message (client error - doesn't count against SLO)
+                GetMetricsPublisher().SendSLIMetric(
+                    ResponseTypeIgnoredFailure,
+                    "event_processing",
+                    map[string]string{
+                        "service": "sqs_infrastructure",
+                        "error":   "sqs_message_parse_failed",
+                    },
+                )
+                
+                // Delete malformed messages to prevent infinite retry loop
+                // This is a permanent client error that won't be fixed by retrying
+                deleteMessage(sess, *urlResult.QueueUrl, *message.ReceiptHandle)
+                continue
+            }
+            
+            // Forward valid message to workers
+            ch <- sqsMessage
+        }
+    }
+}
+```
+
+### Example 4: Conditional Metrics (Only for Production Traffic)
 
 ```go
 func Worker(tasks <-chan SQSMessage) {
@@ -815,6 +910,65 @@ extra_hosts:
 
 ---
 
+## SQS Message Handling Strategy
+
+### Improved Retry Logic
+
+The indexer now implements a robust SQS message handling strategy that prevents data loss from transient failures:
+
+#### Message Deletion Policy
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Message Handling Strategy                    │
+├─────────────────────┬─────────────────┬─────────────────────────┤
+│ Scenario            │ Action          │ Reasoning               │
+├─────────────────────┼─────────────────┼─────────────────────────┤
+│ ✅ Success          │ Delete          │ Processing complete     │
+│ 🔥 S3 fetch failure │ Retry (no del)  │ May be transient issue  │
+│ 🔥 Parse/DB failure │ Retry (no del)  │ May be transient issue  │
+│ 💀 Malformed JSON   │ Delete          │ Won't fix with retry    │
+│ 🏁 SQS delete fail  │ Continue        │ Already processed       │
+└─────────────────────┴─────────────────┴─────────────────────────┘
+```
+
+#### Key Benefits
+
+1. **Data Durability**: Transient failures no longer cause permanent data loss
+2. **Automatic Recovery**: SQS visibility timeout handles retries automatically  
+3. **Cost Efficiency**: No manual retry logic needed
+4. **Poison Message Protection**: Malformed messages still get removed to prevent infinite loops
+5. **Operational Resilience**: System recovers from temporary S3/ClickHouse outages
+
+#### Implementation Details
+
+**Infrastructure Layer (queue.go):**
+- **SQS Queue URL Resolution** - Tracks connection establishment failures
+- **SQS Message Polling** - Monitors network/service availability issues
+- **Message Format Validation** - Handles malformed JSON (deletes only these)
+
+**Processing Layer (worker.go):**
+- **S3 File Retrieval** - No deletion on failure (allows retry for network issues)
+- **Data Processing** - No deletion on failure (allows retry for ClickHouse downtime)  
+- **Cleanup Operations** - Tracks delete failures but continues (data already processed)
+- **End-to-End Success** - Only successful path triggers message deletion
+
+### SLI Metric Coverage
+
+The complete event processing pipeline now tracks:
+
+```
+SQS Queue URL Resolution → SQS Message Polling → Message Parsing → 
+S3 File Download → ClickHouse Processing → SQS Message Cleanup → Success
+```
+
+**Error Categories:**
+- `sqs_infrastructure` - SQS connectivity and polling issues
+- `{service_name}` - Business logic processing failures
+- Response types properly classify server vs client errors
+
+---
+
 ## Best Practices
 
 ### DO ✅
@@ -844,6 +998,26 @@ extra_hosts:
    ```go
    // No need to check if enabled
    GetMetricsPublisher().SendSLIMetric(...)
+   ```
+
+5. **Follow SQS Retry Strategy**
+   ```go
+   // ✅ Only delete on success or permanent client errors
+   if err != nil {
+       GetMetricsPublisher().SendSLIMetric(ResponseTypeFailure, ...)
+       // Do NOT delete - let SQS retry for transient failures
+       log.Warnf("Processing failed, message will retry via SQS")
+       return err
+   }
+   ```
+
+6. **Use Infrastructure Service Tags**
+   ```go
+   // For SQS polling/connection issues
+   map[string]string{
+       "service": "sqs_infrastructure",
+       "error":   "sqs_receive_failed",
+   }
    ```
 
 ### DON'T ❌
@@ -895,6 +1069,34 @@ extra_hosts:
    GetMetricsPublisher().SendSLIMetric(...)  // Single attempt
    ```
 
+5. **Don't Delete Messages on Transient Failures**
+   ```go
+   // ❌ Wrong
+   if err := fetchFromS3(); err != nil {
+       deleteMessage(sess, queueURL, messageHandle)  // Data loss!
+   }
+   
+   // ✅ Correct  
+   if err := fetchFromS3(); err != nil {
+       log.Warnf("S3 fetch failed, message will retry via SQS")
+       return err  // Let SQS handle retry
+   }
+   ```
+
+6. **Don't Mix Service Tags Inconsistently**
+   ```go
+   // ❌ Wrong
+   map[string]string{
+       "service": "sqs",           // Inconsistent naming
+       "service": "infrastructure", // Inconsistent naming
+   }
+   
+   // ✅ Correct
+   map[string]string{
+       "service": "sqs_infrastructure",  // Consistent naming
+   }
+   ```
+
 ---
 
 ## Metrics Dashboard Queries
@@ -922,10 +1124,27 @@ sum(increase(error-budget.counters.prod-sli-uuid{response_type="failure"}[1h]))
 ### Top Failure Reasons
 
 ```sql
--- Group by error type
+-- Group by error type (includes new SQS infrastructure errors)
 sum by (error) (
   increase(error-budget.counters.prod-sli-uuid{response_type="failure"}[1h])
 )
+
+-- Expected error types:
+-- s3_fetch_failed: S3 network/access issues
+-- parse_or_write_failed: ClickHouse/parsing issues  
+-- sqs_delete_failed: SQS cleanup failures
+-- sqs_queue_url_failed: SQS connection setup failures
+-- sqs_receive_failed: SQS polling failures
+```
+
+### SQS Infrastructure Health
+
+```sql
+-- SQS infrastructure error rate
+sum(rate(error-budget.counters.prod-sli-uuid{service="sqs_infrastructure",response_type="failure"}[5m]))
+
+-- Client errors (malformed messages) - don't count against SLO
+sum(rate(error-budget.counters.prod-sli-uuid{service="sqs_infrastructure",response_type="ignored_failure"}[5m]))
 ```
 
 ---
@@ -999,6 +1218,15 @@ func processEvent(event Event) error {
 ---
 
 ## Changelog
+
+### Version 1.1 (2025-11-05)
+- **Major Improvement**: Enhanced SQS message handling strategy
+- **Added**: SQS infrastructure monitoring (queue URL resolution, message polling)
+- **Added**: Proper retry logic - no message deletion on transient failures
+- **Added**: Malformed message handling with deletion for poison message protection
+- **Added**: Infrastructure service tagging (`sqs_infrastructure`)
+- **Improved**: Data durability through SQS visibility timeout retry mechanism
+- **Added**: Comprehensive error type tracking across the entire pipeline
 
 ### Version 1.0 (2025-10-30)
 - Initial implementation
