@@ -36,7 +36,7 @@ from cmp_version import VersionString
 from fastapi import APIRouter, Header, HTTPException, Request
 from gprofiler_dev import get_s3_profile_dal
 from gprofiler_dev.api_key import get_service_by_api_key
-from gprofiler_dev.client_handler import ClientHandler
+from gprofiler_dev.client_handler import ClientHandler 
 from gprofiler_dev.postgres.db_manager import DBManager
 from gprofiler_dev.postgres.schemas import AgentMetadata, GetServiceResponse
 from gprofiler_dev.profiles_utils import get_gprofiler_metadata_utils, get_gprofiler_utils
@@ -184,7 +184,17 @@ def new_profile_v2(
         profile_file_size = len(profile_data)
         compressed_profile = gzip.compress(profile_data)
         compressed_profile_file_size = len(compressed_profile)
-        client_handler.write_file(profile_file_path, compressed_profile)
+        
+        try:
+            client_handler.write_file(profile_file_path, compressed_profile)
+        except Exception as s3_error:
+            logger.error(f"Failed to write profile to S3: {s3_error}")
+            MetricsPublisher.get_instance().send_sli_metric(
+                response_type=RESPONSE_TYPE_FAILURE,
+                method_name='profile_upload',
+                extra_tags={'reason': 's3_upload_failed', 'service': service_name}
+            )
+            raise HTTPException(500, {"message": "Failed to store profile data"})
 
         service_sample_threshold = db_manager.get_service_sample_threshold_by_id(service_id)
         random_value = random.uniform(0.0, 1.0)
@@ -210,8 +220,14 @@ def new_profile_v2(
             try:
                 sqs.send_message(QueueUrl=config.SQS_INDEXER_QUEUE_URL, MessageBody=json.dumps(msg))
                 logger.info("send task to queue", extra=extra_info)
-            except sqs.exceptions.QueueDoesNotExist:
-                logger.error(f"Queue `{config.SQS_INDEXER_QUEUE_URL}` does not exist, failed to send message {msg}")
+            except Exception as sqs_error:
+                logger.error(f"Failed to send message to SQS: {sqs_error}")
+                MetricsPublisher.get_instance().send_sli_metric(
+                    response_type=RESPONSE_TYPE_FAILURE,
+                    method_name='profile_upload',
+                    extra_tags={'reason': 'sqs_send_failed', 'service': service_name}
+                )
+                raise HTTPException(500, {"message": "Failed to process profile upload"})
         else:
             logger.info("drop task due sampling", extra=extra_info)
 
