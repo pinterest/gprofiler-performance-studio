@@ -1060,8 +1060,18 @@ class DBManager(metaclass=Singleton):
             "duration": request_result["duration"],
             "frequency": request_result["frequency"],
             "profiling_mode": request_result["profiling_mode"],
-            "additional_args": request_result["additional_args"],  # This should now be clean
         }
+        
+        # Merge additional_args directly into new_config
+        if request_result["additional_args"]:
+            additional_args = request_result["additional_args"]
+            if isinstance(additional_args, str):
+                try:
+                    additional_args = json.loads(additional_args)
+                except json.JSONDecodeError:
+                    additional_args = {}
+            if isinstance(additional_args, dict):
+                new_config.update(additional_args)
 
         # Add stop_level if provided
         if stop_level:
@@ -1709,7 +1719,7 @@ class DBManager(metaclass=Singleton):
     def _get_profiling_request_details(self, request_id: str) -> Optional[Dict]:
         """Get details of a specific profiling request"""
         query = """
-        SELECT request_id, continuous, duration, frequency, profiling_mode, pids, target_hostnames
+        SELECT request_id, continuous, duration, frequency, profiling_mode, pids, target_hostnames, additional_args
         FROM ProfilingRequests
         WHERE request_id = %(request_id)s::uuid
         """
@@ -1753,5 +1763,22 @@ class DBManager(metaclass=Singleton):
 
         if all_pids:
             combined_config["pids"] = ",".join(map(str, sorted(all_pids)))
+
+        # Merge additional_args from all requests
+        merged_additional_args = {}
+        for req in request_details:
+            if req.get("additional_args"):
+                # Parse JSON string if needed
+                additional_args = req["additional_args"]
+                if isinstance(additional_args, str):
+                    try:
+                        additional_args = json.loads(additional_args)
+                    except json.JSONDecodeError:
+                        continue
+                if isinstance(additional_args, dict):
+                    merged_additional_args.update(additional_args)
+
+        if merged_additional_args:
+            combined_config.update(merged_additional_args)  # Merge directly into combined_config
 
         return combined_config
