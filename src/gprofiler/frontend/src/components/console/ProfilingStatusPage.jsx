@@ -101,6 +101,10 @@ const ProfilingStatusPage = () => {
         commandType: '',
         status: '',
     });
+    
+    // PerfSpect state
+    const [enablePerfSpect, setEnablePerfSpect] = useState(false);
+    
     const history = useHistory();
     const location = useLocation();
 
@@ -294,6 +298,9 @@ const ProfilingStatusPage = () => {
                 frequency: 11, // Default frequency, can't be adjusted yet
                 profiling_mode: 'cpu', // Default profiling mode, can't be adjusted yet
                 target_hosts: target_host,
+                additional_args: {
+                    enable_perfspect: enablePerfSpect, // Include PerfSpect setting
+                },
             };
 
             // append 'stop_level: host' when action is 'stop'
@@ -313,6 +320,7 @@ const ProfilingStatusPage = () => {
             // Maintain current filter state when refreshing
             fetchProfilingStatus(appliedFilters);
             setSelectionModel([]); // Clear all checkboxes after API requests complete
+            setEnablePerfSpect(false); // Reset PerfSpect checkbox after action completes
         });
     }
 
@@ -339,6 +347,8 @@ const ProfilingStatusPage = () => {
                     loading={loading}
                     rowsCount={rows.length}
                     clearAllFilters={clearAllFilters}
+                    enablePerfSpect={enablePerfSpect}
+                    onPerfSpectChange={setEnablePerfSpect}
                 />
 
                 {/* Data Table */}
