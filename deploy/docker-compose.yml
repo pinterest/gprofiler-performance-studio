@@ -85,6 +85,13 @@ services:
       - AWS_DEFAULT_REGION=$AWS_REGION
       - SLACK_BOT_TOKEN=$SLACK_BOT_TOKEN
       - SLACK_CHANNELS=$SLACK_CHANNELS
+      # Local Testing: S3 Endpoint for LocalStack
+      - S3_ENDPOINT_URL=$S3_ENDPOINT_URL
+      # Local Testing: Metrics Configuration
+      - METRICS_ENABLED=$METRICS_ENABLED
+      - METRICS_AGENT_URL=$METRICS_AGENT_URL
+      - METRICS_SERVICE_NAME=$METRICS_SERVICE_NAME
+      - METRICS_SLI_UUID=$METRICS_SLI_UUID
 # for debug
 #    ports:
 #      - "8888:80"
@@ -177,6 +184,13 @@ services:
       - AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
       - AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
       - AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN
+      # Local Testing: Metrics Configuration
+      - METRICS_ENABLED=$INDEXER_METRICS_ENABLED
+      - METRICS_AGENT_URL=$INDEXER_METRICS_AGENT_URL
+      - METRICS_SERVICE_NAME=$INDEXER_METRICS_SERVICE_NAME
+      - METRICS_SLI_UUID=$INDEXER_METRICS_SLI_UUID
+      # Local Testing: LocalStack Endpoint
+      - AWS_ENDPOINT_URL=$AWS_ENDPOINT_URL
   #---
   nginx-load-balancer:
     image: nginx:1.23.3
@@ -192,6 +206,31 @@ services:
     depends_on:
       - agents-logs-backend
       - webapp
+
+  # ---
+  # LocalStack for local S3/SQS simulation (Local Testing Only)
+  localstack:
+    image: localstack/localstack:3.0
+    container_name: gprofiler-ps-localstack
+    restart: always
+    ports:
+      - "4566:4566"  # LocalStack Gateway
+      - "4510-4559:4510-4559"  # External services port range
+    environment:
+      - SERVICES=s3,sqs
+      - DEBUG=1
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - AWS_DEFAULT_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    volumes:
+      - "./localstack_init:/etc/localstack/init/ready.d"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   db_clickhouse:
