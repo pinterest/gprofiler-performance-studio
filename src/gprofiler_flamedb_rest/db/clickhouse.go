@@ -1076,11 +1076,26 @@ func (c *ClickHouseClient) FetchSessionsCount(ctx context.Context, params common
 
 func (c *ClickHouseClient) FetchLastHTML(ctx context.Context, params common.MetricsLastHTMLParams,
 	filterQuery string) (string, error) {
+	// Debug: Log input parameters
+	log.Printf("FetchLastHTML DEBUG - ServiceId: %d", params.ServiceId)
+	log.Printf("FetchLastHTML DEBUG - StartTime: %s", common.FormatTime(params.StartDateTime))
+	log.Printf("FetchLastHTML DEBUG - EndTime: %s", common.FormatTime(params.EndDateTime))
+	log.Printf("FetchLastHTML DEBUG - HostName filter: %v", params.HostName)
+	log.Printf("FetchLastHTML DEBUG - FilterQuery: %s", filterQuery)
+	
 	_, conditions := BuildConditions(params.ContainerName, params.HostName, params.InstanceType, params.K8SObject, filterQuery)
+	
+	// Debug: Log generated conditions
+	log.Printf("FetchLastHTML DEBUG - Generated conditions: %s", conditions)
+	
 	query := fmt.Sprintf(`
 			SELECT argMax(HTMLPath,Timestamp) FROM flamedb.metrics WHERE ServiceId = %d AND
 			                                                                (Timestamp BETWEEN '%s' AND '%s') %s;
 		`, params.ServiceId, common.FormatTime(params.StartDateTime), common.FormatTime(params.EndDateTime), conditions)
+	
+	// Debug: Log final query
+	log.Printf("FetchLastHTML DEBUG - Final query: %s", query)
+	
 	rows, err := c.client.Query(query)
 	if err == nil {
 		defer rows.Close()
@@ -1088,13 +1103,17 @@ func (c *ClickHouseClient) FetchLastHTML(ctx context.Context, params common.Metr
 			var htmlPath string
 			err = rows.Scan(&htmlPath)
 			if err != nil {
-				log.Printf("error scan result: %v", err)
+				log.Printf("FetchLastHTML ERROR - scan result: %v", err)
+			} else {
+				log.Printf("FetchLastHTML DEBUG - Found HTMLPath: %s", htmlPath)
 			}
 			return htmlPath, nil
 		}
 		err = rows.Err()
 	} else {
-		log.Println(err)
+		log.Printf("FetchLastHTML ERROR - query execution: %v", err)
 	}
+	
+	log.Printf("FetchLastHTML DEBUG - No results found, returning empty string")
 	return "", nil
 }
