@@ -4,22 +4,24 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useHistory, useLocation } from 'react-router-dom';
 
 import { DATA_URLS } from '../../api/urls';
+import { PAGES } from '../../utils/consts';
 import MuiTable from '../common/dataDisplay/table/MuiTable';
 import PageHeader from '../common/layout/PageHeader';
 import ProfilingHeader from './header/ProfilingHeader';
 import ProfilingTopPanel from './header/ProfilingTopPanel';
 
 const columns = [
-    { field: 'service', headerName: 'service name', flex: 1 },
-    { field: 'host', headerName: 'host name', flex: 1 },
-    { field: 'pids', headerName: 'pids (if profiled)', flex: 1 },
-    { field: 'ip', headerName: 'IP', flex: 1 },
-    { field: 'commandType', headerName: 'command type', flex: 1 },
-    { field: 'status', headerName: 'profiling status', flex: 1 },
+    { field: 'service', headerName: 'service name', flex: 1, sortable: true },
+    { field: 'host', headerName: 'host name', flex: 1, sortable: true },
+    { field: 'pids', headerName: 'pids (if profiled)', flex: 1, sortable: true },
+    { field: 'ip', headerName: 'IP', flex: 1, sortable: true },
+    { field: 'commandType', headerName: 'command type', flex: 1, sortable: true },
+    { field: 'status', headerName: 'profiling status', flex: 1, sortable: true },
     {
         field: 'heartbeat_timestamp',
         headerName: 'last heartbeat',
         flex: 1,
+        sortable: true,
         renderCell: (params) => {
             if (!params.value) return 'N/A';
             try {
@@ -46,6 +48,37 @@ const columns = [
             }
         },
     },
+    {
+        field: 'profile',
+        headerName: 'profile',
+        flex: 1,
+        renderCell: (params) => {
+            const { host, service, commandType, status } = params.row;
+            
+            // Only show profile link for rows with commandType="start" and status="completed"
+            if (commandType !== 'start' || status !== 'completed') {
+                return '';
+            }
+            
+            if (!host || !service) return '';
+            
+            const baseUrl = `${window.location.protocol}//${window.location.host}`;
+            const profileUrl = `${baseUrl}${PAGES.profiles.to}?filter=hn,is,${encodeURIComponent(host)}&gtab=1&pm=1&rtms=1&service=${encodeURIComponent(service)}&time=1h&view=flamegraph&wp=100`;
+            
+            return (
+                <a
+                    href={profileUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: '#1976d2', textDecoration: 'none' }}
+                    onMouseOver={(e) => e.target.style.textDecoration = 'underline'}
+                    onMouseOut={(e) => e.target.style.textDecoration = 'none'}
+                >
+                    View Profile
+                </a>
+            );
+        },
+    },
 ];
 
 const ProfilingStatusPage = () => {
@@ -68,6 +101,10 @@ const ProfilingStatusPage = () => {
         commandType: '',
         status: '',
     });
+    
+    // PerfSpect state
+    const [enablePerfSpect, setEnablePerfSpect] = useState(false);
+    
     const history = useHistory();
     const location = useLocation();
 
@@ -168,6 +205,17 @@ const ProfilingStatusPage = () => {
         }
     }, [fetchProfilingStatus, history, location.search]); // Add dependencies
 
+    // Auto-refresh every 30 seconds for dynamic profiling
+    useEffect(() => {
+        const refreshInterval = setInterval(() => {
+            // Refresh with current applied filters
+            fetchProfilingStatus(appliedFilters);
+        }, 30000); // 30 seconds
+
+        // Cleanup interval on component unmount
+        return () => clearInterval(refreshInterval);
+    }, [appliedFilters, fetchProfilingStatus]); // Re-create interval when filters change
+
     // Update URL when filters change (with focus preservation)
     const updateURL = useCallback(
         (newFilters) => {
@@ -250,6 +298,9 @@ const ProfilingStatusPage = () => {
                 frequency: 11, // Default frequency, can't be adjusted yet
                 profiling_mode: 'cpu', // Default profiling mode, can't be adjusted yet
                 target_hosts: target_host,
+                additional_args: {
+                    enable_perfspect: enablePerfSpect, // Include PerfSpect setting
+                },
             };
 
             // append 'stop_level: host' when action is 'stop'
@@ -269,6 +320,7 @@ const ProfilingStatusPage = () => {
             // Maintain current filter state when refreshing
             fetchProfilingStatus(appliedFilters);
             setSelectionModel([]); // Clear all checkboxes after API requests complete
+            setEnablePerfSpect(false); // Reset PerfSpect checkbox after action completes
         });
     }
 
@@ -295,6 +347,8 @@ const ProfilingStatusPage = () => {
                     loading={loading}
                     rowsCount={rows.length}
                     clearAllFilters={clearAllFilters}
+                    enablePerfSpect={enablePerfSpect}
+                    onPerfSpectChange={setEnablePerfSpect}
                 />
 
                 {/* Data Table */}
@@ -309,6 +363,11 @@ const ProfilingStatusPage = () => {
                         checkboxSelection
                         onSelectionModelChange={setSelectionModel}
                         selectionModel={selectionModel}
+                        initialState={{
+                            sorting: {
+                                sortModel: [{ field: 'host', sort: 'asc' }],
+                            },
+                        }}
                     />
                 </Box>
             </Box>

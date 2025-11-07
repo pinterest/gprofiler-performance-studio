@@ -1,4 +1,4 @@
-import { Box, Button, Divider, Typography } from '@mui/material';
+import { Box, Button, Divider, Typography, FormControlLabel, Checkbox, Tooltip } from '@mui/material';
 import React from 'react';
 
 import { COLORS } from '../../../theme/colors';
@@ -14,6 +14,8 @@ const ProfilingTopPanel = ({
     loading,
     rowsCount,
     clearAllFilters,
+    enablePerfSpect,
+    onPerfSpectChange,
 }) => {
     const hasActiveFilters = Object.values(filters).some((value) => value);
 
@@ -63,6 +65,26 @@ const ProfilingTopPanel = ({
                             disabled={loading}>
                             Refresh
                         </Button>
+                        
+                        {/* PerfSpect Hardware Metrics Checkbox */}
+                        <Tooltip title="Enable Intel PerfSpect hardware metrics collection (auto-installs on agents)">
+                            <FormControlLabel
+                                control={
+                                    <Checkbox
+                                        checked={enablePerfSpect}
+                                        onChange={(e) => onPerfSpectChange(e.target.checked)}
+                                        size="small"
+                                        color="primary"
+                                    />
+                                }
+                                label={
+                                    <Typography variant="body2" sx={{ fontSize: '0.875rem' }}>
+                                        PerfSpect HW Metrics
+                                    </Typography>
+                                }
+                                sx={{ ml: 1 }}
+                            />
+                        </Tooltip>
                     </Flexbox>
 
                     {/* Right side - Info and Clear Filters */}
