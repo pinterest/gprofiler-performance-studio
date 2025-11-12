@@ -251,17 +251,33 @@ def calculate_trend_in_cpu(
 def get_html_metadata(
     fg_params: FGParamsBaseModel = Depends(flamegraph_base_request_params),
 ):
+    logger.info(f"get_html_metadata DEBUG - fg_params: {fg_params}")
+    logger.info(f"get_html_metadata DEBUG - filter: {fg_params.filter}")
+    
     host_name_value = get_rql_first_eq_key(fg_params.filter, FilterTypes.HOSTNAME_KEY)
+    logger.info(f"get_html_metadata DEBUG - extracted host_name_value: {host_name_value}")
+    
     if not host_name_value:
+        logger.error("get_html_metadata ERROR - No hostname filter provided")
         raise HTTPException(400, detail="Must filter by hostname to get the html metadata")
+    
+    logger.info(f"get_html_metadata DEBUG - Calling get_metrics_response with lookup_for='lasthtml'")
     s3_path = get_metrics_response(fg_params, lookup_for="lasthtml")
+    logger.info(f"get_html_metadata DEBUG - Received s3_path: {s3_path}")
+    
     if not s3_path:
+        logger.error("get_html_metadata ERROR - No s3_path returned from get_metrics_response")
         raise HTTPException(404, detail="The html metadata path not found in CH")
+    
     s3_dal = S3ProfileDal(logger)
     try:
+        logger.info(f"get_html_metadata DEBUG - Fetching S3 object: {s3_path}")
         html_content = s3_dal.get_object(s3_path, is_gzip=True)
-    except ClientError:
+        logger.info(f"get_html_metadata DEBUG - Successfully fetched HTML content, length: {len(html_content)}")
+    except ClientError as e:
+        logger.error(f"get_html_metadata ERROR - S3 ClientError: {e}")
         raise HTTPException(status_code=404, detail="The html metadata file not found in S3")
+    
     return HTMLMetadata(content=html_content)
 
 
