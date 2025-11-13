@@ -51,9 +51,6 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 	for task := range tasks {
 		useSQS := task.Service != ""
 		serviceName := task.Service
-		if serviceName == "" {
-			serviceName = "local-file"
-		}
 		
 		log.Debugf("got new file %s from service %s (ID: %d)", task.Filename, serviceName, task.ServiceId)
 		
@@ -74,10 +71,25 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 						"filename": task.Filename,
 					},
 				)
-				
-				// Do NOT delete message - let SQS retry for transient S3 failures
-				// Message will retry automatically via SQS visibility timeout
-				log.Warnf("S3 fetch failed for %s, message will retry via SQS", task.Filename)
+
+				// Delete message from SQS after unsuccessful S3 fetch
+				errDelete := deleteMessage(sess, task.QueueURL, task.MessageHandle)
+				if errDelete != nil {
+					log.Errorf("Unable to delete message from %s, err %v", task.QueueURL, errDelete)
+					
+					// SLI Metric: SQS delete failure (server error - counts against SLO)
+					// The event was processed but we couldn't clean up
+					// SendSLIMetric handles nil/enabled checks internally
+					GetMetricsPublisher().SendSLIMetric(
+						ResponseTypeFailure,
+						"event_processing",
+						map[string]string{
+							"service":  serviceName,
+							"error":    "sqs_delete_failed",
+							"filename": task.Filename,
+						},
+					)
+				}
 				continue
 			}
 			temp = strings.Split(task.Filename, "_")[0]
@@ -114,12 +126,25 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 						"filename": task.Filename,
 					},
 				)
-			}
-			
-			// Do NOT delete message - let SQS retry for transient ClickHouse/parsing failures
-			// Message will retry automatically via SQS visibility timeout  
-			if useSQS {
-				log.Warnf("Parse/write failed for %s, message will retry via SQS", task.Filename)
+
+				// Delete message from SQS after unsuccessful parse/write into column DB
+				errDelete := deleteMessage(sess, task.QueueURL, task.MessageHandle)
+				if errDelete != nil {
+					log.Errorf("Unable to delete message from %s, err %v", task.QueueURL, errDelete)
+					
+					// SLI Metric: SQS delete failure (server error - counts against SLO)
+					// The event was processed but we couldn't clean up
+					// SendSLIMetric handles nil/enabled checks internally
+					GetMetricsPublisher().SendSLIMetric(
+						ResponseTypeFailure,
+						"event_processing",
+						map[string]string{
+							"service":  serviceName,
+							"error":    "sqs_delete_failed",
+							"filename": task.Filename,
+						},
+					)
+				}
 			}
 			continue
 		}
