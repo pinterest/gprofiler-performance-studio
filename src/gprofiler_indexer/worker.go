@@ -29,6 +29,27 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// deleteMessageWithMetrics handles SQS message deletion and SLI metric tracking for failures
+func deleteMessageWithMetrics(sess *session.Session, task SQSMessage) {
+	errDelete := deleteMessage(sess, task.QueueURL, task.MessageHandle)
+	if errDelete != nil {
+		log.Errorf("Unable to delete message from %s, err %v", task.QueueURL, errDelete)
+
+		// SLI Metric: SQS delete failure (server error - counts against SLO)
+		// The event was processed but we couldn't clean up
+		// SendSLIMetric handles nil/enabled checks internally
+		GetMetricsPublisher().SendSLIMetric(
+			ResponseTypeFailure,
+			"event_processing",
+			map[string]string{
+				"service":  task.Service,
+				"error":    "sqs_delete_failed",
+				"filename": task.Filename,
+			},
+		)
+	}
+}
+
 func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesWriter, wg *sync.WaitGroup) {
 	var buf []byte
 	var err error
@@ -51,15 +72,13 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 	for task := range tasks {
 		useSQS := task.Service != ""
 		serviceName := task.Service
-		
 		log.Debugf("got new file %s from service %s (ID: %d)", task.Filename, serviceName, task.ServiceId)
-		
+
 		if useSQS {
 			fullPath := fmt.Sprintf("products/%s/stacks/%s", task.Service, task.Filename)
 			buf, err = GetFileFromS3(sess, args.S3Bucket, fullPath)
 			if err != nil {
 				log.Errorf("Error while fetching file from S3: %v", err)
-				
 				// SLI Metric: S3 fetch failure (server error - counts against SLO)
 				// Only tracks SQS events; SendSLIMetric handles nil/enabled checks internally
 				GetMetricsPublisher().SendSLIMetric(
@@ -73,23 +92,7 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 				)
 
 				// Delete message from SQS after unsuccessful S3 fetch
-				errDelete := deleteMessage(sess, task.QueueURL, task.MessageHandle)
-				if errDelete != nil {
-					log.Errorf("Unable to delete message from %s, err %v", task.QueueURL, errDelete)
-					
-					// SLI Metric: SQS delete failure (server error - counts against SLO)
-					// The event was processed but we couldn't clean up
-					// SendSLIMetric handles nil/enabled checks internally
-					GetMetricsPublisher().SendSLIMetric(
-						ResponseTypeFailure,
-						"event_processing",
-						map[string]string{
-							"service":  serviceName,
-							"error":    "sqs_delete_failed",
-							"filename": task.Filename,
-						},
-					)
-				}
+				deleteMessageWithMetrics(sess, task)
 				continue
 			}
 			temp = strings.Split(task.Filename, "_")[0]
@@ -100,7 +103,7 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 				temp = strings.Join(tokens[:3], ":")
 			}
 		}
-		
+
 		layout := ISODateTimeFormat
 		timestamp, tsErr := time.Parse(layout, temp)
 		log.Debugf("parsed timestamp is: %v", timestamp)
@@ -108,12 +111,12 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 			log.Debugf("Unable to fetch timestamp from filename %s, fallback to the current time", temp)
 			timestamp = time.Now().UTC()
 		}
-		
+
 		// Parse stack frame file and write to ClickHouse
 		err := pw.ParseStackFrameFile(sess, task, args.S3Bucket, timestamp, buf)
 		if err != nil {
 			log.Errorf("Error while parsing stack frame file: %v", err)
-			
+
 			// SLI Metric: Parse event failure or write profile to column DB failure (server error - counts against SLO)
 			// Only tracks SQS events; SendSLIMetric handles nil/enabled checks internally
 			if useSQS {
@@ -128,48 +131,15 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 				)
 
 				// Delete message from SQS after unsuccessful parse/write into column DB
-				errDelete := deleteMessage(sess, task.QueueURL, task.MessageHandle)
-				if errDelete != nil {
-					log.Errorf("Unable to delete message from %s, err %v", task.QueueURL, errDelete)
-					
-					// SLI Metric: SQS delete failure (server error - counts against SLO)
-					// The event was processed but we couldn't clean up
-					// SendSLIMetric handles nil/enabled checks internally
-					GetMetricsPublisher().SendSLIMetric(
-						ResponseTypeFailure,
-						"event_processing",
-						map[string]string{
-							"service":  serviceName,
-							"error":    "sqs_delete_failed",
-							"filename": task.Filename,
-						},
-					)
-				}
+				deleteMessageWithMetrics(sess, task)
 			}
 			continue
 		}
 
 		// Delete message from SQS after successful processing
 		if useSQS {
-			errDelete := deleteMessage(sess, task.QueueURL, task.MessageHandle)
-			if errDelete != nil {
-				log.Errorf("Unable to delete message from %s, err %v", task.QueueURL, errDelete)
-				
-				// SLI Metric: SQS delete failure (server error - counts against SLO)
-				// The event was processed but we couldn't clean up
-				// SendSLIMetric handles nil/enabled checks internally
-				GetMetricsPublisher().SendSLIMetric(
-					ResponseTypeFailure,
-					"event_processing",
-					map[string]string{
-						"service":  serviceName,
-						"error":    "sqs_delete_failed",
-						"filename": task.Filename,
-					},
-				)
-				continue
-			}
-			
+			deleteMessageWithMetrics(sess, task)
+
 			// SLI Metric: Success! Event processed completely
 			// SendSLIMetric handles nil/enabled checks internally
 			GetMetricsPublisher().SendSLIMetric(
