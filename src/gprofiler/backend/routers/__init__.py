@@ -16,6 +16,7 @@
 
 from backend.routers import (
     api_key_routes,
+    dynamicprofiling,
     filters_routes,
     flamegraph_routes,
     healthcheck_routes,
@@ -33,6 +34,10 @@ router.include_router(healthcheck_routes.router, prefix="/v1/health_check", tags
 router.include_router(healthcheck_routes.router, prefix="/v2/health_check", tags=["agent"])
 router.include_router(flamegraph_routes.router, prefix="/flamegraph", tags=["flamegraph"])
 router.include_router(metrics_routes.router, prefix="/metrics", tags=["metrics"])
+# Dynamic Profiling - New endpoint (preferred)
+router.include_router(dynamicprofiling.router, prefix="/dynamicprofiling", tags=["dynamicprofiling"])
+# Dynamic Profiling - Backward compatibility (legacy agents using /metrics prefix)
+router.include_router(dynamicprofiling.router, prefix="/metrics", tags=["dynamicprofiling-legacy"])
 router.include_router(installations_routes.router, prefix="/installations", tags=["app"])
 router.include_router(api_key_routes.router, prefix="/api_key", tags=["auth"])
 router.include_router(profiles_routes.router, prefix="/v2/profiles", tags=["agent"])
