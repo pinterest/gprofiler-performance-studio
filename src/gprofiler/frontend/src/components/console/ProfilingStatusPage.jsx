@@ -1,4 +1,14 @@
-import { Box, Typography } from '@mui/material';
+import { 
+    Box, 
+    Typography, 
+    Dialog, 
+    DialogTitle, 
+    DialogContent, 
+    DialogActions, 
+    Button, 
+    Divider, 
+    Chip 
+} from '@mui/material';
 import queryString from 'query-string';
 import React, { useCallback, useEffect, useState } from 'react';
 import { useHistory, useLocation } from 'react-router-dom';
@@ -121,6 +131,14 @@ const ProfilingStatusPage = () => {
         phpspy: 'enabled', // 'enabled', 'disabled'
         dotnet_trace: 'enabled', // 'enabled', 'disabled'
         nodejs_perf: 'enabled', // 'enabled', 'disabled'
+    });
+
+    // Confirmation dialog state
+    const [confirmationDialog, setConfirmationDialog] = useState({
+        open: false,
+        action: null,
+        selectedRows: [],
+        serviceGroups: {},
     });
     
     const history = useHistory();
@@ -301,6 +319,19 @@ const ProfilingStatusPage = () => {
             return groups;
         }, {});
 
+        // Show confirmation dialog
+        setConfirmationDialog({
+            open: true,
+            action,
+            selectedRows,
+            serviceGroups,
+        });
+    }
+
+    // Execute the actual profiling action after confirmation
+    function executeProfilingAction() {
+        const { action, serviceGroups } = confirmationDialog;
+
         // Create one request per service with all hosts for that service
         const requests = Object.entries(serviceGroups).map(([serviceName, hosts]) => {
             const target_host = hosts.reduce((hostObj, host) => {
@@ -335,7 +366,8 @@ const ProfilingStatusPage = () => {
             });
         });
 
-        // Wait for all requests to finish before refreshing
+        // Close dialog and wait for all requests to finish before refreshing
+        setConfirmationDialog({ open: false, action: null, selectedRows: [], serviceGroups: {} });
         Promise.all(requests).then(() => {
             // Maintain current filter state when refreshing
             fetchProfilingStatus(appliedFilters);
@@ -343,6 +375,11 @@ const ProfilingStatusPage = () => {
             setEnablePerfSpect(false); // Reset PerfSpect checkbox after action completes
             // Note: Keep profiling frequency as is - user may want to reuse the same frequency
         });
+    }
+
+    // Close confirmation dialog without action
+    function handleDialogClose() {
+        setConfirmationDialog({ open: false, action: null, selectedRows: [], serviceGroups: {} });
     }
 
     return (
@@ -398,6 +435,106 @@ const ProfilingStatusPage = () => {
                     />
                 </Box>
             </Box>
+
+            {/* Confirmation Dialog */}
+            <Dialog
+                open={confirmationDialog.open}
+                onClose={handleDialogClose}
+                maxWidth="md"
+                fullWidth
+            >
+                <DialogTitle>
+                    <Typography variant="h6" component="div">
+                        Confirm {confirmationDialog.action === 'start' ? 'Start' : 'Stop'} Profiling
+                    </Typography>
+                </DialogTitle>
+                <DialogContent>
+                    <Typography variant="body1" sx={{ mb: 2 }}>
+                        Are you sure you want to <strong>{confirmationDialog.action}</strong> profiling for the following hosts?
+                    </Typography>
+                    
+                    {/* Selected Hosts Summary */}
+                    <Box sx={{ mb: 3 }}>
+                        <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+                            Selected Hosts ({confirmationDialog.selectedRows.length}):
+                        </Typography>
+                        {Object.entries(confirmationDialog.serviceGroups).map(([serviceName, hosts]) => (
+                            <Box key={serviceName} sx={{ mb: 1 }}>
+                                <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                                    {serviceName}:
+                                </Typography>
+                                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
+                                    {hosts.map((host) => (
+                                        <Chip
+                                            key={host}
+                                            label={host}
+                                            size="small"
+                                            variant="outlined"
+                                        />
+                                    ))}
+                                </Box>
+                            </Box>
+                        ))}
+                    </Box>
+
+                    {/* Configuration Summary (only for start action) */}
+                    {confirmationDialog.action === 'start' && (
+                        <>
+                            <Divider sx={{ my: 2 }} />
+                            <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600 }}>
+                                Profiling Configuration:
+                            </Typography>
+                            
+                            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2 }}>
+                                {/* Basic Settings */}
+                                <Box>
+                                    <Typography variant="body2" sx={{ fontWeight: 500, mb: 1 }}>
+                                        Basic Settings:
+                                    </Typography>
+                                    <Typography variant="body2">• Frequency: {profilingFrequency} Hz</Typography>
+                                    <Typography variant="body2">• Max Processes: {maxProcesses}</Typography>
+                                    <Typography variant="body2">• PerfSpect HW Metrics: {enablePerfSpect ? 'Enabled' : 'Disabled'}</Typography>
+                                    <Typography variant="body2">• Duration: 60 seconds</Typography>
+                                    <Typography variant="body2">• Mode: CPU profiling</Typography>
+                                </Box>
+
+                                {/* Profiler Settings */}
+                                <Box>
+                                    <Typography variant="body2" sx={{ fontWeight: 500, mb: 1 }}>
+                                        Profiler Settings:
+                                    </Typography>
+                                    <Typography variant="body2">• Perf (C/C++/Go): {
+                                        profilerConfigs.perf === 'enabled_restricted' ? 'Enabled (Restricted)' :
+                                        profilerConfigs.perf === 'enabled_aggressive' ? 'Enabled (Aggressive)' : 'Disabled'
+                                    }</Typography>
+                                    <Typography variant="body2">• Java Async Profiler: {profilerConfigs.async_profiler === 'enabled' ? 'Enabled' : 'Disabled'}</Typography>
+                                    <Typography variant="body2">• Pyperf (Python): {profilerConfigs.pyperf === 'enabled' ? 'Enabled' : 'Disabled'}</Typography>
+                                    <Typography variant="body2">• Pyspy (Python): {
+                                        profilerConfigs.pyspy === 'enabled_fallback' ? 'Enabled (Fallback)' :
+                                        profilerConfigs.pyspy === 'enabled' ? 'Enabled' : 'Disabled'
+                                    }</Typography>
+                                    <Typography variant="body2">• Rbspy (Ruby): {profilerConfigs.rbspy === 'enabled' ? 'Enabled' : 'Disabled'}</Typography>
+                                    <Typography variant="body2">• PHPspy (PHP): {profilerConfigs.phpspy === 'enabled' ? 'Enabled' : 'Disabled'}</Typography>
+                                    <Typography variant="body2">• .NET Trace: {profilerConfigs.dotnet_trace === 'enabled' ? 'Enabled' : 'Disabled'}</Typography>
+                                    <Typography variant="body2">• NodeJS Perf: {profilerConfigs.nodejs_perf === 'enabled' ? 'Enabled' : 'Disabled'}</Typography>
+                                </Box>
+                            </Box>
+                        </>
+                    )}
+                </DialogContent>
+                <DialogActions>
+                    <Button onClick={handleDialogClose} color="primary">
+                        Cancel
+                    </Button>
+                    <Button 
+                        onClick={executeProfilingAction} 
+                        color={confirmationDialog.action === 'start' ? 'success' : 'error'}
+                        variant="contained"
+                    >
+                        {confirmationDialog.action === 'start' ? 'Start Profiling' : 'Stop Profiling'}
+                    </Button>
+                </DialogActions>
+            </Dialog>
         </Box>
     );
 };
