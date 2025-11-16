@@ -108,6 +108,9 @@ const ProfilingStatusPage = () => {
     // Profiling frequency state
     const [profilingFrequency, setProfilingFrequency] = useState(11);
     
+    // Max processes state
+    const [maxProcesses, setMaxProcesses] = useState(10);
+    
     // Profiler configurations state
     const [profilerConfigs, setProfilerConfigs] = useState({
         perf: 'enabled_restricted', // 'enabled_restricted', 'enabled_aggressive', 'disabled'
@@ -316,6 +319,7 @@ const ProfilingStatusPage = () => {
                 additional_args: {
                     enable_perfspect: enablePerfSpect, // Include PerfSpect setting
                     profiler_configs: profilerConfigs, // Include all profiler configurations
+                    max_processes: maxProcesses, // Include max processes setting
                 },
             };
 
@@ -368,6 +372,8 @@ const ProfilingStatusPage = () => {
                     onPerfSpectChange={setEnablePerfSpect}
                     profilingFrequency={profilingFrequency}
                     onProfilingFrequencyChange={setProfilingFrequency}
+                    maxProcesses={maxProcesses}
+                    onMaxProcessesChange={setMaxProcesses}
                     profilerConfigs={profilerConfigs}
                     onProfilerConfigsChange={setProfilerConfigs}
                 />

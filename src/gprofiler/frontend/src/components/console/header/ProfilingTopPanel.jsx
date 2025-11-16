@@ -18,6 +18,8 @@ const ProfilingTopPanel = ({
     onPerfSpectChange,
     profilingFrequency,
     onProfilingFrequencyChange,
+    maxProcesses,
+    onMaxProcessesChange,
     profilerConfigs,
     onProfilerConfigsChange,
 }) => {
@@ -178,7 +180,7 @@ const ProfilingTopPanel = ({
                         
                         {/* Profiling Frequency Field */}
                         <Tooltip title="Number of samples per second for profiling duration (Hz)">
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, pl: 4 }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, pl: 5 }}>
                                 <Typography variant="body2" sx={{ fontSize: '0.875rem', whiteSpace: 'nowrap' }}>
                                     Profiling Frequency:
                                 </Typography>
@@ -207,6 +209,41 @@ const ProfilingTopPanel = ({
                                 />
                                 <Typography variant="body2" sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
                                     Hz
+                                </Typography>
+                            </Box>
+                        </Tooltip>
+                        
+                        {/* Max Processes Field */}
+                        <Tooltip title="Maximum number of processes to profile per runtime profiler (all profilers except perf and ebpf)">
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, pl: 5 }}>
+                                <Typography variant="body2" sx={{ fontSize: '0.875rem', whiteSpace: 'nowrap' }}>
+                                    Max Processes:
+                                </Typography>
+                                <TextField
+                                    value={maxProcesses}
+                                    onChange={(e) => {
+                                        const value = parseInt(e.target.value, 10);
+                                        if (!isNaN(value) && value >= 0 && value <= 1000) {
+                                            onMaxProcessesChange(value);
+                                        }
+                                    }}
+                                    type="number"
+                                    size="small"
+                                    inputProps={{
+                                        min: 0,
+                                        max: 1000,
+                                        style: { textAlign: 'center' }
+                                    }}
+                                    sx={{
+                                        width: '70px',
+                                        '& .MuiOutlinedInput-root': {
+                                            height: '32px',
+                                            fontSize: '0.875rem'
+                                        }
+                                    }}
+                                />
+                                <Typography variant="body2" sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
+                                    procs
                                 </Typography>
                             </Box>
                         </Tooltip>
