@@ -108,6 +108,18 @@ const ProfilingStatusPage = () => {
     // Profiling frequency state
     const [profilingFrequency, setProfilingFrequency] = useState(11);
     
+    // Profiler configurations state
+    const [profilerConfigs, setProfilerConfigs] = useState({
+        perf: 'enabled_restricted', // 'enabled_restricted', 'enabled_aggressive', 'disabled'
+        async_profiler: 'enabled', // 'enabled', 'disabled'
+        pyperf: 'enabled', // 'enabled', 'disabled'
+        pyspy: 'enabled_fallback', // 'enabled_fallback', 'enabled', 'disabled'
+        rbspy: 'enabled', // 'enabled', 'disabled'
+        phpspy: 'enabled', // 'enabled', 'disabled'
+        dotnet_trace: 'enabled', // 'enabled', 'disabled'
+        nodejs_perf: 'enabled', // 'enabled', 'disabled'
+    });
+    
     const history = useHistory();
     const location = useLocation();
 
@@ -303,6 +315,7 @@ const ProfilingStatusPage = () => {
                 target_hosts: target_host,
                 additional_args: {
                     enable_perfspect: enablePerfSpect, // Include PerfSpect setting
+                    profiler_configs: profilerConfigs, // Include all profiler configurations
                 },
             };
 
@@ -355,6 +368,8 @@ const ProfilingStatusPage = () => {
                     onPerfSpectChange={setEnablePerfSpect}
                     profilingFrequency={profilingFrequency}
                     onProfilingFrequencyChange={setProfilingFrequency}
+                    profilerConfigs={profilerConfigs}
+                    onProfilerConfigsChange={setProfilerConfigs}
                 />
 
                 {/* Data Table */}

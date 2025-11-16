@@ -1,4 +1,4 @@
-import { Box, Button, Divider, Typography, FormControlLabel, Checkbox, Tooltip, TextField } from '@mui/material';
+import { Box, Button, Divider, Typography, FormControlLabel, Checkbox, Tooltip, TextField, Radio, RadioGroup, Accordion, AccordionSummary, AccordionDetails } from '@mui/material';
 import React from 'react';
 
 import { COLORS } from '../../../theme/colors';
@@ -18,8 +18,96 @@ const ProfilingTopPanel = ({
     onPerfSpectChange,
     profilingFrequency,
     onProfilingFrequencyChange,
+    profilerConfigs,
+    onProfilerConfigsChange,
 }) => {
     const hasActiveFilters = Object.values(filters).some((value) => value);
+
+    // Helper function to handle profiler config changes
+    const handleProfilerConfigChange = (profilerKey, value) => {
+        onProfilerConfigsChange(prev => ({
+            ...prev,
+            [profilerKey]: value
+        }));
+    };
+
+    // Profiler configuration definitions
+    const profilerDefinitions = [
+        {
+            key: 'perf',
+            name: 'Perf Profiler',
+            description: 'C, C++, Go, Kernel',
+            options: [
+                { value: 'enabled_restricted', label: 'Enabled Restricted', tooltip: 'Profiles only top N containers/process', default: true },
+                { value: 'enabled_aggressive', label: 'Enabled Aggressive', tooltip: 'Profiles all processes' },
+                { value: 'disabled', label: 'Disabled' }
+            ]
+        },
+        {
+            key: 'async_profiler',
+            name: 'Async Profiler',
+            description: 'Java',
+            options: [
+                { value: 'enabled', label: 'Enabled', default: true },
+                { value: 'disabled', label: 'Disabled' }
+            ]
+        },
+        {
+            key: 'pyperf',
+            name: 'Pyperf',
+            description: "Python's highly optimized eBPF. Exception - arm64 hosts",
+            options: [
+                { value: 'enabled', label: 'Enabled', default: true },
+                { value: 'disabled', label: 'Disabled' }
+            ]
+        },
+        {
+            key: 'pyspy',
+            name: 'Pyspy',
+            description: 'Python',
+            options: [
+                { value: 'enabled_fallback', label: 'Enabled as Fallback for Pyperf', default: true },
+                { value: 'enabled', label: 'Enabled' },
+                { value: 'disabled', label: 'Disabled' }
+            ]
+        },
+        {
+            key: 'rbspy',
+            name: 'Rbspy',
+            description: 'Ruby',
+            options: [
+                { value: 'enabled', label: 'Enabled', default: true },
+                { value: 'disabled', label: 'Disabled' }
+            ]
+        },
+        {
+            key: 'phpspy',
+            name: 'PHPspy',
+            description: 'PHP',
+            options: [
+                { value: 'enabled', label: 'Enabled', default: true },
+                { value: 'disabled', label: 'Disabled' }
+            ]
+        },
+        {
+            key: 'dotnet_trace',
+            name: '.NET Trace',
+            description: '.NET',
+            options: [
+                { value: 'enabled', label: 'Enabled', default: true },
+                { value: 'disabled', label: 'Disabled' }
+            ]
+        },
+        {
+            key: 'nodejs_perf',
+            name: 'Perf',
+            description: 'NodeJS',
+            options: [
+                { value: 'enabled', label: 'Enabled', default: true },
+                { value: 'disabled', label: 'Disabled' }
+            ]
+        }
+    ];
 
     return (
         <Flexbox column spacing={2}>
@@ -137,10 +225,67 @@ const ProfilingTopPanel = ({
                     </Flexbox>
                 </Flexbox>
             </Box>
-            {/* Additional panel space - matching ProfilesPage structure */}
-            <Flexbox sx={{ px: 5, width: '100%' }} spacing={3}>
-                {/* This area can be used for additional controls in the future */}
-            </Flexbox>
+            {/* Profiler Configuration Section */}
+            <Box sx={{ px: 5, width: '100%' }}>
+                <Accordion sx={{ boxShadow: 'none', border: '1px solid #e0e0e0' }}>
+                    <AccordionSummary
+                        expandIcon={<Typography sx={{ fontSize: '1.2rem' }}>▼</Typography>}
+                        sx={{ 
+                            backgroundColor: '#f5f5f5',
+                            '& .MuiAccordionSummary-content': {
+                                alignItems: 'center'
+                            }
+                        }}
+                    >
+                        <Typography variant="body2" sx={{ fontSize: '0.875rem', fontWeight: 500 }}>
+                            Click for Advanced Profiler Configuration
+                        </Typography>
+                    </AccordionSummary>
+                    <AccordionDetails sx={{ p: 3 }}>
+                        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 3 }}>
+                            {profilerDefinitions.map((profiler) => (
+                                <Box key={profiler.key} sx={{ 
+                                    border: '1px solid #e0e0e0', 
+                                    borderRadius: 2, 
+                                    p: 2,
+                                    backgroundColor: '#fafafa'
+                                }}>
+                                    <Typography variant="body2" sx={{ fontSize: '0.875rem', fontWeight: 600, mb: 0.5 }}>
+                                        {profiler.name}
+                                    </Typography>
+                                    <Typography variant="body2" sx={{ fontSize: '0.75rem', color: 'text.secondary', mb: 2 }}>
+                                        {profiler.description}
+                                    </Typography>
+                                    <RadioGroup
+                                        value={profilerConfigs[profiler.key]}
+                                        onChange={(e) => handleProfilerConfigChange(profiler.key, e.target.value)}
+                                    >
+                                        {profiler.options.map((option) => (
+                                            <Tooltip 
+                                                key={option.value} 
+                                                title={option.tooltip || ''} 
+                                                placement="right"
+                                                arrow
+                                            >
+                                                <FormControlLabel
+                                                    value={option.value}
+                                                    control={<Radio size="small" />}
+                                                    label={
+                                                        <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
+                                                            {option.label}
+                                                        </Typography>
+                                                    }
+                                                    sx={{ mb: 0.5 }}
+                                                />
+                                            </Tooltip>
+                                        ))}
+                                    </RadioGroup>
+                                </Box>
+                            ))}
+                        </Box>
+                    </AccordionDetails>
+                </Accordion>
+            </Box>
         </Flexbox>
     );
 };
