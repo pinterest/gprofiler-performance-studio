@@ -105,6 +105,9 @@ const ProfilingStatusPage = () => {
     // PerfSpect state
     const [enablePerfSpect, setEnablePerfSpect] = useState(false);
     
+    // Profiling frequency state
+    const [profilingFrequency, setProfilingFrequency] = useState(11);
+    
     const history = useHistory();
     const location = useLocation();
 
@@ -295,7 +298,7 @@ const ProfilingStatusPage = () => {
                 request_type: action,
                 continuous: true,
                 duration: 60, // Default duration, can't be adjusted yet
-                frequency: 11, // Default frequency, can't be adjusted yet
+                frequency: profilingFrequency, // Use frequency from UI
                 profiling_mode: 'cpu', // Default profiling mode, can't be adjusted yet
                 target_hosts: target_host,
                 additional_args: {
@@ -321,6 +324,7 @@ const ProfilingStatusPage = () => {
             fetchProfilingStatus(appliedFilters);
             setSelectionModel([]); // Clear all checkboxes after API requests complete
             setEnablePerfSpect(false); // Reset PerfSpect checkbox after action completes
+            // Note: Keep profiling frequency as is - user may want to reuse the same frequency
         });
     }
 
@@ -349,6 +353,8 @@ const ProfilingStatusPage = () => {
                     clearAllFilters={clearAllFilters}
                     enablePerfSpect={enablePerfSpect}
                     onPerfSpectChange={setEnablePerfSpect}
+                    profilingFrequency={profilingFrequency}
+                    onProfilingFrequencyChange={setProfilingFrequency}
                 />
 
                 {/* Data Table */}

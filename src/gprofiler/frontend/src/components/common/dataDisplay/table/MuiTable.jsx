@@ -92,7 +92,6 @@ const MuiTable = ({
                 disableColumnFilter
                 disableColumnMenu
                 disableColumnSelector
-                disableSelectionOnClick
                 initialState={initialState}
                 disableVirtualization={multipleLinesCells}
                 getRowId={getRowId}

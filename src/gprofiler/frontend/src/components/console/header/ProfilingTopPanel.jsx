@@ -1,4 +1,4 @@
-import { Box, Button, Divider, Typography, FormControlLabel, Checkbox, Tooltip } from '@mui/material';
+import { Box, Button, Divider, Typography, FormControlLabel, Checkbox, Tooltip, TextField } from '@mui/material';
 import React from 'react';
 
 import { COLORS } from '../../../theme/colors';
@@ -16,6 +16,8 @@ const ProfilingTopPanel = ({
     clearAllFilters,
     enablePerfSpect,
     onPerfSpectChange,
+    profilingFrequency,
+    onProfilingFrequencyChange,
 }) => {
     const hasActiveFilters = Object.values(filters).some((value) => value);
 
@@ -84,6 +86,41 @@ const ProfilingTopPanel = ({
                                 }
                                 sx={{ ml: 1 }}
                             />
+                        </Tooltip>
+                        
+                        {/* Profiling Frequency Field */}
+                        <Tooltip title="Number of samples per second for profiling duration (Hz)">
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, pl: 4 }}>
+                                <Typography variant="body2" sx={{ fontSize: '0.875rem', whiteSpace: 'nowrap' }}>
+                                    Profiling Frequency:
+                                </Typography>
+                                <TextField
+                                    value={profilingFrequency}
+                                    onChange={(e) => {
+                                        const value = parseInt(e.target.value, 10);
+                                        if (!isNaN(value) && value > 0 && value <= 1000) {
+                                            onProfilingFrequencyChange(value);
+                                        }
+                                    }}
+                                    type="number"
+                                    size="small"
+                                    inputProps={{
+                                        min: 1,
+                                        max: 1000,
+                                        style: { textAlign: 'center' }
+                                    }}
+                                    sx={{
+                                        width: '70px',
+                                        '& .MuiOutlinedInput-root': {
+                                            height: '32px',
+                                            fontSize: '0.875rem'
+                                        }
+                                    }}
+                                />
+                                <Typography variant="body2" sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
+                                    Hz
+                                </Typography>
+                            </Box>
                         </Tooltip>
                     </Flexbox>
 
