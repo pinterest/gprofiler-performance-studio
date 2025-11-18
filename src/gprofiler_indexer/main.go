@@ -46,6 +46,9 @@ func main() {
 	args.ParseArgs()
 
 	logger.Infof("Starting %s", AppName)
+	
+	// Initialize metrics publisher
+	
 	tasks := make(chan SQSMessage, args.Concurrency)
 	channels := RecordChannels{
 		StacksRecords:  make(chan StackRecord, args.ClickHouseStacksBatchSize),
@@ -107,5 +110,11 @@ func main() {
 	}()
 
 	buffWriterWaitGroup.Wait()
+	
+	// Cleanup metrics publisher
+	if metricsPublisher != nil {
+		metricsPublisher.FlushAndClose()
+	}
+	
 	logger.Info("Graceful shutdown")
 }

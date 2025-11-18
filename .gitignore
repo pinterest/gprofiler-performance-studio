@@ -10,7 +10,7 @@ venv*
 *.egg-info/
 
 .idea/
-
+.vscode/
 
 # File-based project format
 *.iws
@@ -70,3 +70,7 @@ src/gprofiler/frontend/.vscode/settings.json
 
 # package build
 /src/gprofiler-dev/build
+
+# Testing and temporary files
+ROUTE_CHANGE/
+TEMP_FILES/
