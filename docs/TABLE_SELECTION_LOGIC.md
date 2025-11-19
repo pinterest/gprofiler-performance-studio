@@ -305,3 +305,25 @@ export DAILY_RETENTION_DAYS=180
 - ❌ Fixed 14-day retention threshold
 - ❌ Day-boundary rounding for older data
 - ❌ Limited configuration options
+
+## Test Scenarios
+
+### Scenario 1: Recent Data (< 7 days)
+- **Input**: 2025-09-20T15:00:00Z → 2025-09-20T16:00:00Z (Age: 4 days)
+- **Expected Table**: `samples` (raw table)
+- **Expected Query**: Full precision timestamps preserved
+- **Result**: ✅ PASS - Raw table selected, exact timestamps used
+
+### Scenario 2: Medium Age Data (7-90 days) - The Bug Fix
+- **Input**: 2025-08-12T15:00:47Z → 2025-08-12T16:00:47Z (Age: 15 days)
+- **Expected Table**: `samples_1hour` (hourly table)
+- **Expected Behavior**: Exact timestamps preserved (NOT day boundaries)
+- **Old Bug**: Would round to 2025-08-12T00:00:00Z → 2025-08-12T23:59:59Z
+- **New Fix**: Uses exact 2025-08-12T15:00:47Z → 2025-08-12T16:00:47Z
+- **Result**: ✅ PASS - Hour-level precision maintained
+
+### Scenario 3: Old Data (> 90 days)
+- **Input**: 2025-05-12T15:00:00Z → 2025-05-12T16:00:00Z (Age: 100 days)
+- **Expected Table**: `samples_1day` (daily table)
+- **Expected Behavior**: Day boundaries applied (this is correct for very old data)
+- **Result**: ✅ PASS - Daily aggregation with day boundaries

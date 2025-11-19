@@ -124,7 +124,7 @@ CREATE TABLE IF NOT EXISTS flamedb.samples_1hour_local_store ON CLUSTER '{cluste
     ErrNumSamples      UInt32
     ) ENGINE = ReplicatedSummingMergeTree('/clickhouse/{installation}/{cluster}/tables/{shard}/{database}/{table}', '{replica}', (NumSamples))
     PARTITION BY toYYYYMMDD(Timestamp)
-    ORDER BY (ServiceId, ContainerEnvName, InstanceType, Timestamp, CallStackHash, CallStackParent);
+    ORDER BY (ServiceId, ContainerEnvName, InstanceType, HostNameHash, ContainerNameHash, Timestamp, CallStackHash, CallStackParent);
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS flamedb.samples_1hour_local ON CLUSTER '{cluster}' TO
     flamedb.samples_1hour_local_store AS
@@ -171,7 +171,7 @@ CREATE TABLE IF NOT EXISTS flamedb.samples_1day_local_store ON CLUSTER '{cluster
     ErrNumSamples      UInt32
     ) ENGINE = ReplicatedSummingMergeTree('/clickhouse/{installation}/{cluster}/tables/{shard}/{database}/{table}', '{replica}', (NumSamples))
     PARTITION BY toYYYYMMDD(Timestamp)
-    ORDER BY (ServiceId, ContainerEnvName, InstanceType, Timestamp, CallStackHash, CallStackParent);
+    ORDER BY (ServiceId, ContainerEnvName, InstanceType, HostNameHash, ContainerNameHash, Timestamp, CallStackHash, CallStackParent);
 
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS flamedb.samples_1day_local ON CLUSTER '{cluster}' TO
