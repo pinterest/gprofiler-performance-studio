@@ -47,14 +47,6 @@ func main() {
 
 	logger.Infof("Starting %s", AppName)
 	
-	// Initialize metrics publisher
-	metricsPublisher := NewMetricsPublisher(
-		args.MetricsAgentURL,
-		args.MetricsServiceName,
-		args.MetricsSLIUUID,
-		args.MetricsEnabled,
-	)
-	
 	tasks := make(chan SQSMessage, args.Concurrency)
 	channels := RecordChannels{
 		StacksRecords:  make(chan StackRecord, args.ClickHouseStacksBatchSize),

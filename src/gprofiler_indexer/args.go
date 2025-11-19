@@ -36,11 +36,6 @@ type CLIArgs struct {
 	FrameReplaceFileName       string
 	AWSEndpoint                string
 	AWSRegion                  string
-	// Metrics Publisher Configuration
-	MetricsEnabled     bool
-	MetricsAgentURL    string
-	MetricsServiceName string
-	MetricsSLIUUID     string
 }
 
 func NewCliArgs() *CLIArgs {
@@ -55,11 +50,6 @@ func NewCliArgs() *CLIArgs {
 		ClickHouseStacksBatchSize:  10000,
 		ClickHouseMetricsBatchSize: 100,
 		FrameReplaceFileName:       ConfPrefix + "replace.yaml",
-		// Metrics defaults
-		MetricsEnabled:     false,
-		MetricsAgentURL:    "tcp://localhost:18126",
-		MetricsServiceName: "gprofiler-indexer",
-		MetricsSLIUUID:     "",
 	}
 }
 
@@ -93,15 +83,6 @@ func (ca *CLIArgs) ParseArgs() {
 	flag.StringVar(&ca.FrameReplaceFileName, "replace-file", LookupEnvOrString("REPLACE_FILE",
 		ca.FrameReplaceFileName),
 		"replace.yaml")
-	// Metrics Publisher Configuration
-	flag.BoolVar(&ca.MetricsEnabled, "metrics-enabled", LookupEnvOrBool("METRICS_ENABLED", ca.MetricsEnabled),
-		"Enable metrics publishing (default false)")
-	flag.StringVar(&ca.MetricsAgentURL, "metrics-agent-url", LookupEnvOrString("METRICS_AGENT_URL", ca.MetricsAgentURL),
-		"Metrics agent URL (default tcp://localhost:18126)")
-	flag.StringVar(&ca.MetricsServiceName, "metrics-service-name", LookupEnvOrString("METRICS_SERVICE_NAME", ca.MetricsServiceName),
-		"Service name for metrics (default gprofiler-indexer)")
-	flag.StringVar(&ca.MetricsSLIUUID, "metrics-sli-uuid", LookupEnvOrString("METRICS_SLI_UUID", ca.MetricsSLIUUID),
-		"SLI metric UUID")
 	flag.Parse()
 
 	if ca.SQSQueue == "" && ca.InputFolder == "" {

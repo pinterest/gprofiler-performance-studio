@@ -67,15 +67,6 @@ func ListenSqs(ctx context.Context, args *CLIArgs, ch chan<- SQSMessage, wg *syn
 		logger.Errorf("Got an error getting the queue URL: %v", err)
 		
 		// SLI Metric: SQS queue URL resolution failure (infrastructure error - counts against SLO)
-		// This tracks connectivity and configuration issues with SQS
-		GetMetricsPublisher().SendSLIMetric(
-			ResponseTypeFailure,
-			"event_processing",
-			map[string]string{
-				"service": "N/A",
-				"error":   "sqs_queue_url_failed",
-			},
-		)
 		return
 	}
 
@@ -94,15 +85,6 @@ func ListenSqs(ctx context.Context, args *CLIArgs, ch chan<- SQSMessage, wg *syn
 				logger.Error(recvErr)
 				
 				// SLI Metric: SQS message receive failure (infrastructure error - counts against SLO)
-				// This tracks SQS polling failures and network issues
-				GetMetricsPublisher().SendSLIMetric(
-					ResponseTypeFailure,
-					"event_processing",
-					map[string]string{
-						"service": "N/A",
-						"error":   "sqs_receive_failed",
-					},
-				)
 				continue
 			}
 
@@ -113,15 +95,6 @@ func ListenSqs(ctx context.Context, args *CLIArgs, ch chan<- SQSMessage, wg *syn
 					logger.Errorf("Error while parsing SQS message body: %v", parseErr)
 					
 					// SLI Metric: SQS message parse failure (client error - malformed JSON)
-					// This tracks malformed JSON messages in the SQS queue
-					GetMetricsPublisher().SendSLIMetric(
-						ResponseTypeIgnoredFailure, // Client error - doesn't count against SLO
-						"event_processing",
-						map[string]string{
-							"service": "N/A",
-							"error":   "sqs_message_parse_failed",
-						},
-					)
 					
 					// Delete malformed messages to prevent infinite retry loop
 					// This is a permanent client error that won't be fixed by retrying
@@ -134,15 +107,6 @@ func ListenSqs(ctx context.Context, args *CLIArgs, ch chan<- SQSMessage, wg *syn
 						logger.Errorf("Failed to delete malformed message: %v", deleteErr)
 
 						// SLI Metric: SQS message deletion failure (infrastructure error - counts against SLO)
-						// This tracks failures to delete malformed messages from the queue
-						GetMetricsPublisher().SendSLIMetric(
-							ResponseTypeFailure,
-							"event_processing",
-							map[string]string{
-								"service": "N/A",
-								"error":   "sqs_delete_malformed_message_failed",
-							},
-						)
 					} else {
 						logger.Warnf("Deleted malformed SQS message to prevent reprocessing")
 					}

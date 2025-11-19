@@ -37,16 +37,6 @@ func deleteMessageWithMetrics(sess *session.Session, task SQSMessage) {
 
 		// SLI Metric: SQS delete failure (server error - counts against SLO)
 		// The event was processed but we couldn't clean up
-		// SendSLIMetric handles nil/enabled checks internally
-		GetMetricsPublisher().SendSLIMetric(
-			ResponseTypeFailure,
-			"event_processing",
-			map[string]string{
-				"service":  task.Service,
-				"error":    "sqs_delete_failed",
-				"filename": task.Filename,
-			},
-		)
 	}
 }
 
@@ -80,16 +70,6 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 			if err != nil {
 				log.Errorf("Error while fetching file from S3: %v", err)
 				// SLI Metric: S3 fetch failure (server error - counts against SLO)
-				// Only tracks SQS events; SendSLIMetric handles nil/enabled checks internally
-				GetMetricsPublisher().SendSLIMetric(
-					ResponseTypeFailure,
-					"event_processing",
-					map[string]string{
-						"service":  serviceName,
-						"error":    "s3_fetch_failed",
-						"filename": task.Filename,
-					},
-				)
 
 				// Delete message from SQS after unsuccessful S3 fetch
 				deleteMessageWithMetrics(sess, task)
@@ -118,17 +98,7 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 			log.Errorf("Error while parsing stack frame file: %v", err)
 
 			// SLI Metric: Parse event failure or write profile to column DB failure (server error - counts against SLO)
-			// Only tracks SQS events; SendSLIMetric handles nil/enabled checks internally
 			if useSQS {
-				GetMetricsPublisher().SendSLIMetric(
-					ResponseTypeFailure,
-					"event_processing",
-					map[string]string{
-						"service":  serviceName,
-						"error":    "parse_or_write_failed",
-						"filename": task.Filename,
-					},
-				)
 
 				// Delete message from SQS after unsuccessful parse/write into column DB
 				deleteMessageWithMetrics(sess, task)
@@ -141,15 +111,6 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 			deleteMessageWithMetrics(sess, task)
 
 			// SLI Metric: Success! Event processed completely
-			// SendSLIMetric handles nil/enabled checks internally
-			GetMetricsPublisher().SendSLIMetric(
-				ResponseTypeSuccess,
-				"event_processing",
-				map[string]string{
-					"service":  serviceName,
-					"filename": task.Filename,
-				},
-			)
 		}
 	}
 	log.Debugf("Worker %d finished", workerIdx)
