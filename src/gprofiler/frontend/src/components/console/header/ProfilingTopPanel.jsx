@@ -78,8 +78,8 @@ const ProfilingTopPanel = ({
             name: 'Rbspy',
             description: 'Ruby',
             options: [
-                { value: 'enabled', label: 'Enabled', default: true },
-                { value: 'disabled', label: 'Disabled' }
+                { value: 'enabled', label: 'Enabled' },
+                { value: 'disabled', label: 'Disabled', default: true }
             ]
         },
         {
@@ -87,8 +87,8 @@ const ProfilingTopPanel = ({
             name: 'PHPspy',
             description: 'PHP',
             options: [
-                { value: 'enabled', label: 'Enabled', default: true },
-                { value: 'disabled', label: 'Disabled' }
+                { value: 'enabled', label: 'Enabled' },
+                { value: 'disabled', label: 'Disabled', default: true }
             ]
         },
         {
@@ -96,8 +96,8 @@ const ProfilingTopPanel = ({
             name: '.NET Trace',
             description: '.NET',
             options: [
-                { value: 'enabled', label: 'Enabled', default: true },
-                { value: 'disabled', label: 'Disabled' }
+                { value: 'enabled', label: 'Enabled' },
+                { value: 'disabled', label: 'Disabled', default: true }
             ]
         },
         {
