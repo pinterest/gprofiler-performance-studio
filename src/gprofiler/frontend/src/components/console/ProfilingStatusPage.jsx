@@ -127,9 +127,9 @@ const ProfilingStatusPage = () => {
         async_profiler: 'enabled', // 'enabled', 'disabled'
         pyperf: 'enabled', // 'enabled', 'disabled'
         pyspy: 'enabled_fallback', // 'enabled_fallback', 'enabled', 'disabled'
-        rbspy: 'enabled', // 'enabled', 'disabled'
-        phpspy: 'enabled', // 'enabled', 'disabled'
-        dotnet_trace: 'enabled', // 'enabled', 'disabled'
+        rbspy: 'disabled', // 'enabled', 'disabled'
+        phpspy: 'disabled', // 'enabled', 'disabled'
+        dotnet_trace: 'disabled', // 'enabled', 'disabled'
         nodejs_perf: 'enabled', // 'enabled', 'disabled'
     });
 
