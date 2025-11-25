@@ -100,9 +100,10 @@ class ProfilingRequest(BaseModel):
     duration: Optional[int] = 60
     frequency: Optional[int] = 11
     profiling_mode: Optional[str] = "cpu"  # "cpu", "allocation", "none"
-    target_hosts: Optional[Dict[str, Optional[List[int]]]] = None
+    target_hosts: Dict[str, Optional[List[int]]]
     stop_level: Optional[str] = "process"  # "process" or "host"
     additional_args: Optional[Dict[str, Any]] = None
+    total_request_size: int
     dry_run: Optional[bool] = False
 
     @validator("request_type")
@@ -115,6 +116,13 @@ class ProfilingRequest(BaseModel):
     def validate_profiling_mode(cls, v):
         if v not in ["cpu", "allocation", "none"]:
             raise ValueError('profiling_mode must be "cpu", "allocation", or "none"')
+        return v
+
+    @validator("target_hosts")
+    def validate_target_hosts(cls, v):
+        """Validate that target_hosts is not empty."""
+        if len(v) == 0:
+            raise ValueError("target_hosts cannot be empty")
         return v
 
     @validator("stop_level")
@@ -135,11 +143,12 @@ class ProfilingRequest(BaseModel):
             raise ValueError("Frequency must be a positive integer (Hz)")
         return v
 
-    @validator("target_hosts")
-    def validate_target_hosts(cls, v):
-        if v is not None:
-            if len(v) > MAX_PROFILING_REQUEST_HOSTS:
-                raise ValueError(f"Number of target hosts ({len(v)}) exceeds maximum allowed ({MAX_PROFILING_REQUEST_HOSTS})")
+    @validator("total_request_size")
+    def validate_total_request_size(cls, v):
+        if v <= 0:
+            raise ValueError("total_request_size must be a positive integer")
+        if v > MAX_PROFILING_REQUEST_HOSTS:
+            raise ValueError(f"Number of target hosts ({v}) exceeds maximum allowed ({MAX_PROFILING_REQUEST_HOSTS})")
         return v
 
     @root_validator
@@ -162,6 +171,12 @@ class ProfilingRequest(BaseModel):
             has_pids = target_hosts and any(pids for pids in target_hosts.values() if pids is not None)
             if has_pids:
                 raise ValueError('No PIDs should be provided when request_type is "stop" and stop_level is "host"')
+            
+        # Validate that total_request_size is consistent with target_hosts length
+        total_request_size = values.get("total_request_size")
+        if total_request_size is not None and target_hosts is not None:
+            if total_request_size < len(target_hosts):
+                raise ValueError(f"total_request_size ({total_request_size}) must be greater than or equal to the number of target hosts ({len(target_hosts)})")
 
         return values
 

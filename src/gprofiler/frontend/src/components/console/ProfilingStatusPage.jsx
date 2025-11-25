@@ -347,6 +347,9 @@ const ProfilingStatusPage = () => {
             errors: [],
         });
 
+        // Calculate total number of hosts across all services
+        const totalHostsCount = Object.values(serviceGroups).reduce((sum, hosts) => sum + hosts.length, 0);
+
         // Create one request per service with all hosts for that service
         const requests = Object.entries(serviceGroups).map(([serviceName, hosts]) => {
             const target_host = hosts.reduce((hostObj, host) => {
@@ -362,6 +365,7 @@ const ProfilingStatusPage = () => {
                 frequency: profilingFrequency,
                 profiling_mode: 'cpu',
                 target_hosts: target_host,
+                total_request_size: totalHostsCount, // Total hosts across all services
                 additional_args: {
                     enable_perfspect: enablePerfSpect,
                     profiler_configs: profilerConfigs,
@@ -426,6 +430,9 @@ const ProfilingStatusPage = () => {
     function executeProfilingAction() {
         const { action, serviceGroups } = confirmationDialog;
 
+        // Calculate total number of hosts across all services
+        const totalHostsCount = Object.values(serviceGroups).reduce((sum, hosts) => sum + hosts.length, 0);
+
         // Create one request per service with all hosts for that service
         const requests = Object.entries(serviceGroups).map(([serviceName, hosts]) => {
             const target_host = hosts.reduce((hostObj, host) => {
@@ -441,6 +448,7 @@ const ProfilingStatusPage = () => {
                 frequency: profilingFrequency, // Use frequency from UI
                 profiling_mode: 'cpu', // Default profiling mode, can't be adjusted yet
                 target_hosts: target_host,
+                total_request_size: totalHostsCount, // Total hosts across all services
                 additional_args: {
                     enable_perfspect: enablePerfSpect, // Include PerfSpect setting
                     profiler_configs: profilerConfigs, // Include all profiler configurations

@@ -41,12 +41,13 @@ from backend.models.metrics_models import (
     ProfilingResponse,
     SampleCount,
 )
+from backend.utils.dynamic_profiling_utils import validate_profiling_capacity
 from backend.utils.filters_utils import get_rql_first_eq_key, get_rql_only_for_one_key
 from backend.utils.notifications import SlackNotifier
 from backend.utils.request_utils import flamegraph_base_request_params, get_metrics_response, get_query_response
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from gprofiler_dev import S3ProfileDal
 from gprofiler_dev.postgres.db_manager import DBManager
 
@@ -301,6 +302,33 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
                 "dry_run": profiling_request.dry_run,
             },
         )
+        db_manager = DBManager()
+
+        # Validate profiling capacity before processing (only for start requests)
+        if profiling_request.request_type == "start":
+            is_valid, error_message = validate_profiling_capacity(
+                profiling_request=profiling_request,
+                db_manager=db_manager,
+            )
+            
+            if not is_valid:
+                logger.warning(
+                    f"Profiling capacity validation failed: {error_message}"
+                )
+                # Return structured error response matching FastAPI validation format
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "detail": [
+                            {
+                                "loc": ["body", "total_request_size"],
+                                "msg": error_message,
+                                "type": "value_error"
+                            }
+                        ]
+                    }
+                )
+
         # Handle dry run requests.
         # No DB changes, just validate and return success.
         if profiling_request.dry_run:
@@ -312,7 +340,6 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
                 estimated_completion_time=None,
             )
 
-        db_manager = DBManager()
         request_id = str(uuid.uuid4())
         command_ids = []  # Track all command IDs created
 
