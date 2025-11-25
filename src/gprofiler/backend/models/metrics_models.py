@@ -20,6 +20,8 @@ from typing import Any, Dict, List, Optional
 from backend.models import CamelModel
 from pydantic import BaseModel, root_validator, validator
 
+from backend.config import MAX_PROFILING_REQUEST_HOSTS
+
 
 class SampleCount(BaseModel):
     samples: int
@@ -101,6 +103,7 @@ class ProfilingRequest(BaseModel):
     target_hosts: Optional[Dict[str, Optional[List[int]]]] = None
     stop_level: Optional[str] = "process"  # "process" or "host"
     additional_args: Optional[Dict[str, Any]] = None
+    dry_run: Optional[bool] = False
 
     @validator("request_type")
     def validate_request_type(cls, v):
@@ -130,6 +133,13 @@ class ProfilingRequest(BaseModel):
     def validate_frequency(cls, v):
         if v is not None and v <= 0:
             raise ValueError("Frequency must be a positive integer (Hz)")
+        return v
+
+    @validator("target_hosts")
+    def validate_target_hosts(cls, v):
+        if v is not None:
+            if len(v) > MAX_PROFILING_REQUEST_HOSTS:
+                raise ValueError(f"Number of target hosts ({len(v)}) exceeds maximum allowed ({MAX_PROFILING_REQUEST_HOSTS})")
         return v
 
     @root_validator

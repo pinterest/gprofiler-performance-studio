@@ -56,3 +56,5 @@ METRICS_SERVICE_NAME = os.getenv("METRICS_SERVICE_NAME", "gprofiler-webapp")
 METRICS_SLI_UUID = os.getenv("METRICS_SLI_UUID", None)
 
 BACKEND_ROOT = os.path.dirname(os.path.realpath(__file__))
+
+MAX_PROFILING_REQUEST_HOSTS = int(os.getenv("MAX_PROFILING_REQUEST_HOSTS", 20))

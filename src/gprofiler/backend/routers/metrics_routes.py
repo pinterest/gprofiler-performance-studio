@@ -298,8 +298,19 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
                 "mode": profiling_request.profiling_mode,
                 "target_hosts": profiling_request.target_hosts,
                 "stop_level": profiling_request.stop_level,
+                "dry_run": profiling_request.dry_run,
             },
         )
+        # Handle dry run requests.
+        # No DB changes, just validate and return success.
+        if profiling_request.dry_run:
+            return ProfilingResponse(
+                success=True,
+                message="Dry run: Profiling request validated successfully.",
+                request_id=None,
+                command_ids=[],
+                estimated_completion_time=None,
+            )
 
         db_manager = DBManager()
         request_id = str(uuid.uuid4())
