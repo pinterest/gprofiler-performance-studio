@@ -20,8 +20,6 @@ from typing import Any, Dict, List, Optional
 from backend.models import CamelModel
 from pydantic import BaseModel, root_validator, validator
 
-from backend.config import MAX_PROFILING_REQUEST_HOSTS
-
 
 class SampleCount(BaseModel):
     samples: int
@@ -103,7 +101,6 @@ class ProfilingRequest(BaseModel):
     target_hosts: Dict[str, Optional[List[int]]]
     stop_level: Optional[str] = "process"  # "process" or "host"
     additional_args: Optional[Dict[str, Any]] = None
-    total_request_size: int
     dry_run: Optional[bool] = False
 
     @validator("request_type")
@@ -143,14 +140,6 @@ class ProfilingRequest(BaseModel):
             raise ValueError("Frequency must be a positive integer (Hz)")
         return v
 
-    @validator("total_request_size")
-    def validate_total_request_size(cls, v):
-        if v <= 0:
-            raise ValueError("total_request_size must be a positive integer")
-        if v > MAX_PROFILING_REQUEST_HOSTS:
-            raise ValueError(f"Number of target hosts ({v}) exceeds maximum allowed ({MAX_PROFILING_REQUEST_HOSTS})")
-        return v
-
     @root_validator
     def validate_profile_request(cls, values):
         """Validate that PIDs are provided when request_type is stop and stop_level is process"""
@@ -171,12 +160,6 @@ class ProfilingRequest(BaseModel):
             has_pids = target_hosts and any(pids for pids in target_hosts.values() if pids is not None)
             if has_pids:
                 raise ValueError('No PIDs should be provided when request_type is "stop" and stop_level is "host"')
-            
-        # Validate that total_request_size is consistent with target_hosts length
-        total_request_size = values.get("total_request_size")
-        if total_request_size is not None and target_hosts is not None:
-            if total_request_size < len(target_hosts):
-                raise ValueError(f"total_request_size ({total_request_size}) must be greater than or equal to the number of target hosts ({len(target_hosts)})")
 
         return values
 
@@ -189,6 +172,50 @@ class ProfilingResponse(BaseModel):
     request_id: Optional[str] = None
     command_ids: Optional[List[str]] = None
     estimated_completion_time: Optional[datetime] = None
+
+
+class BulkProfilingRequest(BaseModel):
+    """Model for bulk profiling request parameters"""
+    
+    requests: List[ProfilingRequest]
+    dry_run: Optional[bool] = False
+    
+    @validator("requests")
+    def validate_requests_not_empty(cls, v):
+        if len(v) == 0:
+            raise ValueError("requests list cannot be empty")
+        return v
+    
+    @root_validator
+    def apply_bulk_dry_run(cls, values):
+        """Apply bulk-level dry_run to all individual requests, overwriting their dry_run values"""
+        bulk_dry_run = values.get("dry_run", False)
+        requests = values.get("requests", [])
+        
+        # Overwrite dry_run for each individual request with the bulk-level dry_run
+        for request in requests:
+            request.dry_run = bulk_dry_run
+        
+        return values
+
+
+class BulkProfilingRequestResult(BaseModel):
+    """Individual result for a bulk profiling request item"""
+    
+    index: int
+    service_name: str
+    success: bool
+    response: Optional[ProfilingResponse] = None
+    error: Optional[str] = None
+
+
+class BulkProfilingResponse(BaseModel):
+    """Response model for bulk profiling requests"""
+    
+    total_submitted: int
+    successful_count: int
+    failed_count: int
+    results: List[BulkProfilingRequestResult]
 
 
 class HeartbeatRequest(BaseModel):

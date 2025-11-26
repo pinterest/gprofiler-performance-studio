@@ -24,6 +24,9 @@ from typing import List, Optional
 from backend.models.filters_models import FilterTypes
 from backend.models.flamegraph_models import FGParamsBaseModel
 from backend.models.metrics_models import (
+    BulkProfilingRequest,
+    BulkProfilingRequestResult,
+    BulkProfilingResponse,
     CommandCompletionRequest,
     CpuMetric,
     CpuTrend,
@@ -304,31 +307,6 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
         )
         db_manager = DBManager()
 
-        # Validate profiling capacity before processing (only for start requests)
-        if profiling_request.request_type == "start":
-            is_valid, error_message = validate_profiling_capacity(
-                profiling_request=profiling_request,
-                db_manager=db_manager,
-            )
-            
-            if not is_valid:
-                logger.warning(
-                    f"Profiling capacity validation failed: {error_message}"
-                )
-                # Return structured error response matching FastAPI validation format
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "detail": [
-                            {
-                                "loc": ["body", "total_request_size"],
-                                "msg": error_message,
-                                "type": "value_error"
-                            }
-                        ]
-                    }
-                )
-
         # Handle dry run requests.
         # No DB changes, just validate and return success.
         if profiling_request.dry_run:
@@ -487,6 +465,133 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
     except Exception as e:
         logger.error(f"Failed to create profiling request: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error while processing profiling request")
+
+
+@router.post("/profile_request/bulk", response_model=BulkProfilingResponse)
+def create_bulk_profiling_requests(bulk_request: BulkProfilingRequest) -> BulkProfilingResponse:
+    """
+    Create multiple profiling requests in a single API call.
+
+    This endpoint accepts a list of profiling requests and processes them in bulk.
+    It provides better efficiency for operations that need to start/stop profiling
+    across multiple services simultaneously.
+
+    Benefits over multiple single requests:
+    - Single API call reduces network overhead
+    - Atomic capacity validation across all requests
+    - Better rate limiting control
+    - Partial success/failure reporting per request
+
+    Each request in the bulk operation is validated independently, and the response
+    includes detailed results for each request, including successes and failures.
+
+    Returns:
+        BulkProfilingResponse with individual results for each request
+    """
+    try:
+        logger.info(
+            f"Received bulk profiling request with {len(bulk_request.requests)} requests",
+            extra={"total_requests": len(bulk_request.requests)},
+        )
+
+        # Initialize database manager
+        db_manager = DBManager()
+
+        # Validate profiling capacity across all requests in the bulk operation
+        is_valid, error_message, target_hostnames = validate_profiling_capacity(
+            bulk_profiling_request=bulk_request,
+            db_manager=db_manager,
+            service_name=None  # Validate globally across all services
+        )
+        
+        if not is_valid:
+            logger.warning(
+                f"Bulk profiling capacity validation failed: {error_message}"
+            )
+            # Return structured error response
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "detail": [
+                        {
+                            "loc": ["body", "requests"],
+                            "msg": error_message,
+                            "type": "value_error"
+                        }
+                    ]
+                }
+            )
+
+        logger.info(
+            f"Bulk profiling capacity validated successfully. Total target hosts: {len(target_hostnames)}"
+        )
+
+        results: List[BulkProfilingRequestResult] = []
+        successful_count = 0
+        failed_count = 0
+
+        # Process each request individually by calling create_profiling_request
+        for index, profiling_request in enumerate(bulk_request.requests):
+            try:
+                # Call the existing single request endpoint logic
+                response = create_profiling_request(profiling_request)
+                
+                # Record successful result
+                result = BulkProfilingRequestResult(
+                    index=index,
+                    service_name=profiling_request.service_name,
+                    success=True,
+                    response=response,
+                    error=None
+                )
+                results.append(result)
+                successful_count += 1
+
+            except HTTPException as http_exc:
+                # Handle HTTP exceptions from create_profiling_request
+                logger.warning(
+                    f"Failed to process bulk request at index {index} for service {profiling_request.service_name}: {http_exc.detail}"
+                )
+                result = BulkProfilingRequestResult(
+                    index=index,
+                    service_name=profiling_request.service_name,
+                    success=False,
+                    response=None,
+                    error=str(http_exc.detail)
+                )
+                results.append(result)
+                failed_count += 1
+
+            except Exception as e:
+                # Handle unexpected exceptions
+                logger.error(
+                    f"Unexpected error processing bulk request at index {index} for service {profiling_request.service_name}: {str(e)}",
+                    exc_info=True
+                )
+                result = BulkProfilingRequestResult(
+                    index=index,
+                    service_name=profiling_request.service_name,
+                    success=False,
+                    response=None,
+                    error=f"Unexpected error: {str(e)}"
+                )
+                results.append(result)
+                failed_count += 1
+
+        logger.info(
+            f"Bulk profiling request completed: {successful_count} successful, {failed_count} failed out of {len(bulk_request.requests)} total"
+        )
+
+        return BulkProfilingResponse(
+            total_submitted=len(bulk_request.requests),
+            successful_count=successful_count,
+            failed_count=failed_count,
+            results=results
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to process bulk profiling request: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error while processing bulk profiling request")
 
 
 def _create_slack_blocks(profiling_request: ProfilingRequest, request_id: str) -> list:

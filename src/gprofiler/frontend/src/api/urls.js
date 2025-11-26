@@ -42,6 +42,7 @@ export const DATA_URLS = {
     // Profiling endpoints
     GET_PROFILING_HOST_STATUS: `${API_PREFIX}/metrics/profiling/host_status`,
     POST_PROFILING_REQUEST: `${API_PREFIX}/metrics/profile_request`,
+    POST_PROFILING_REQUEST_BULK: `${API_PREFIX}/metrics/profile_request/bulk`,
     POST_HEARTBEAT: `${API_PREFIX}/metrics/heartbeat`,
     POST_COMMAND_COMPLETION: `${API_PREFIX}/metrics/command_completion`,
     // Filter endpoints

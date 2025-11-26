@@ -953,13 +953,15 @@ class DBManager(metaclass=Singleton):
         result = self.db.execute(query, values, one_value=True, return_dict=True)
         return result.get("active_hosts_count", 0) if result else 0
 
-    def get_actively_profiling_hosts_count(self, service_name: Optional[str] = None) -> int:
+    def get_actively_profiling_hosts_count(self, service_name: Optional[str] = None, host_exclusion_list: Optional[List[str]] = None, host_inclusion_list: Optional[List[str]] = None) -> int:
         """
         Get the count of hosts that are actively profiling.
         A host is considered actively profiling if it has a completed start command.
         
         Args:
             service_name: Optional service name to filter hosts by
+            host_exclusion_list: Optional list of hostnames to exclude from the count
+            host_inclusion_list: Optional list of hostnames to include in the count (only these hosts will be counted)
             
         Returns:
             int: Count of actively profiling hosts
@@ -976,6 +978,14 @@ class DBManager(metaclass=Singleton):
         if service_name:
             query += " AND service_name = %(service_name)s"
             values["service_name"] = service_name
+        
+        if host_inclusion_list:
+            query += " AND hostname IN %(host_inclusion_list)s"
+            values["host_inclusion_list"] = tuple(host_inclusion_list)
+        
+        if host_exclusion_list:
+            query += " AND hostname NOT IN %(host_exclusion_list)s"
+            values["host_exclusion_list"] = tuple(host_exclusion_list)
         
         result = self.db.execute(query, values, one_value=True, return_dict=True)
         return result.get("profiling_hosts_count", 0) if result else 0
