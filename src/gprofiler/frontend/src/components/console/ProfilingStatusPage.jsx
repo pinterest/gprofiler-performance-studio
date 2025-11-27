@@ -141,6 +141,13 @@ const ProfilingStatusPage = () => {
         serviceGroups: {},
     });
     
+    // Dry-run validation state
+    const [dryRunValidation, setDryRunValidation] = useState({
+        isValidating: false,
+        isValid: false,
+        errors: [],
+    });
+    
     const history = useHistory();
     const location = useLocation();
 
@@ -326,20 +333,117 @@ const ProfilingStatusPage = () => {
             selectedRows,
             serviceGroups,
         });
+
+        // Trigger dry-run validation when dialog opens
+        executeDryRun(action, serviceGroups);
     }
 
-    // Execute the actual profiling action after confirmation
-    function executeProfilingAction() {
-        const { action, serviceGroups } = confirmationDialog;
+    // Execute dry-run validation
+    function executeDryRun(action, serviceGroups) {
+        setDryRunValidation({
+            isValidating: true,
+            isValid: false,
+            errors: [],
+        });
 
-        // Create one request per service with all hosts for that service
+        // Create bulk request with all services
         const requests = Object.entries(serviceGroups).map(([serviceName, hosts]) => {
             const target_host = hosts.reduce((hostObj, host) => {
                 hostObj[host] = null;
                 return hostObj;
             }, {});
 
-            const submitData = {
+            const request = {
+                service_name: serviceName,
+                request_type: action,
+                continuous: true,
+                duration: 60,
+                frequency: profilingFrequency,
+                profiling_mode: 'cpu',
+                target_hosts: target_host,
+                additional_args: {
+                    enable_perfspect: enablePerfSpect,
+                    profiler_configs: profilerConfigs,
+                    max_processes: maxProcesses,
+                },
+            };
+
+            if (action === 'stop') {
+                request.stop_level = 'host';
+            }
+
+            return request;
+        });
+
+        // Use bulk endpoint with dry_run
+        const bulkRequest = {
+            requests: requests,
+            dry_run: true,
+        };
+
+        fetch(DATA_URLS.POST_PROFILING_REQUEST_BULK, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(bulkRequest),
+        })
+            .then(res => {
+                if (!res.ok) {
+                    return res.json().then(errData => {
+                        // Extract detailed validation messages
+                        if (errData.detail && Array.isArray(errData.detail)) {
+                            const messages = errData.detail.map(err => err.msg || JSON.stringify(err)).join('; ');
+                            throw new Error(messages);
+                        } else if (typeof errData.detail === 'string') {
+                            throw new Error(errData.detail);
+                        } else {
+                            throw new Error(`Validation failed`);
+                        }
+                    }).catch(err => {
+                        // If error is already thrown from above, re-throw it
+                        if (err.message) throw err;
+                        throw new Error(`Validation failed with status ${res.status}`);
+                    });
+                }
+                return res.json();
+            })
+            .then((bulkResponse) => {
+                // Process bulk response to extract errors
+                const errors = [];
+
+                bulkResponse.results.forEach(result => {
+                    if (!result.success) {
+                        errors.push(`${result.service_name}: ${result.error}`);
+                    }
+                });
+
+                setDryRunValidation({
+                    isValidating: false,
+                    isValid: bulkResponse.failed_count === 0,
+                    errors: errors,
+                });
+            })
+            .catch(error => {
+                // Handle global validation errors (e.g., capacity exceeded)
+                setDryRunValidation({
+                    isValidating: false,
+                    isValid: false,
+                    errors: [error.message],
+                });
+            });
+    }
+
+    // Execute the actual profiling action after confirmation
+    function executeProfilingAction() {
+        const { action, serviceGroups } = confirmationDialog;
+
+        // Create bulk request with all services
+        const requests = Object.entries(serviceGroups).map(([serviceName, hosts]) => {
+            const target_host = hosts.reduce((hostObj, host) => {
+                hostObj[host] = null;
+                return hostObj;
+            }, {});
+
+            const request = {
                 service_name: serviceName,
                 request_type: action,
                 continuous: true,
@@ -356,19 +460,27 @@ const ProfilingStatusPage = () => {
 
             // append 'stop_level: host' when action is 'stop'
             if (action === 'stop') {
-                submitData.stop_level = 'host';
+                request.stop_level = 'host';
             }
 
-            return fetch(DATA_URLS.POST_PROFILING_REQUEST, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(submitData),
-            });
+            return request;
         });
 
-        // Close dialog and wait for all requests to finish before refreshing
+        // Use bulk endpoint
+        const bulkRequest = {
+            requests: requests,
+            dry_run: false,
+        };
+
+        // Close dialog and execute bulk request
         setConfirmationDialog({ open: false, action: null, selectedRows: [], serviceGroups: {} });
-        Promise.all(requests).then(() => {
+        setDryRunValidation({ isValidating: false, isValid: false, errors: [] }); // Reset dry-run state
+        
+        fetch(DATA_URLS.POST_PROFILING_REQUEST_BULK, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(bulkRequest),
+        }).then(() => {
             // Maintain current filter state when refreshing
             fetchProfilingStatus(appliedFilters);
             setSelectionModel([]); // Clear all checkboxes after API requests complete
@@ -380,6 +492,7 @@ const ProfilingStatusPage = () => {
     // Close confirmation dialog without action
     function handleDialogClose() {
         setConfirmationDialog({ open: false, action: null, selectedRows: [], serviceGroups: {} });
+        setDryRunValidation({ isValidating: false, isValid: false, errors: [] }); // Reset dry-run state
     }
 
     return (
@@ -449,6 +562,36 @@ const ProfilingStatusPage = () => {
                     </Typography>
                 </DialogTitle>
                 <DialogContent>
+                    {/* Validation Status */}
+                    {dryRunValidation.isValidating && (
+                        <Box sx={{ mb: 2, p: 2, backgroundColor: '#f5f5f5', borderRadius: 1 }}>
+                            <Typography variant="body2" color="text.secondary">
+                                Validating request...
+                            </Typography>
+                        </Box>
+                    )}
+                    
+                    {!dryRunValidation.isValidating && dryRunValidation.isValid && (
+                        <Box sx={{ mb: 2, p: 2, backgroundColor: '#e8f5e9', borderRadius: 1 }}>
+                            <Typography variant="body2" color="success.dark">
+                                ✓ Validation successful
+                            </Typography>
+                        </Box>
+                    )}
+                    
+                    {!dryRunValidation.isValidating && !dryRunValidation.isValid && dryRunValidation.errors.length > 0 && (
+                        <Box sx={{ mb: 2, p: 2, backgroundColor: '#ffebee', borderRadius: 1 }}>
+                            <Typography variant="body2" color="error.dark" sx={{ fontWeight: 600, mb: 1 }}>
+                                ✗ Validation failed
+                            </Typography>
+                            {dryRunValidation.errors.map((error, idx) => (
+                                <Typography key={idx} variant="body2" color="error.dark" sx={{ mt: 0.5, whiteSpace: 'pre-line' }}>
+                                    • {error}
+                                </Typography>
+                            ))}
+                        </Box>
+                    )}
+
                     <Typography variant="body1" sx={{ mb: 2 }}>
                         Are you sure you want to <strong>{confirmationDialog.action}</strong> profiling for the following hosts?
                     </Typography>
@@ -459,17 +602,21 @@ const ProfilingStatusPage = () => {
                             Selected Hosts ({confirmationDialog.selectedRows.length}):
                         </Typography>
                         {Object.entries(confirmationDialog.serviceGroups).map(([serviceName, hosts]) => (
-                            <Box key={serviceName} sx={{ mb: 1 }}>
-                                <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                            <Box key={serviceName} sx={{ mb: 2 }}>
+                                <Typography variant="body2" sx={{ fontWeight: 500, mb: 0.5 }}>
                                     {serviceName}:
                                 </Typography>
-                                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
+                                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
                                     {hosts.map((host) => (
                                         <Chip
                                             key={host}
                                             label={host}
                                             size="small"
                                             variant="outlined"
+                                            sx={{
+                                                borderColor: dryRunValidation.isValid ? '#2e7d32' : '#d32f2f',
+                                                color: dryRunValidation.isValid ? '#2e7d32' : '#d32f2f',
+                                            }}
                                         />
                                     ))}
                                 </Box>
@@ -530,6 +677,7 @@ const ProfilingStatusPage = () => {
                         onClick={executeProfilingAction} 
                         color={confirmationDialog.action === 'start' ? 'success' : 'error'}
                         variant="contained"
+                        disabled={dryRunValidation.isValidating || !dryRunValidation.isValid}
                     >
                         {confirmationDialog.action === 'start' ? 'Start Profiling' : 'Stop Profiling'}
                     </Button>

@@ -23,7 +23,11 @@ from datetime import datetime, timedelta
 from secrets import token_urlsafe
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
-from gprofiler_dev.config import INSTANCE_RUNS_LRU_CACHE_LIMIT, PROFILER_PROCESSES_LRU_CACHE_LIMIT
+from gprofiler_dev.config import (
+    ACTIVE_HOST_HEARTBEAT_MAX_DELTA_HOURS,
+    INSTANCE_RUNS_LRU_CACHE_LIMIT,
+    PROFILER_PROCESSES_LRU_CACHE_LIMIT,
+)
 from gprofiler_dev.lru_cache_impl import LRUCache
 from gprofiler_dev.postgres import get_postgres_db
 from gprofiler_dev.postgres.postgresdb import DBConflict
@@ -921,6 +925,70 @@ class DBManager(metaclass=Singleton):
         query += " ORDER BY heartbeat_timestamp DESC"
 
         return self.db.execute(query, values, one_value=False, return_dict=True, fetch_all=True)
+
+    def get_active_hosts_count(self, service_name: Optional[str] = None, max_delta_hours: int = ACTIVE_HOST_HEARTBEAT_MAX_DELTA_HOURS) -> int:
+        """
+        Get the count of active hosts based on the provided time window.
+        A host is considered active if its last heartbeat is within the specified time window.
+        
+        Args:
+            service_name: Optional service name to filter hosts by
+            max_delta_hours: Maximum hours since last heartbeat to consider a host active (default: ACTIVE_HOST_HEARTBEAT_MAX_DELTA_HOURS)
+            
+        Returns:
+            int: Count of active hosts
+        """
+        query = """
+        SELECT COUNT(*) as active_hosts_count
+        FROM HostHeartbeats
+        WHERE heartbeat_timestamp >= NOW() - INTERVAL '%(max_delta_hours)s hours'
+        """
+        
+        values = {"max_delta_hours": max_delta_hours}
+        
+        if service_name:
+            query += " AND service_name = %(service_name)s"
+            values["service_name"] = service_name
+        
+        result = self.db.execute(query, values, one_value=True, return_dict=True)
+        return result.get("active_hosts_count", 0) if result else 0
+
+    def get_actively_profiling_hosts_count(self, service_name: Optional[str] = None, host_exclusion_list: Optional[List[str]] = None, host_inclusion_list: Optional[List[str]] = None) -> int:
+        """
+        Get the count of hosts that are actively profiling.
+        A host is considered actively profiling if it has a completed start command.
+        
+        Args:
+            service_name: Optional service name to filter hosts by
+            host_exclusion_list: Optional list of hostnames to exclude from the count
+            host_inclusion_list: Optional list of hostnames to include in the count (only these hosts will be counted)
+            
+        Returns:
+            int: Count of actively profiling hosts
+        """
+        query = """
+        SELECT COUNT(DISTINCT hostname) as profiling_hosts_count
+        FROM ProfilingCommands
+        WHERE command_type = 'start'
+          AND status = 'completed'
+        """
+        
+        values = {}
+        
+        if service_name:
+            query += " AND service_name = %(service_name)s"
+            values["service_name"] = service_name
+        
+        if host_inclusion_list:
+            query += " AND hostname IN %(host_inclusion_list)s"
+            values["host_inclusion_list"] = tuple(host_inclusion_list)
+        
+        if host_exclusion_list:
+            query += " AND hostname NOT IN %(host_exclusion_list)s"
+            values["host_exclusion_list"] = tuple(host_exclusion_list)
+        
+        result = self.db.execute(query, values, one_value=True, return_dict=True)
+        return result.get("profiling_hosts_count", 0) if result else 0
 
     def get_all_host_heartbeats(self, limit: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
         """Get all host heartbeat records with optional pagination"""

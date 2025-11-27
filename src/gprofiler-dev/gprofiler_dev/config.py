@@ -41,3 +41,5 @@ BASE_DIRECTORY = "products"
 # Optional: Custom S3 endpoint for local testing (e.g., LocalStack) or S3-compatible services
 # In production, leave unset to use default AWS S3 endpoints
 S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL")
+
+ACTIVE_HOST_HEARTBEAT_MAX_DELTA_HOURS = int(os.getenv("ACTIVE_HOST_HEARTBEAT_MAX_DELTA_HOURS", 24))
