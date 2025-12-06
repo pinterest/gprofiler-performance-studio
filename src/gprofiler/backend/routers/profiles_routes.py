@@ -170,7 +170,8 @@ def new_profile_v2(
         try:
             client_handler.write_file(profile_file_path, compressed_profile)
         except Exception as s3_error:
-            logger.error(f"Failed to write profile to S3: {s3_error}")            raise HTTPException(500, {"message": "Failed to store profile data"})
+            logger.error(f"Failed to write profile to S3: {s3_error}")
+            raise HTTPException(500, {"message": "Failed to store profile data"})
 
         service_sample_threshold = db_manager.get_service_sample_threshold_by_id(service_id)
         random_value = random.uniform(0.0, 1.0)
@@ -197,18 +198,21 @@ def new_profile_v2(
                 sqs.send_message(QueueUrl=config.SQS_INDEXER_QUEUE_URL, MessageBody=json.dumps(msg))
                 logger.info("send task to queue", extra=extra_info)
             except Exception as sqs_error:
-                logger.error(f"Failed to send message to SQS: {sqs_error}")                raise HTTPException(500, {"message": "Failed to process profile upload"})
+                logger.error(f"Failed to send message to SQS: {sqs_error}")
+                raise HTTPException(500, {"message": "Failed to process profile upload"})
         else:
             logger.info("drop task due sampling", extra=extra_info)
 
     except KeyError as key_error:
-        # Client error - missing parameter        raise HTTPException(400, {"message": f"Missing parameter {key_error}"})
+        # Client error - missing parameter
+        raise HTTPException(400, {"message": f"Missing parameter {key_error}"})
     except HTTPException:
         # HTTPException already handled above (with ignored_failure metric)
         # Let FastAPI handle it without sending additional metrics
         raise
     except Exception as e:
-        # Server error - counts against SLO        if os.path.exists(".debug"):
+        # Server error - counts against SLO
+        if os.path.exists(".debug"):
             import sys
             import traceback
 
@@ -226,6 +230,8 @@ def new_profile_v2(
                 f"An error has occurred while trying to prepare service: {service_name} "
                 f"client: {client_handler} " + repr(e)
             )
-            # Server error - counts against SLO            raise HTTPException(400, {"message": "Failed to register the new service"})
+            # Server error - counts against SLO
+            raise HTTPException(400, {"message": "Failed to register the new service"})
     
-    # Success - profile uploaded and processed successfully    return ProfileResponse(message="ok", gpid=int(gpid))
+    # Success - profile uploaded and processed successfully
+    return ProfileResponse(message="ok", gpid=int(gpid))
