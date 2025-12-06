@@ -109,10 +109,5 @@ func main() {
 
 	buffWriterWaitGroup.Wait()
 	
-	// Cleanup metrics publisher
-	if metricsPublisher != nil {
-		metricsPublisher.FlushAndClose()
-	}
-	
 	logger.Info("Graceful shutdown")
 }
