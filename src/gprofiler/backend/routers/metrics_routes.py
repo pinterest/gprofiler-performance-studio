@@ -255,18 +255,66 @@ def calculate_trend_in_cpu(
 def get_html_metadata(
     fg_params: FGParamsBaseModel = Depends(flamegraph_base_request_params),
 ):
+    from datetime import datetime
+    from gprofiler_dev.tags import get_hash_filter_tag
+    
     host_name_value = get_rql_first_eq_key(fg_params.filter, FilterTypes.HOSTNAME_KEY)
     if not host_name_value:
         raise HTTPException(400, detail="Must filter by hostname to get the html metadata")
-    s3_path = get_metrics_response(fg_params, lookup_for="lasthtml")
-    if not s3_path:
-        raise HTTPException(404, detail="The html metadata path not found in CH")
+    
+    # Get latest HTML report directly from S3 instead of relying on ClickHouse
+    # ClickHouse paths may be stale if files were cleaned up from S3
     s3_dal = S3ProfileDal(logger)
+    hostname_hash = get_hash_filter_tag(host_name_value)
+    prefix = s3_dal.join_path(s3_dal.base_directory, fg_params.service_name, s3_dal.input_folder_name) + "/"
+    
+    logger.info(f"Searching for latest HTML report with prefix: {prefix}, hostname_hash: {hostname_hash}")
+    
     try:
+        response = s3_dal._s3_client.list_objects_v2(
+            Bucket=s3_dal.bucket_name,
+            Prefix=prefix
+        )
+        
+        if 'Contents' not in response:
+            logger.warning(f"No files found with prefix: {prefix}")
+            raise HTTPException(404, detail="No Perspective reports found")
+        
+        # Filter and find latest file
+        matching_files = []
+        for obj in response['Contents']:
+            key = obj['Key']
+            # PerfSpect HTML reports have .html extension in S3
+            if not key.endswith('.html'):
+                continue
+            if hostname_hash not in key:
+                continue
+            
+            filename = key.split('/')[-1]
+            try:
+                timestamp_str = filename.split('_')[0]
+                file_timestamp = datetime.fromisoformat(timestamp_str)
+                matching_files.append({
+                    'key': key,
+                    'timestamp': file_timestamp
+                })
+            except ValueError:
+                continue
+        
+        if not matching_files:
+            raise HTTPException(404, detail="No Perspective reports found for this hostname")
+        
+        # Get the latest file
+        latest_file = max(matching_files, key=lambda x: x['timestamp'])
+        s3_path = latest_file['key']
+        
+        logger.info(f"Found latest HTML report: {s3_path}")
         html_content = s3_dal.get_object(s3_path, is_gzip=True)
-    except ClientError:
-        raise HTTPException(status_code=404, detail="The html metadata file not found in S3")
-    return HTMLMetadata(content=html_content)
+        return HTMLMetadata(content=html_content)
+        
+    except ClientError as e:
+        logger.error(f"S3 error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch Perspective report from S3")
 
 
 @router.post("/profile_request", response_model=ProfilingResponse)
