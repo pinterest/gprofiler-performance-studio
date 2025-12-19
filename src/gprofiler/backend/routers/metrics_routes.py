@@ -268,7 +268,8 @@ def get_html_metadata(
     hostname_hash = get_hash_filter_tag(host_name_value)
     prefix = s3_dal.join_path(s3_dal.base_directory, fg_params.service_name, s3_dal.input_folder_name) + "/"
     
-    logger.info(f"Searching for latest HTML report with prefix: {prefix}, hostname_hash: {hostname_hash}")
+    logger.info(f"Searching for latest HTML report with prefix: {prefix}, hostname_hash: {hostname_hash}, "
+                f"time_window: {fg_params.start_time} to {fg_params.end_time}")
     
     try:
         response = s3_dal._s3_client.list_objects_v2(
@@ -280,7 +281,7 @@ def get_html_metadata(
             logger.warning(f"No files found with prefix: {prefix}")
             raise HTTPException(404, detail="No PerfSpect reports found")
         
-        # Filter and find latest file
+        # Filter and find latest file within the time window
         matching_files = []
         for obj in response['Contents']:
             key = obj['Key']
@@ -294,6 +295,11 @@ def get_html_metadata(
             try:
                 timestamp_str = filename.split('_')[0]
                 file_timestamp = datetime.fromisoformat(timestamp_str)
+                
+                # Filter by time window from request parameters
+                if file_timestamp < fg_params.start_time or file_timestamp > fg_params.end_time:
+                    continue
+                
                 matching_files.append({
                     'key': key,
                     'timestamp': file_timestamp
@@ -302,9 +308,9 @@ def get_html_metadata(
                 continue
         
         if not matching_files:
-            raise HTTPException(404, detail="No PerfSpect reports found for this hostname")
+            raise HTTPException(404, detail="No PerfSpect reports found for this hostname within the selected time range")
         
-        # Get the latest file
+        # Get the latest file within the time window
         latest_file = max(matching_files, key=lambda x: x['timestamp'])
         s3_path = latest_file['key']
         
