@@ -17,7 +17,7 @@
 import json
 import math
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from logging import getLogger
 from typing import List, Optional
 
@@ -295,6 +295,10 @@ def get_html_metadata(
             try:
                 timestamp_str = filename.split('_')[0]
                 file_timestamp = datetime.fromisoformat(timestamp_str)
+                
+                # Make timestamp timezone-aware (assume UTC) for comparison
+                if file_timestamp.tzinfo is None:
+                    file_timestamp = file_timestamp.replace(tzinfo=timezone.utc)
                 
                 # Filter by time window from request parameters
                 if file_timestamp < fg_params.start_time or file_timestamp > fg_params.end_time:
