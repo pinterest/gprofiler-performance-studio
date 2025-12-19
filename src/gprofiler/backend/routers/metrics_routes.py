@@ -278,7 +278,7 @@ def get_html_metadata(
         
         if 'Contents' not in response:
             logger.warning(f"No files found with prefix: {prefix}")
-            raise HTTPException(404, detail="No Perspective reports found")
+            raise HTTPException(404, detail="No PerfSpect reports found")
         
         # Filter and find latest file
         matching_files = []
@@ -302,7 +302,7 @@ def get_html_metadata(
                 continue
         
         if not matching_files:
-            raise HTTPException(404, detail="No Perspective reports found for this hostname")
+            raise HTTPException(404, detail="No PerfSpect reports found for this hostname")
         
         # Get the latest file
         latest_file = max(matching_files, key=lambda x: x['timestamp'])
@@ -314,7 +314,7 @@ def get_html_metadata(
         
     except ClientError as e:
         logger.error(f"S3 error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch Perspective report from S3")
+        raise HTTPException(status_code=500, detail="Failed to fetch PerfSpect report from S3")
 
 
 @router.post("/profile_request", response_model=ProfilingResponse)

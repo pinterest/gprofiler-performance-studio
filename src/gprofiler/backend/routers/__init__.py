@@ -23,7 +23,7 @@ from backend.routers import (
     metrics_routes,
     minesweeper_routes,
     overview_routes,
-    perspective_routes,
+    perfspect_routes,
     profiles_routes,
     services_routes,
 )
@@ -41,4 +41,4 @@ router.include_router(services_routes.router, prefix="/services", tags=["app"])
 router.include_router(filters_routes.router, prefix="/v1/filters", tags=["filters"])
 router.include_router(overview_routes.router, prefix="/overview", tags=["overview"])
 router.include_router(minesweeper_routes.router, prefix="/snapshots", tags=["snapshots"])
-router.include_router(perspective_routes.router, prefix="/perspective", tags=["perspective"])
+router.include_router(perfspect_routes.router, prefix="/perfspect", tags=["perfspect"])

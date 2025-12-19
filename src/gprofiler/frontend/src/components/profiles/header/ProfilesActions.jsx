@@ -66,7 +66,7 @@ const ProfilesActions = ({ isGrayedOut }) => {
 
     const { search } = useLocation();
     
-    // Check if HTML/Perspective view is active
+    // Check if HTML/PerfSpect view is active
     const isHtmlViewDisplayed = viewMode === 'html';
 
     const handleClose = useCallback(() => {
@@ -74,7 +74,7 @@ const ProfilesActions = ({ isGrayedOut }) => {
     }, [setAnchorEl]);
 
     const downloadSvgRef = useRef(null);
-    const downloadPerspectiveRef = useRef(null);
+    const downloadPerfSpectRef = useRef(null);
 
     const onClickDownloadSvg = useCallback(() => {
         if (isFgDisplayed && downloadSvgRef.current) {
@@ -83,7 +83,7 @@ const ProfilesActions = ({ isGrayedOut }) => {
         handleClose();
     }, [handleClose, isFgDisplayed]);
     
-    // Extract hostname from active filters for Perspective download
+    // Extract hostname from active filters for PerfSpect download
     const getHostnameFromFilters = useCallback(() => {
         if (!activeFilterTag?.filter) return null;
         
@@ -105,9 +105,9 @@ const ProfilesActions = ({ isGrayedOut }) => {
         return null;
     }, [activeFilterTag]);
     
-    const onClickDownloadPerspective = useCallback(() => {
-        if (isHtmlViewDisplayed && downloadPerspectiveRef.current) {
-            downloadPerspectiveRef.current.click();
+    const onClickDownloadPerfSpect = useCallback(() => {
+        if (isHtmlViewDisplayed && downloadPerfSpectRef.current) {
+            downloadPerfSpectRef.current.click();
         }
         handleClose();
     }, [handleClose, isHtmlViewDisplayed]);
@@ -139,11 +139,11 @@ const ProfilesActions = ({ isGrayedOut }) => {
                 )}
                 
                 {isHtmlViewDisplayed && (
-                    <MenuItem onClick={onClickDownloadPerspective}>
+                    <MenuItem onClick={onClickDownloadPerfSpect}>
                         <ListItemIcon>
                             <Icon name={ICONS_NAMES.Download} color={COLORS.BLUE_7} />
                         </ListItemIcon>
-                        <ListItemText>Download Perspective Report</ListItemText>
+                        <ListItemText>Download PerfSpect Report</ListItemText>
                     </MenuItem>
                 )}
 
@@ -181,13 +181,13 @@ const ProfilesActions = ({ isGrayedOut }) => {
             
             {isHtmlViewDisplayed && hostname && (
                 <a
-                    href={`${DATA_URLS.GET_PERSPECTIVE_REPORT_DOWNLOAD}?${stringify({
+                    href={`${DATA_URLS.GET_PERFSPECT_REPORT_DOWNLOAD}?${stringify({
                         serviceName: selectedService,
                         hostname: hostname,
                     })}`}
-                    className='download-perspective-link'
+                    className='download-perfspect-link'
                     style={{ display: 'none' }}
-                    ref={downloadPerspectiveRef}
+                    ref={downloadPerfSpectRef}
                     rel='noopener noreferrer'
                     download>
                     {''}

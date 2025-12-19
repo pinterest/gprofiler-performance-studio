@@ -19,9 +19,6 @@ from io import BytesIO
 from logging import getLogger
 from typing import Optional
 
-from backend.models.filters_models import RQLFilter
-from backend.utils.filters_utils import FilterTypes, get_rql_first_eq_key
-from backend.utils.json_param import json_param
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -32,13 +29,13 @@ logger = getLogger(__name__)
 router = APIRouter()
 
 
-def get_latest_perspective_report_path(
+def get_latest_perfspect_report_path(
     service_name: str,
     hostname: str,
     s3_dal: S3ProfileDal
 ) -> Optional[str]:
     """
-    Find the latest Perspective/PerfSpect HTML report for a given service and hostname
+    Find the latest PerfSpect HTML report for a given service and hostname
     by listing S3 objects and selecting the one with the highest timestamp.
     
     Args:
@@ -64,7 +61,7 @@ def get_latest_perspective_report_path(
     # Format: products/{service_name}/stacks/
     prefix = s3_dal.join_path(s3_dal.base_directory, service_name, s3_dal.input_folder_name) + "/"
     
-    logger.info(f"Searching for Perspective reports with prefix: {prefix}, hostname_hash: {hostname_hash}")
+    logger.info(f"Searching for PerfSpect reports with prefix: {prefix}, hostname_hash: {hostname_hash}")
     
     try:
         # List all objects with the prefix
@@ -108,14 +105,14 @@ def get_latest_perspective_report_path(
                 continue
         
         if not matching_files:
-            logger.warning(f"No Perspective reports found for hostname: {hostname}")
+            logger.warning(f"No PerfSpect reports found for hostname: {hostname}")
             return None
         
         # Sort by timestamp (descending) to get the latest
         matching_files.sort(key=lambda x: x['timestamp'], reverse=True)
         latest_file = matching_files[0]
         
-        logger.info(f"Found latest Perspective report: {latest_file['key']} at {latest_file['timestamp']}")
+        logger.info(f"Found latest PerfSpect report: {latest_file['key']} at {latest_file['timestamp']}")
         return latest_file['key']
         
     except ClientError as e:
@@ -124,18 +121,18 @@ def get_latest_perspective_report_path(
 
 
 @router.get(
-    "/download_perspective_report",
+    "/download_report",
     responses={
         200: {"content": {"text/html": {}}},
-        404: {"description": "Perspective report not found"},
+        404: {"description": "PerfSpect report not found"},
     },
 )
-def download_perspective_report(
+def download_perfspect_report(
     service_name: str = Query(..., alias="serviceName"),
     hostname: str = Query(..., alias="hostname"),
 ):
     """
-    Download the latest Perspective/PerfSpect HTML report for a specific service and hostname.
+    Download the latest PerfSpect HTML report for a specific service and hostname.
     
     This endpoint:
     1. Lists S3 objects in products/{service}/stacks/
@@ -152,16 +149,16 @@ def download_perspective_report(
         StreamingResponse with HTML content and Content-Disposition header for download
     
     Example:
-        GET /api/perspective/download_perspective_report?serviceName=devapp&hostname=my-host
+        GET /api/perfspect/download_report?serviceName=devapp&hostname=my-host
     """
     if not hostname:
-        raise HTTPException(400, detail="hostname parameter is required to download the perspective report")
+        raise HTTPException(400, detail="hostname parameter is required to download the PerfSpect report")
     
     # Initialize S3 client
     s3_dal = S3ProfileDal(logger)
     
     # Find the latest report (always gets the most recent, ignoring time range)
-    s3_path = get_latest_perspective_report_path(
+    s3_path = get_latest_perfspect_report_path(
         service_name=service_name,
         hostname=hostname,
         s3_dal=s3_dal
@@ -170,16 +167,16 @@ def download_perspective_report(
     if not s3_path:
         raise HTTPException(
             status_code=404,
-            detail=f"No Perspective report found for service '{service_name}' and hostname '{hostname}'"
+            detail=f"No PerfSpect report found for service '{service_name}' and hostname '{hostname}'"
         )
     
     # Download the HTML file from S3
     try:
-        # Note: Perspective reports are stored as gzipped HTML
+        # Note: PerfSpect reports are stored as gzipped HTML
         html_content = s3_dal.get_object(s3_path, is_gzip=True)
     except ClientError as e:
-        logger.error(f"Failed to download Perspective report from S3: {s3_path}, error: {e}")
-        raise HTTPException(status_code=404, detail="The Perspective report file could not be downloaded from S3")
+        logger.error(f"Failed to download PerfSpect report from S3: {s3_path}, error: {e}")
+        raise HTTPException(status_code=404, detail="The PerfSpect report file could not be downloaded from S3")
     
     # Generate filename from S3 path
     filename = s3_path.split('/')[-1]
