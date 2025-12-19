@@ -33,6 +33,7 @@ import { FgContext, SelectorsContext } from '../../../states';
 import { FilterTagsContext } from '../../../states/filters/FiltersTagsContext';
 import { COLORS } from '../../../theme/colors';
 import { buildAbsolutePermaLink } from '../../../utils/fgUtils';
+import { FILTER_TYPES } from '../../../utils/filtersUtils';
 import Icon from '../../common/icon/Icon';
 import { ICONS_NAMES } from '../../common/icon/iconsData';
 
@@ -59,17 +60,21 @@ const ProfilesActions = ({ isGrayedOut }) => {
     const [anchorEl, setAnchorEl] = useState(null);
 
     const { isFgDisplayed } = useContext(FgContext);
-    const { timeSelection, selectedService, ignoreZeros, setIgnoreZeros, absoluteTimeSelection } =
+    const { timeSelection, selectedService, ignoreZeros, setIgnoreZeros, absoluteTimeSelection, viewMode } =
         useContext(SelectorsContext);
     const { activeFilterTag } = useContext(FilterTagsContext);
 
     const { search } = useLocation();
+    
+    // Check if HTML/PerfSpect view is active
+    const isHtmlViewDisplayed = viewMode === 'html';
 
     const handleClose = useCallback(() => {
         setAnchorEl(null);
     }, [setAnchorEl]);
 
     const downloadSvgRef = useRef(null);
+    const downloadPerfSpectRef = useRef(null);
 
     const onClickDownloadSvg = useCallback(() => {
         if (isFgDisplayed && downloadSvgRef.current) {
@@ -77,6 +82,35 @@ const ProfilesActions = ({ isGrayedOut }) => {
         }
         handleClose();
     }, [handleClose, isFgDisplayed]);
+    
+    // Extract hostname from active filters for PerfSpect download
+    const getHostnameFromFilters = useCallback(() => {
+        if (!activeFilterTag?.filter) return null;
+        
+        // Handle RQL object format: {$and: [{HostName: {$eq: "hostname"}}]}
+        const [, rules] = Object.entries(activeFilterTag.filter)[0] || [];
+        if (rules && Array.isArray(rules)) {
+            const hostnameRule = rules.find(rule => {
+                const [ruleType] = Object.entries(rule)[0] || [];
+                return ruleType === FILTER_TYPES.HostName.value;
+            });
+            
+            if (hostnameRule) {
+                const [, condition] = Object.entries(hostnameRule)[0];
+                const [, value] = Object.entries(condition)[0] || [];
+                return value;
+            }
+        }
+        
+        return null;
+    }, [activeFilterTag]);
+    
+    const onClickDownloadPerfSpect = useCallback(() => {
+        if (isHtmlViewDisplayed && downloadPerfSpectRef.current) {
+            downloadPerfSpectRef.current.click();
+        }
+        handleClose();
+    }, [handleClose, isHtmlViewDisplayed]);
 
     const onCopyPermalinkClick = (e) => {
         if (isPathSecure()) {
@@ -90,6 +124,8 @@ const ProfilesActions = ({ isGrayedOut }) => {
         setIgnoreZeros(!ignoreZeros);
     };
 
+    const hostname = getHostnameFromFilters();
+
     return (
         <>
             <DotsMenu disabled={isGrayedOut} customEnchorEl={anchorEl} setCustomEnchorEl={setAnchorEl}>
@@ -99,6 +135,15 @@ const ProfilesActions = ({ isGrayedOut }) => {
                             <Icon name={ICONS_NAMES.Download} color={COLORS.BLUE_7} />
                         </ListItemIcon>
                         <ListItemText>Download Flame Graph</ListItemText>
+                    </MenuItem>
+                )}
+                
+                {isHtmlViewDisplayed && (
+                    <MenuItem onClick={onClickDownloadPerfSpect}>
+                        <ListItemIcon>
+                            <Icon name={ICONS_NAMES.Download} color={COLORS.BLUE_7} />
+                        </ListItemIcon>
+                        <ListItemText>Download PerfSpect Report</ListItemText>
                     </MenuItem>
                 )}
 
@@ -132,6 +177,21 @@ const ProfilesActions = ({ isGrayedOut }) => {
                     fileType='svg'
                     downloadRef={downloadSvgRef}
                 />
+            )}
+            
+            {isHtmlViewDisplayed && hostname && (
+                <a
+                    href={`${DATA_URLS.GET_PERFSPECT_REPORT_DOWNLOAD}?${stringify({
+                        serviceName: selectedService,
+                        hostname: hostname,
+                    })}`}
+                    className='download-perfspect-link'
+                    style={{ display: 'none' }}
+                    ref={downloadPerfSpectRef}
+                    rel='noopener noreferrer'
+                    download>
+                    {''}
+                </a>
             )}
         </>
     );
