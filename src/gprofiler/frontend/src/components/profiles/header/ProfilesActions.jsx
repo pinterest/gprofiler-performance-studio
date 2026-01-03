@@ -184,6 +184,8 @@ const ProfilesActions = ({ isGrayedOut }) => {
                     href={`${DATA_URLS.GET_PERFSPECT_REPORT_DOWNLOAD}?${stringify({
                         serviceName: selectedService,
                         hostname: hostname,
+                        ...getStartEndDateTimeFromSelection(timeSelection),
+                        filter: JSON.stringify(activeFilterTag),
                     })}`}
                     className='download-perfspect-link'
                     style={{ display: 'none' }}

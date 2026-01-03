@@ -19,105 +19,17 @@ from io import BytesIO
 from logging import getLogger
 from typing import Optional
 
+from backend.models.filters_models import FilterTypes
+from backend.models.flamegraph_models import FGParamsBaseModel
+from backend.utils.filters_utils import get_rql_first_eq_key
+from backend.utils.request_utils import flamegraph_base_request_params, get_metrics_response
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from gprofiler_dev import S3ProfileDal
-from gprofiler_dev.tags import get_hash_filter_tag
 
 logger = getLogger(__name__)
 router = APIRouter()
-
-
-def get_latest_perfspect_report_path(
-    service_name: str,
-    hostname: str,
-    s3_dal: S3ProfileDal
-) -> Optional[str]:
-    """
-    Find the latest PerfSpect HTML report for a given service and hostname
-    by listing S3 objects and selecting the one with the highest timestamp.
-    
-    Args:
-        service_name: The service name (e.g., 'devapp')
-        hostname: The hostname to filter by
-        s3_dal: S3 data access layer instance
-        
-    Returns:
-        S3 path to the latest HTML report, or None if not found
-        
-    The S3 path structure is:
-        products/{service_name}/stacks/{timestamp}_{uuid}_{hostname_hash}.html
-        
-    Example:
-        products/devapp/stacks/2025-12-17T22:31:27_efb6a4780e6a46e285d45cf809a95bda_aa7017823fd49a2a5baaed009b7c6734.html
-        
-    Note: The .html files in S3 are gzipped and need to be decompressed before serving.
-    """
-    # Calculate hostname hash (MD5)
-    hostname_hash = get_hash_filter_tag(hostname)
-    
-    # Build S3 prefix to list files
-    # Format: products/{service_name}/stacks/
-    prefix = s3_dal.join_path(s3_dal.base_directory, service_name, s3_dal.input_folder_name) + "/"
-    
-    logger.info(f"Searching for PerfSpect reports with prefix: {prefix}, hostname_hash: {hostname_hash}")
-    
-    try:
-        # List all objects with the prefix
-        response = s3_dal._s3_client.list_objects_v2(
-            Bucket=s3_dal.bucket_name,
-            Prefix=prefix
-        )
-        
-        if 'Contents' not in response:
-            logger.warning(f"No files found with prefix: {prefix}")
-            return None
-        
-        # Filter files matching our criteria
-        matching_files = []
-        for obj in response['Contents']:
-            key = obj['Key']
-            
-            # Must be an HTML file (PerfSpect reports have .html extension in S3)
-            if not key.endswith('.html'):
-                continue
-            
-            # Must contain the hostname hash
-            if hostname_hash not in key:
-                continue
-            
-            # Extract timestamp from filename
-            # Format: products/service/stacks/2025-12-17T22:31:27_uuid_hash.html
-            filename = key.split('/')[-1]  # Get just the filename
-            try:
-                # Extract timestamp (before first underscore)
-                timestamp_str = filename.split('_')[0]
-                file_timestamp = datetime.fromisoformat(timestamp_str)
-                
-                matching_files.append({
-                    'key': key,
-                    'timestamp': file_timestamp,
-                    'last_modified': obj['LastModified']
-                })
-            except (ValueError, IndexError) as e:
-                logger.warning(f"Could not parse timestamp from filename: {filename}, error: {e}")
-                continue
-        
-        if not matching_files:
-            logger.warning(f"No PerfSpect reports found for hostname: {hostname}")
-            return None
-        
-        # Sort by timestamp (descending) to get the latest
-        matching_files.sort(key=lambda x: x['timestamp'], reverse=True)
-        latest_file = matching_files[0]
-        
-        logger.info(f"Found latest PerfSpect report: {latest_file['key']} at {latest_file['timestamp']}")
-        return latest_file['key']
-        
-    except ClientError as e:
-        logger.error(f"S3 error while listing objects: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list S3 objects")
 
 
 @router.get(
@@ -128,55 +40,46 @@ def get_latest_perfspect_report_path(
     },
 )
 def download_perfspect_report(
-    service_name: str = Query(..., alias="serviceName"),
-    hostname: str = Query(..., alias="hostname"),
+    fg_params: FGParamsBaseModel = Depends(flamegraph_base_request_params),
 ):
     """
     Download the latest PerfSpect HTML report for a specific service and hostname.
     
     This endpoint:
-    1. Lists S3 objects in products/{service}/stacks/
-    2. Filters by hostname hash
-    3. Returns the LATEST HTML report (highest timestamp) as a downloadable file
-    
-    Time range parameters are NOT needed - always returns the most recent report.
+    1. Queries ClickHouse for the latest HTML report path using get_metrics_response
+    2. Downloads the report from S3
+    3. Returns the HTML report as a downloadable file
     
     Query Parameters:
         serviceName: The service name (e.g., 'devapp')
-        hostname: The hostname (e.g., 'devrestricted-achatharajupalli')
+        startTime: Start of time range (ISO 8601 format)
+        endTime: End of time range (ISO 8601 format)
+        filter: RQL format filter (must include hostname filter)
     
     Returns:
         StreamingResponse with HTML content and Content-Disposition header for download
     
     Example:
-        GET /api/perfspect/download_report?serviceName=devapp&hostname=my-host
+        GET /api/perfspect/download_report?serviceName=devapp&startTime=2025-01-01T00:00:00&endTime=2025-01-02T00:00:00&filter=hostname==my-host
     """
-    if not hostname:
-        raise HTTPException(400, detail="hostname parameter is required to download the PerfSpect report")
+    host_name_value = get_rql_first_eq_key(fg_params.filter, FilterTypes.HOSTNAME_KEY)
+    if not host_name_value:
+        raise HTTPException(400, detail="Must filter by hostname to download the PerfSpect report")
+    
+    # Get S3 path from ClickHouse using the same pattern as get_html_metadata
+    s3_path = get_metrics_response(fg_params, lookup_for="lasthtml")
+    if not s3_path:
+        raise HTTPException(404, detail="The PerfSpect report path not found in ClickHouse")
     
     # Initialize S3 client
     s3_dal = S3ProfileDal(logger)
-    
-    # Find the latest report (always gets the most recent, ignoring time range)
-    s3_path = get_latest_perfspect_report_path(
-        service_name=service_name,
-        hostname=hostname,
-        s3_dal=s3_dal
-    )
-    
-    if not s3_path:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No PerfSpect report found for service '{service_name}' and hostname '{hostname}'"
-        )
     
     # Download the HTML file from S3
     try:
         # Note: PerfSpect reports are stored as gzipped HTML
         html_content = s3_dal.get_object(s3_path, is_gzip=True)
-    except ClientError as e:
-        logger.error(f"Failed to download PerfSpect report from S3: {s3_path}, error: {e}")
-        raise HTTPException(status_code=404, detail="The PerfSpect report file could not be downloaded from S3")
+    except ClientError:
+        raise HTTPException(status_code=404, detail="The PerfSpect report file not found in S3")
     
     # Generate filename from S3 path
     filename = s3_path.split('/')[-1]
