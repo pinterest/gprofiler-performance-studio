@@ -205,6 +205,7 @@ def new_profile_v2(
             "compressed_size": compressed_profile_file_size,
             "instance_type": metadata.get("instance_type", ""),
             "version": 2,
+            "profile_filename": profile_file_name,
         }
         # Down sampler for handling situations with income data overload.
         # Task will be sent to indexer only if generated random value (0.0 to 1.0 range)
