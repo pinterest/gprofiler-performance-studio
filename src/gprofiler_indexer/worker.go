@@ -74,7 +74,15 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 		serviceName := task.Service
 		startProcessing := time.Now()
 		log.Debugf("got new file %s from service %s (ID: %d)", task.Filename, serviceName, task.ServiceId)
-		log.Infof("📨 Received SQS message: service=%s file=%s", serviceName, task.Filename)
+		
+		// Calculate queue pickup delay if SentTimestamp is available
+		if useSQS && task.SentTimestamp > 0 {
+			sentTime := time.Unix(0, task.SentTimestamp*int64(time.Millisecond))
+			queueDelayMs := time.Since(sentTime).Milliseconds()
+			log.Infof("📨 Received SQS message: service=%s file=%s queue_delay_ms=%d", serviceName, task.Filename, queueDelayMs)
+		} else {
+			log.Infof("📨 Received SQS message: service=%s file=%s", serviceName, task.Filename)
+		}
 
 		if useSQS {
 			fullPath := fmt.Sprintf("products/%s/stacks/%s", task.Service, task.Filename)

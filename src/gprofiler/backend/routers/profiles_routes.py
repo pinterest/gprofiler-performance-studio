@@ -18,6 +18,7 @@ import gzip
 import json
 import os
 import random
+from datetime import datetime, timezone
 from logging import getLogger
 from typing import List, Union
 
@@ -185,8 +186,9 @@ def new_profile_v2(
         compressed_profile = gzip.compress(profile_data)
         compressed_profile_file_size = len(compressed_profile)
         
-        # Calculate time since profile start
-        profile_age_seconds = (datetime.now(timezone.utc) - agent_data.start_time).total_seconds()
+        # Calculate time since profile start (ensure both datetimes are UTC-aware)
+        start_time_utc = agent_data.start_time.replace(tzinfo=timezone.utc) if agent_data.start_time.tzinfo is None else agent_data.start_time
+        profile_age_seconds = (datetime.now(timezone.utc) - start_time_utc).total_seconds()
         
         try:
             s3_upload_start = datetime.now(timezone.utc)
