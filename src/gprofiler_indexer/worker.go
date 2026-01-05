@@ -72,7 +72,9 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 	for task := range tasks {
 		useSQS := task.Service != ""
 		serviceName := task.Service
+		startProcessing := time.Now()
 		log.Debugf("got new file %s from service %s (ID: %d)", task.Filename, serviceName, task.ServiceId)
+		log.Infof("📨 Received SQS message: service=%s file=%s", serviceName, task.Filename)
 
 		if useSQS {
 			fullPath := fmt.Sprintf("products/%s/stacks/%s", task.Service, task.Filename)
@@ -95,6 +97,8 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 				deleteMessageWithMetrics(sess, task)
 				continue
 			}
+			log.Infof("✅ S3 fetch complete: service=%s file=%s size=%d bytes fetch_time_ms=%d", 
+				serviceName, task.Filename, len(buf), time.Since(startProcessing).Milliseconds())
 			temp = strings.Split(task.Filename, "_")[0]
 		} else {
 			buf, _ = ioutil.ReadFile(task.Filename)
@@ -108,11 +112,16 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 		timestamp, tsErr := time.Parse(layout, temp)
 		log.Debugf("parsed timestamp is: %v", timestamp)
 		if tsErr != nil {
-			log.Debugf("Unable to fetch timestamp from filename %s, fallback to the current time", temp)
+			log.Infof("⚠️  Timestamp parse failed, using fallback: filename=%s parsed_string='%s' error=%v", 
+				task.Filename, temp, tsErr)
 			timestamp = time.Now().UTC()
+		} else {
+			ageSeconds := time.Since(timestamp).Seconds()
+			log.Infof("📅 Profile timestamp: %s (age: %.1f seconds)", timestamp.Format(time.RFC3339), ageSeconds)
 		}
 
 		// Parse stack frame file and write to ClickHouse
+		parseStart := time.Now()
 		err := pw.ParseStackFrameFile(sess, task, args.S3Bucket, timestamp, buf)
 		if err != nil {
 			log.Errorf("Error while parsing stack frame file: %v", err)
@@ -138,6 +147,12 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 
 		// Delete message from SQS after successful processing
 		if useSQS {
+			totalProcessingTime := time.Since(startProcessing).Milliseconds()
+			endToEndLatency := time.Since(timestamp).Seconds()
+			
+			log.Infof("✅ Processing complete: service=%s file=%s parse_time_ms=%d total_processing_ms=%d end_to_end_latency_sec=%.1f", 
+				serviceName, task.Filename, time.Since(parseStart).Milliseconds(), totalProcessingTime, endToEndLatency)
+			
 			deleteMessageWithMetrics(sess, task)
 
 			// SLI Metric: Success! Event processed completely

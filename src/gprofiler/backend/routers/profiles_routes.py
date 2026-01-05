@@ -185,8 +185,19 @@ def new_profile_v2(
         compressed_profile = gzip.compress(profile_data)
         compressed_profile_file_size = len(compressed_profile)
         
+        # Calculate time since profile start
+        profile_age_seconds = (datetime.now(timezone.utc) - agent_data.start_time).total_seconds()
+        
         try:
+            s3_upload_start = datetime.now(timezone.utc)
             client_handler.write_file(profile_file_path, compressed_profile)
+            s3_upload_time_ms = (datetime.now(timezone.utc) - s3_upload_start).total_seconds() * 1000
+            
+            logger.info(
+                f"✅ Profile stored to S3: service={service_name} file={profile_file_name} "
+                f"size={compressed_profile_file_size} bytes profile_age_sec={profile_age_seconds:.1f} "
+                f"s3_upload_ms={s3_upload_time_ms:.0f}"
+            )
         except Exception as s3_error:
             logger.error(f"Failed to write profile to S3: {s3_error}")
             MetricsPublisher.get_instance().send_sli_metric(
@@ -203,9 +214,12 @@ def new_profile_v2(
             "service_id": service_id,
             "file_size": profile_file_size,
             "compressed_size": compressed_profile_file_size,
+            "compression_ratio": round(compressed_profile_file_size / profile_file_size, 2) if profile_file_size > 0 else 0,
             "instance_type": metadata.get("instance_type", ""),
             "version": 2,
             "profile_filename": profile_file_name,
+            "hostname": hostname,
+            "profile_age_sec": round(profile_age_seconds, 1),
         }
         # Down sampler for handling situations with income data overload.
         # Task will be sent to indexer only if generated random value (0.0 to 1.0 range)
@@ -219,7 +233,10 @@ def new_profile_v2(
                 "service_id": service_id,
             }
             try:
+                sqs_send_start = datetime.now(timezone.utc)
                 sqs.send_message(QueueUrl=config.SQS_INDEXER_QUEUE_URL, MessageBody=json.dumps(msg))
+                sqs_send_time_ms = (datetime.now(timezone.utc) - sqs_send_start).total_seconds() * 1000
+                extra_info["sqs_send_ms"] = round(sqs_send_time_ms, 0)
                 logger.info("send task to queue", extra=extra_info)
             except Exception as sqs_error:
                 logger.error(f"Failed to send message to SQS: {sqs_error}")
@@ -230,7 +247,7 @@ def new_profile_v2(
                 )
                 raise HTTPException(500, {"message": "Failed to process profile upload"})
         else:
-            logger.info("drop task due sampling", extra=extra_info)
+            logger.info(f"⚠️  Task dropped due to sampling: service={service_name} file={profile_file_name} threshold={service_sample_threshold}", extra=extra_info)
 
     except KeyError as key_error:
         # Client error - missing parameter
