@@ -33,6 +33,17 @@ const ProfilingTopPanel = ({
         }));
     };
 
+    // Helper function to handle async profiler nested config changes
+    const handleAsyncProfilerConfigChange = (field, value) => {
+        onProfilerConfigsChange(prev => ({
+            ...prev,
+            async_profiler: {
+                ...prev.async_profiler,
+                [field]: value
+            }
+        }));
+    };
+
     // Profiler configuration definitions
     const profilerDefinitions = [
         {
@@ -42,15 +53,6 @@ const ProfilingTopPanel = ({
             options: [
                 { value: 'enabled_restricted', label: 'Enabled Restricted', tooltip: 'Profiles only top N containers/process', default: true },
                 { value: 'enabled_aggressive', label: 'Enabled Aggressive', tooltip: 'Profiles all processes' },
-                { value: 'disabled', label: 'Disabled' }
-            ]
-        },
-        {
-            key: 'async_profiler',
-            name: 'Async Profiler',
-            description: 'Java',
-            options: [
-                { value: 'enabled', label: 'Enabled', default: true },
                 { value: 'disabled', label: 'Disabled' }
             ]
         },
@@ -280,7 +282,127 @@ const ProfilingTopPanel = ({
                     </AccordionSummary>
                     <AccordionDetails sx={{ p: 3 }}>
                         <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 3 }}>
-                            {profilerDefinitions.map((profiler) => (
+                            {/* Render Perf Profiler first */}
+                            {profilerDefinitions.filter(p => p.key === 'perf').map((profiler) => (
+                                <Box key={profiler.key} sx={{ 
+                                    border: '1px solid #e0e0e0', 
+                                    borderRadius: 2, 
+                                    p: 2,
+                                    backgroundColor: '#fafafa'
+                                }}>
+                                    <Typography variant="body2" sx={{ fontSize: '0.875rem', fontWeight: 600, mb: 0.5 }}>
+                                        {profiler.name}
+                                    </Typography>
+                                    <Typography variant="body2" sx={{ fontSize: '0.75rem', color: 'text.secondary', mb: 2 }}>
+                                        {profiler.description}
+                                    </Typography>
+                                    <RadioGroup
+                                        value={profilerConfigs[profiler.key]}
+                                        onChange={(e) => handleProfilerConfigChange(profiler.key, e.target.value)}
+                                    >
+                                        {profiler.options.map((option) => (
+                                            <Tooltip 
+                                                key={option.value} 
+                                                title={option.tooltip || ''} 
+                                                placement="right"
+                                                arrow
+                                            >
+                                                <FormControlLabel
+                                                    value={option.value}
+                                                    control={<Radio size="small" />}
+                                                    label={
+                                                        <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
+                                                            {option.label}
+                                                        </Typography>
+                                                    }
+                                                    sx={{ mb: 0.5 }}
+                                                />
+                                            </Tooltip>
+                                        ))}
+                                    </RadioGroup>
+                                </Box>
+                            ))}
+                            
+                            {/* Custom Async Profiler Configuration - Right after Perf */}
+                            <Box sx={{ 
+                                border: '1px solid #e0e0e0', 
+                                borderRadius: 2, 
+                                p: 2,
+                                backgroundColor: '#fafafa'
+                            }}>
+                                <Typography variant="body2" sx={{ fontSize: '0.875rem', fontWeight: 600, mb: 0.5 }}>
+                                    Async Profiler
+                                </Typography>
+                                <Typography variant="body2" sx={{ fontSize: '0.75rem', color: 'text.secondary', mb: 2 }}>
+                                    Java
+                                </Typography>
+                                
+                                {/* Enable/Disable Toggle */}
+                                <FormControlLabel
+                                    control={
+                                        <Checkbox
+                                            checked={profilerConfigs.async_profiler?.enabled || false}
+                                            onChange={(e) => handleAsyncProfilerConfigChange('enabled', e.target.checked)}
+                                            size="small"
+                                        />
+                                    }
+                                    label={
+                                        <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
+                                            Enabled
+                                        </Typography>
+                                    }
+                                    sx={{ mb: 1 }}
+                                />
+                                
+                                {/* Time Mode Selection */}
+                                {profilerConfigs.async_profiler?.enabled && (
+                                    <Box sx={{ ml: 3 }}>
+                                        <Typography variant="body2" sx={{ fontSize: '0.75rem', fontWeight: 500, mb: 1 }}>
+                                            Time Mode:
+                                        </Typography>
+                                        <RadioGroup
+                                            value={profilerConfigs.async_profiler?.time || 'cpu'}
+                                            onChange={(e) => handleAsyncProfilerConfigChange('time', e.target.value)}
+                                        >
+                                            <Tooltip 
+                                                title="CPU time profiling - only when thread is running" 
+                                                placement="right"
+                                                arrow
+                                            >
+                                                <FormControlLabel
+                                                    value="cpu"
+                                                    control={<Radio size="small" />}
+                                                    label={
+                                                        <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
+                                                            CPU Time
+                                                        </Typography>
+                                                    }
+                                                    sx={{ mb: 0.5 }}
+                                                />
+                                            </Tooltip>
+                                            <Tooltip 
+                                                title="Wall clock time profiling - includes waiting/blocking time" 
+                                                placement="right"
+                                                arrow
+                                            >
+                                                <FormControlLabel
+                                                    value="wall"
+                                                    control={<Radio size="small" />}
+                                                    label={
+                                                        <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
+                                                            Wall Time
+                                                        </Typography>
+                                                    }
+                                                    sx={{ mb: 0.5 }}
+                                                />
+                                            </Tooltip>
+                                        </RadioGroup>
+                                    </Box>
+                                )}
+                            </Box>
+                            
+                            {/* Render remaining profilers (excluding perf) */}
+                            {profilerDefinitions.filter(p => p.key !== 'perf').map((profiler) => (
                                 <Box key={profiler.key} sx={{ 
                                     border: '1px solid #e0e0e0', 
                                     borderRadius: 2, 

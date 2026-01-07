@@ -124,7 +124,10 @@ const ProfilingStatusPage = () => {
     // Profiler configurations state
     const [profilerConfigs, setProfilerConfigs] = useState({
         perf: 'enabled_restricted', // 'enabled_restricted', 'enabled_aggressive', 'disabled'
-        async_profiler: 'enabled', // 'enabled', 'disabled'
+        async_profiler: {
+            enabled: true,
+            time: 'cpu' // 'cpu' or 'wall'
+        },
         pyperf: 'enabled', // 'enabled', 'disabled'
         pyspy: 'enabled_fallback', // 'enabled_fallback', 'enabled', 'disabled'
         rbspy: 'disabled', // 'enabled', 'disabled'
@@ -654,7 +657,11 @@ const ProfilingStatusPage = () => {
                                         profilerConfigs.perf === 'enabled_restricted' ? 'Enabled (Restricted)' :
                                         profilerConfigs.perf === 'enabled_aggressive' ? 'Enabled (Aggressive)' : 'Disabled'
                                     }</Typography>
-                                    <Typography variant="body2">• Java Async Profiler: {profilerConfigs.async_profiler === 'enabled' ? 'Enabled' : 'Disabled'}</Typography>
+                                    <Typography variant="body2">• Java Async Profiler: {
+                                        profilerConfigs.async_profiler?.enabled 
+                                            ? `Enabled (${profilerConfigs.async_profiler.time === 'wall' ? 'Wall Time' : 'CPU Time'})`
+                                            : 'Disabled'
+                                    }</Typography>
                                     <Typography variant="body2">• Pyperf (Python): {profilerConfigs.pyperf === 'enabled' ? 'Enabled' : 'Disabled'}</Typography>
                                     <Typography variant="body2">• Pyspy (Python): {
                                         profilerConfigs.pyspy === 'enabled_fallback' ? 'Enabled (Fallback)' :
