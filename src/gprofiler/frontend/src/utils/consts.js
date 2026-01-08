@@ -49,7 +49,7 @@ export const PAGES = {
     },
     profiling: {
         key: 'profiling',
-        label: 'Dynamic Profiling',
+        label: 'Profile Configurations',
         to: '/profiling',
     },
 };
