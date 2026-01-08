@@ -1475,6 +1475,9 @@ class DBManager(metaclass=Singleton):
         LEFT JOIN current_commands c
             ON h.hostname = c.hostname AND h.service_name = c.service_name
         WHERE 1=1
+            -- Only show hosts that sent heartbeat in last 2 minutes (recently active)
+            -- This improves page load performance by filtering out stale/inactive hosts
+            AND h.heartbeat_timestamp > NOW() - INTERVAL '2 minutes'
         """
 
         values: Dict[str, Any] = {}
