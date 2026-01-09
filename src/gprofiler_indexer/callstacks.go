@@ -53,8 +53,9 @@ type FileInfo struct {
 			ProfileApiVersion string `json:"profile_api_version"`
 		} `json:"run_arguments"`
 	} `json:"metadata"`
-	HTMLBlob string `json:"htmlblob"`
-	Metrics  struct {
+	HTMLBlob       string `json:"htmlblob"`
+	FlamegraphHTML string `json:"flamegraph_html"`
+	Metrics        struct {
 		CPUAvg    float64 `json:"cpu_avg"`
 		MemoryAvg float64 `json:"mem_avg"`
 	} `json:"metrics"`
@@ -290,6 +291,29 @@ func (pw *ProfilesWriter) ParseStackFrameFile(sess *session.Session, task SQSMes
 			if err != nil {
 				log.Errorf("failed to upload HTML blob for file %s: %v", task.Filename, err)
 			}
+		}
+	}
+
+	// Save flamegraph HTML if present
+	if fileInfo.FlamegraphHTML != "" {
+		baseFileName := strings.TrimSuffix(task.Filename, ".gz")
+		flamegraphHTMLPath := fmt.Sprintf("products/%s/stacks/flamegraph/%s_flamegraph.html", task.Service, baseFileName)
+		
+		var flamegraphData []byte
+		// Try to decode as base64, if it fails, treat it as plain HTML
+		decodedFlamegraph, err := base64.StdEncoding.DecodeString(fileInfo.FlamegraphHTML)
+		if err != nil {
+			log.Warnf("flamegraph HTML for file %s is not base64-encoded, treating as plain HTML", task.Filename)
+			flamegraphData = []byte(fileInfo.FlamegraphHTML)
+		} else {
+			flamegraphData = decodedFlamegraph
+		}
+		
+		err = PutFileToS3(sess, s3bucket, flamegraphHTMLPath, flamegraphData)
+		if err != nil {
+			log.Errorf("failed to upload flamegraph HTML for file %s: %v", task.Filename, err)
+		} else {
+			log.Infof("successfully uploaded flamegraph HTML to %s", flamegraphHTMLPath)
 		}
 	}
 
