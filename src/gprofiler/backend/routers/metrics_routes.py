@@ -17,7 +17,7 @@
 import json
 import math
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from logging import getLogger
 from typing import List, Optional
 
@@ -984,7 +984,7 @@ def get_adhoc_flamegraphs(
                 # Remove the _flamegraph.html suffix to get the base filename
                 base_filename = filename.replace('_flamegraph.html', '')
                 timestamp_str = base_filename.split('_')[0]
-                timestamp = datetime.fromisoformat(timestamp_str)
+                timestamp = datetime.fromisoformat(timestamp_str).replace(tzinfo=timezone.utc)
                 
                 # Filter by time range if specified
                 if fg_params.start_time and timestamp < fg_params.start_time:
@@ -1037,9 +1037,9 @@ def get_adhoc_flamegraph_content(
         # Build full S3 path for flamegraph HTML files
         s3_path = f"products/{service_name}/stacks/flamegraph/{filename}"
         
-        # Fetch file content from S3
+        # Fetch file content from S3 (flamegraph HTML files are not gzipped)
         try:
-            html_content = s3_dal.get_object(s3_path, is_gzip=True)
+            html_content = s3_dal.get_object(s3_path, is_gzip=False)
         except ClientError as e:
             if e.response['Error']['Code'] == 'NoSuchKey':
                 raise HTTPException(status_code=404, detail="Flamegraph file not found")

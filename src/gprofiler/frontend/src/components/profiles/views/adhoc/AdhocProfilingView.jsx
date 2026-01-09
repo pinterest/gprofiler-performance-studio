@@ -72,7 +72,10 @@ const AdhocProfilingView = () => {
 
     useEffect(() => {
         if (fileContent) {
-            setSelectedFileContent(fileContent.content);
+            console.log('File content received:', fileContent);
+            // Handle both direct content string and object with content property
+            const htmlContent = typeof fileContent === 'string' ? fileContent : fileContent.content;
+            setSelectedFileContent(htmlContent);
         } else {
             setSelectedFileContent(null);
         }
@@ -80,7 +83,7 @@ const AdhocProfilingView = () => {
 
     const handleFileSelect = (event) => {
         const filename = event.target.value;
-        const file = filesData?.files.find(f => f.filename === filename);
+        const file = filesData?.find(f => f.filename === filename);
         setSelectedFile(file);
     };
 
@@ -100,7 +103,7 @@ const AdhocProfilingView = () => {
         <Flexbox column sx={{ height: '100%', width: '100%', p: 2 }}>
             <Box sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 2 }}>
                 <Typography variant="h6">Adhoc Profiling</Typography>
-                {filesData?.files && filesData.files.length > 0 && (
+                {filesData && filesData.length > 0 && (
                     <FormControl sx={{ minWidth: 200 }}>
                         <InputLabel id="select-file-label">Select Flamegraph File</InputLabel>
                         <Select
@@ -109,7 +112,7 @@ const AdhocProfilingView = () => {
                             label="Select Flamegraph File"
                             onChange={handleFileSelect}
                         >
-                            {filesData.files.map((file) => (
+                            {filesData.map((file) => (
                                 <MenuItem key={file.filename} value={file.filename}>
                                     {format(new Date(file.timestamp), 'yyyy-MM-dd HH:mm:ss')} - {file.hostname || 'N/A'}
                                 </MenuItem>
@@ -119,9 +122,9 @@ const AdhocProfilingView = () => {
                 )}
             </Box>
 
-            {filesData?.files && filesData.files.length > 0 ? (
-                <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    <TableContainer component={Paper} sx={{ maxHeight: 300, overflowY: 'auto' }}>
+            {filesData && filesData.length > 0 ? (
+                <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: 2, height: 'calc(100vh - 300px)' }}>
+                    <TableContainer component={Paper} sx={{ maxHeight: 300, overflowY: 'auto', flexShrink: 0 }}>
                         <Table stickyHeader size="small">
                             <TableHead>
                                 <TableRow>
@@ -132,7 +135,7 @@ const AdhocProfilingView = () => {
                                 </TableRow>
                             </TableHead>
                             <TableBody>
-                                {filesData.files.map((file) => (
+                                {filesData.map((file) => (
                                     <TableRow
                                         key={file.filename}
                                         onClick={() => handleRowClick(file)}
@@ -153,21 +156,30 @@ const AdhocProfilingView = () => {
 
                     {contentLoading && <Typography>Loading flamegraph content...</Typography>}
                     {contentError && <Typography color="error">Error loading flamegraph content: {contentError.message}</Typography>}
-                    {selectedFileContent && (
-                        <Box sx={{ flexGrow: 1, position: 'relative', width: '100%' }}>
+                    {selectedFileContent ? (
+                        <Box 
+                            sx={{ 
+                                flexGrow: 1, 
+                                width: '100%',
+                                height: '100%',
+                                minHeight: '700px',
+                                position: 'relative'
+                            }}
+                        >
                             <iframe
                                 style={{
-                                    position: 'absolute',
-                                    margin: 0,
                                     width: '100%',
                                     height: '100%',
                                     border: 'none',
                                 }}
                                 title="Adhoc Flamegraph"
                                 srcDoc={selectedFileContent}
+                                sandbox="allow-scripts allow-same-origin"
                             />
                         </Box>
-                    )}
+                    ) : selectedFile && !contentLoading && !contentError ? (
+                        <Typography>Click view to load flamegraph content</Typography>
+                    ) : null}
                 </Box>
             ) : (
                 <Typography>No adhoc flamegraphs found for the selected service and time range.</Typography>
