@@ -297,6 +297,16 @@ func (pw *ProfilesWriter) ParseStackFrameFile(sess *session.Session, task SQSMes
 	// Save flamegraph HTML if present
 	if fileInfo.FlamegraphHTML != "" {
 		baseFileName := strings.TrimSuffix(task.Filename, ".gz")
+		
+		// Replace hostname hash with actual hostname in the filename
+		// Format: <start_time_iso_format>_<random_suffix>_<hostname_hash> -> <start_time_iso_format>_<random_suffix>_<hostname>
+		parts := strings.Split(baseFileName, "_")
+		if len(parts) >= 3 {
+			// Replace the last part (hostname hash) with actual hostname
+			parts[len(parts)-1] = fileInfo.Metadata.Hostname
+			baseFileName = strings.Join(parts, "_")
+		}
+		
 		flamegraphHTMLPath := fmt.Sprintf("products/%s/stacks/flamegraph/%s_flamegraph.html", task.Service, baseFileName)
 		
 		var flamegraphData []byte

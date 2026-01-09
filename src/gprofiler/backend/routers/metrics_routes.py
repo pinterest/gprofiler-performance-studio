@@ -45,7 +45,7 @@ from backend.models.metrics_models import (
     SampleCount,
 )
 from backend.utils.dynamic_profiling_utils import validate_profiling_capacity
-from backend.utils.filters_utils import get_rql_first_eq_key, get_rql_only_for_one_key
+from backend.utils.filters_utils import get_rql_first_eq_key, get_rql_only_for_one_key, get_rql_all_eq_values
 from backend.utils.notifications import SlackNotifier
 from backend.utils.request_utils import flamegraph_base_request_params, get_metrics_response, get_query_response
 from botocore.exceptions import ClientError
@@ -960,10 +960,14 @@ def get_adhoc_flamegraphs(
     """
     Get list of available adhoc flamegraph files from S3 for the given service and time range.
     Files are stored in S3 path: products/{service}/stacks/flamegraph/
+    Supports filtering by hostname(s) if specified in the filter parameters.
     """
     try:
         s3_dal = S3ProfileDal(logger)
         service_name = fg_params.service_name
+        
+        # Extract all hostname filters from fg_params if present
+        hostname_filters = get_rql_all_eq_values(fg_params.filter, FilterTypes.HOSTNAME_KEY)
         
         # Build S3 path for flamegraph files
         flamegraph_prefix = f"products/{service_name}/stacks/flamegraph/"
@@ -979,30 +983,38 @@ def get_adhoc_flamegraphs(
             if not filename.endswith('_flamegraph.html'):
                 continue
             
-            # Parse timestamp from filename (format: 2026-01-09T00:11:06_...)
+            # Parse timestamp and hostname from filename
             try:
                 # Remove the _flamegraph.html suffix to get the base filename
                 base_filename = filename.replace('_flamegraph.html', '')
-                timestamp_str = base_filename.split('_')[0]
+                
+                # Parse timestamp (format: 2026-01-09T00:11:06_random_suffix_hostname)
+                filename_parts = base_filename.split('_')
+                if len(filename_parts) < 3:
+                    continue
+                    
+                timestamp_str = filename_parts[0]
                 timestamp = datetime.fromisoformat(timestamp_str).replace(tzinfo=timezone.utc)
+                
+                # Extract hostname from filename (last part after underscores)
+                # Format: timestamp_random_suffix_hostname
+                hostname = '_'.join(filename_parts[2:]) if len(filename_parts) > 2 else None
                 
                 # Filter by time range if specified
                 if fg_params.start_time and timestamp < fg_params.start_time:
                     continue
                 if fg_params.end_time and timestamp > fg_params.end_time:
                     continue
+                
+                # Filter by hostname(s) if specified in the filter
+                # If hostname_filters is not empty, only include files where hostname matches one of the filters
+                if hostname_filters and hostname and hostname not in hostname_filters:
+                    continue
                     
-            except (ValueError, IndexError):
+            except (ValueError, IndexError) as e:
                 # Skip files that don't match expected naming pattern
+                logger.debug(f"Skipping file {filename} due to parsing error: {e}")
                 continue
-            
-            # Extract hostname from filename if available
-            hostname = None
-            base_filename_parts = base_filename.split('_')
-            if len(base_filename_parts) >= 3:
-                # Try to extract hostname from the filename pattern
-                # Format: timestamp_hash_hostname_hash (without _flamegraph.html)
-                hostname = base_filename_parts[2] if len(base_filename_parts) > 2 else None
             
             flamegraph_files.append(FlamegraphFile(
                 filename=filename,
