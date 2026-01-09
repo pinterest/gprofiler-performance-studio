@@ -975,9 +975,15 @@ def get_adhoc_flamegraphs(
         for file_info in files:
             filename = file_info['Key'].split('/')[-1]  # Get just the filename
             
+            # Only include flamegraph HTML files (they end with _flamegraph.html)
+            if not filename.endswith('_flamegraph.html'):
+                continue
+            
             # Parse timestamp from filename (format: 2026-01-09T00:11:06_...)
             try:
-                timestamp_str = filename.split('_')[0]
+                # Remove the _flamegraph.html suffix to get the base filename
+                base_filename = filename.replace('_flamegraph.html', '')
+                timestamp_str = base_filename.split('_')[0]
                 timestamp = datetime.fromisoformat(timestamp_str)
                 
                 # Filter by time range if specified
@@ -992,11 +998,11 @@ def get_adhoc_flamegraphs(
             
             # Extract hostname from filename if available
             hostname = None
-            filename_parts = filename.split('_')
-            if len(filename_parts) >= 3:
+            base_filename_parts = base_filename.split('_')
+            if len(base_filename_parts) >= 3:
                 # Try to extract hostname from the filename pattern
-                # Format: timestamp_hash_hostname_hash_flamegraph.html
-                hostname = filename_parts[2] if len(filename_parts) > 2 else None
+                # Format: timestamp_hash_hostname_hash (without _flamegraph.html)
+                hostname = base_filename_parts[2] if len(base_filename_parts) > 2 else None
             
             flamegraph_files.append(FlamegraphFile(
                 filename=filename,
@@ -1028,7 +1034,7 @@ def get_adhoc_flamegraph_content(
     try:
         s3_dal = S3ProfileDal(logger)
         
-        # Build full S3 path
+        # Build full S3 path for flamegraph HTML files
         s3_path = f"products/{service_name}/stacks/flamegraph/{filename}"
         
         # Fetch file content from S3
