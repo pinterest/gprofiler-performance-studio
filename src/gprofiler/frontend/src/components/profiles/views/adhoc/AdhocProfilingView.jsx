@@ -1,239 +1,176 @@
-{
-    /*
-     * Copyright (C) 2023 Intel Corporation
-     *
-     * Licensed under the Apache License, Version 2.0 (the "License");
-     * you may not use this file except in compliance with the License.
-     * You may obtain a copy of the License at
-     *
-     *    http://www.apache.org/licenses/LICENSE-2.0
-     *
-     * Unless required by applicable law or agreed to in writing, software
-     * distributed under the License is distributed on an "AS IS" BASIS,
-     * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-     * See the License for the specific language governing permissions and
-     * limitations under the License.
-     */
-}
+/*
+ * Copyright (C) 2023 Intel Corporation
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
-import {
-    Box,
-    CircularProgress,
-    FormControl,
-    InputLabel,
-    MenuItem,
-    Select,
-    Table,
-    TableBody,
-    TableCell,
-    TableContainer,
-    TableHead,
-    TableRow,
-    Typography,
-    Paper,
-    Alert,
-} from '@mui/material';
 import { useContext, useEffect, useState } from 'react';
-import { stringify } from 'query-string';
-
-import { DATA_URLS } from '@/api/urls';
-import useFetchWithRequest from '@/api/hooks/useFetchWithRequest';
-import Flexbox from '@/components/common/layout/Flexbox';
+import { Box, Typography, Select, MenuItem, FormControl, InputLabel, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Button } from '@mui/material';
 import { SelectorsContext } from '@/states';
 import { FilterTagsContext } from '@/states/filters/FiltersTagsContext';
-import { getStartEndDateTimeFromSelection } from '@/utils/dateTimeUtils';
+import useFetchWithRequest from '@/api/useFetchWithRequest';
+import { DATA_URLS } from '@/api/urls';
+import { stringify } from 'query-string';
+import { getStartEndDateTimeFromSelection } from '@/api/utils';
+import { format } from 'date-fns';
+import Flexbox from '@/components/common/layout/Flexbox';
 
 const AdhocProfilingView = () => {
-    const { selectedService, timeSelection } = useContext(SelectorsContext);
+    const { selectedService, timeSelection, selectedHost } = useContext(SelectorsContext);
     const { activeFilterTag } = useContext(FilterTagsContext);
-    const [selectedFlamegraph, setSelectedFlamegraph] = useState('');
-    const [flamegraphContent, setFlamegraphContent] = useState('');
-    const [loadingContent, setLoadingContent] = useState(false);
+    const [selectedFile, setSelectedFile] = useState(null);
+    const [selectedFileContent, setSelectedFileContent] = useState(null);
 
-    // Get time parameters
     const timeParams = getStartEndDateTimeFromSelection(timeSelection);
-    
-    // Build request parameters
-    const requestParams = {
-        serviceName: selectedService,
-        ...timeParams,
-        filter: activeFilterTag?.filter ? JSON.stringify(activeFilterTag) : undefined,
-    };
+    const hostFilter = selectedHost ? `HostName = "${selectedHost}"` : '';
+    const filter = activeFilterTag?.filter ? JSON.stringify({ ...activeFilterTag, filter: `${activeFilterTag.filter} AND ${hostFilter}` }) : JSON.stringify({ filter: hostFilter });
 
-    // Fetch available flamegraph files
-    const { data: flamegraphFiles, loading: loadingFiles, error } = useFetchWithRequest(
+    const { data: filesData, loading: filesLoading, error: filesError, run: fetchFiles } = useFetchWithRequest(
         {
-            url: `${DATA_URLS.GET_ADHOC_FLAMEGRAPHS}?${stringify(requestParams)}`,
+            url: `${DATA_URLS.GET_ADHOC_FLAMEGRAPHS}?${stringify({
+                serviceName: selectedService,
+                ...timeParams,
+                filter: filter,
+            })}`,
         },
-        {
-            refreshDeps: [selectedService, timeSelection, activeFilterTag],
-            ready: !!selectedService,
-        }
+        { manual: true }
     );
 
-    // Fetch selected flamegraph content
-    const fetchFlamegraphContent = async (filename) => {
-        if (!filename) return;
-        
-        setLoadingContent(true);
-        try {
-            const contentParams = {
+    const { data: fileContent, loading: contentLoading, error: contentError, run: fetchFileContent } = useFetchWithRequest(
+        {
+            url: `${DATA_URLS.GET_ADHOC_FLAMEGRAPH_CONTENT}?${stringify({
                 serviceName: selectedService,
-                filename: filename,
-                filter: activeFilterTag?.filter ? JSON.stringify(activeFilterTag) : undefined,
-            };
-            
-            const response = await fetch(`${DATA_URLS.GET_ADHOC_FLAMEGRAPH_CONTENT}?${stringify(contentParams)}`);
-            if (response.ok) {
-                const result = await response.json();
-                setFlamegraphContent(result.content);
-            } else {
-                console.error('Failed to fetch flamegraph content');
-                setFlamegraphContent('');
-            }
-        } catch (error) {
-            console.error('Error fetching flamegraph content:', error);
-            setFlamegraphContent('');
-        } finally {
-            setLoadingContent(false);
+                filename: selectedFile?.filename,
+            })}`,
+        },
+        { manual: true }
+    );
+
+    useEffect(() => {
+        if (selectedService && timeSelection) {
+            fetchFiles();
+            setSelectedFile(null);
+            setSelectedFileContent(null);
         }
-    };
+    }, [selectedService, timeSelection, activeFilterTag, selectedHost, fetchFiles]);
 
-    // Handle flamegraph selection
-    const handleFlamegraphSelect = (filename) => {
-        setSelectedFlamegraph(filename);
-        fetchFlamegraphContent(filename);
-    };
-
-    // Format timestamp for display
-    const formatTimestamp = (filename) => {
-        const timestampMatch = filename.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})/);
-        if (timestampMatch) {
-            return new Date(timestampMatch[1]).toLocaleString();
+    useEffect(() => {
+        if (selectedFile) {
+            fetchFileContent();
         }
-        return filename;
+    }, [selectedFile, fetchFileContent]);
+
+    useEffect(() => {
+        if (fileContent) {
+            setSelectedFileContent(fileContent.content);
+        } else {
+            setSelectedFileContent(null);
+        }
+    }, [fileContent]);
+
+    const handleFileSelect = (event) => {
+        const filename = event.target.value;
+        const file = filesData?.files.find(f => f.filename === filename);
+        setSelectedFile(file);
     };
 
-    if (error) {
-        return (
-            <Box p={3}>
-                <Alert severity="error">
-                    Failed to load adhoc flamegraph files. Please try again later.
-                </Alert>
-            </Box>
-        );
+    const handleRowClick = (file) => {
+        setSelectedFile(file);
+    };
+
+    if (filesLoading) {
+        return <Typography>Loading adhoc flamegraphs...</Typography>;
+    }
+
+    if (filesError) {
+        return <Typography color="error">Error loading adhoc flamegraphs: {filesError.message}</Typography>;
     }
 
     return (
-        <Flexbox column spacing={3} sx={{ height: '100%', p: 3 }}>
-            {/* Header */}
-            <Typography variant="h6" gutterBottom>
-                Adhoc Profiling - Select Flamegraph
-            </Typography>
-
-            {/* File Selection */}
-            <Box sx={{ minHeight: 300 }}>
-                {loadingFiles ? (
-                    <Box display="flex" justifyContent="center" alignItems="center" height={200}>
-                        <CircularProgress />
-                        <Typography variant="body2" sx={{ ml: 2 }}>
-                            Loading flamegraph files...
-                        </Typography>
-                    </Box>
-                ) : flamegraphFiles && flamegraphFiles.length > 0 ? (
-                    <>
-                        {/* Dropdown Selector */}
-                        <FormControl fullWidth sx={{ mb: 3 }}>
-                            <InputLabel>Select Flamegraph File</InputLabel>
-                            <Select
-                                value={selectedFlamegraph}
-                                label="Select Flamegraph File"
-                                onChange={(e) => handleFlamegraphSelect(e.target.value)}
-                            >
-                                {flamegraphFiles.map((file) => (
-                                    <MenuItem key={file.filename} value={file.filename}>
-                                        {formatTimestamp(file.filename)} - {file.hostname || 'Unknown Host'}
-                                    </MenuItem>
-                                ))}
-                            </Select>
-                        </FormControl>
-
-                        {/* Table View */}
-                        <TableContainer component={Paper} sx={{ maxHeight: 400 }}>
-                            <Table stickyHeader>
-                                <TableHead>
-                                    <TableRow>
-                                        <TableCell>Timestamp</TableCell>
-                                        <TableCell>Hostname</TableCell>
-                                        <TableCell>File Size</TableCell>
-                                        <TableCell>Action</TableCell>
-                                    </TableRow>
-                                </TableHead>
-                                <TableBody>
-                                    {flamegraphFiles.map((file) => (
-                                        <TableRow 
-                                            key={file.filename}
-                                            hover
-                                            selected={selectedFlamegraph === file.filename}
-                                            sx={{ cursor: 'pointer' }}
-                                            onClick={() => handleFlamegraphSelect(file.filename)}
-                                        >
-                                            <TableCell>{formatTimestamp(file.filename)}</TableCell>
-                                            <TableCell>{file.hostname || 'Unknown'}</TableCell>
-                                            <TableCell>{file.size ? `${Math.round(file.size / 1024)} KB` : 'N/A'}</TableCell>
-                                            <TableCell>
-                                                <Typography 
-                                                    variant="body2" 
-                                                    color="primary" 
-                                                    sx={{ cursor: 'pointer' }}
-                                                >
-                                                    {selectedFlamegraph === file.filename ? 'Selected' : 'Select'}
-                                                </Typography>
-                                            </TableCell>
-                                        </TableRow>
-                                    ))}
-                                </TableBody>
-                            </Table>
-                        </TableContainer>
-                    </>
-                ) : (
-                    <Alert severity="info">
-                        No adhoc flamegraph files found for the selected time range and filters.
-                    </Alert>
+        <Flexbox column sx={{ height: '100%', width: '100%', p: 2 }}>
+            <Box sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Typography variant="h6">Adhoc Profiling</Typography>
+                {filesData?.files && filesData.files.length > 0 && (
+                    <FormControl sx={{ minWidth: 200 }}>
+                        <InputLabel id="select-file-label">Select Flamegraph File</InputLabel>
+                        <Select
+                            labelId="select-file-label"
+                            value={selectedFile?.filename || ''}
+                            label="Select Flamegraph File"
+                            onChange={handleFileSelect}
+                        >
+                            {filesData.files.map((file) => (
+                                <MenuItem key={file.filename} value={file.filename}>
+                                    {format(new Date(file.timestamp), 'yyyy-MM-dd HH:mm:ss')} - {file.hostname || 'N/A'}
+                                </MenuItem>
+                            ))}
+                        </Select>
+                    </FormControl>
                 )}
             </Box>
 
-            {/* Flamegraph Viewer */}
-            {selectedFlamegraph && (
-                <Box sx={{ flex: 1, minHeight: 400 }}>
-                    <Typography variant="h6" gutterBottom>
-                        Selected Flamegraph: {formatTimestamp(selectedFlamegraph)}
-                    </Typography>
-                    
-                    {loadingContent ? (
-                        <Box display="flex" justifyContent="center" alignItems="center" height={300}>
-                            <CircularProgress />
-                            <Typography variant="body2" sx={{ ml: 2 }}>
-                                Loading flamegraph content...
-                            </Typography>
+            {filesData?.files && filesData.files.length > 0 ? (
+                <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <TableContainer component={Paper} sx={{ maxHeight: 300, overflowY: 'auto' }}>
+                        <Table stickyHeader size="small">
+                            <TableHead>
+                                <TableRow>
+                                    <TableCell>Timestamp</TableCell>
+                                    <TableCell>Hostname</TableCell>
+                                    <TableCell>Size</TableCell>
+                                    <TableCell>Action</TableCell>
+                                </TableRow>
+                            </TableHead>
+                            <TableBody>
+                                {filesData.files.map((file) => (
+                                    <TableRow
+                                        key={file.filename}
+                                        onClick={() => handleRowClick(file)}
+                                        selected={selectedFile?.filename === file.filename}
+                                        sx={{ cursor: 'pointer', '&:hover': { backgroundColor: 'action.hover' } }}
+                                    >
+                                        <TableCell>{format(new Date(file.timestamp), 'yyyy-MM-dd HH:mm:ss')}</TableCell>
+                                        <TableCell>{file.hostname || 'N/A'}</TableCell>
+                                        <TableCell>{(file.size / 1024).toFixed(2)} KB</TableCell>
+                                        <TableCell>
+                                            <Button size="small" onClick={() => handleRowClick(file)}>View</Button>
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    </TableContainer>
+
+                    {contentLoading && <Typography>Loading flamegraph content...</Typography>}
+                    {contentError && <Typography color="error">Error loading flamegraph content: {contentError.message}</Typography>}
+                    {selectedFileContent && (
+                        <Box sx={{ flexGrow: 1, position: 'relative', width: '100%' }}>
+                            <iframe
+                                style={{
+                                    position: 'absolute',
+                                    margin: 0,
+                                    width: '100%',
+                                    height: '100%',
+                                    border: 'none',
+                                }}
+                                title="Adhoc Flamegraph"
+                                srcDoc={selectedFileContent}
+                            />
                         </Box>
-                    ) : flamegraphContent ? (
-                        <iframe
-                            style={{
-                                width: '100%',
-                                height: '500px',
-                                border: '1px solid #ddd',
-                                borderRadius: '4px',
-                            }}
-                            title={`Flamegraph: ${selectedFlamegraph}`}
-                            srcDoc={flamegraphContent}
-                        />
-                    ) : selectedFlamegraph ? (
-                        <Alert severity="warning">
-                            Failed to load flamegraph content. Please try selecting another file.
-                        </Alert>
-                    ) : null}
+                    )}
                 </Box>
+            ) : (
+                <Typography>No adhoc flamegraphs found for the selected service and time range.</Typography>
             )}
         </Flexbox>
     );
