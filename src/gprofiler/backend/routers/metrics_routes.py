@@ -17,7 +17,7 @@
 import json
 import math
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from logging import getLogger
 from typing import List, Optional
 
@@ -54,8 +54,25 @@ from fastapi.responses import JSONResponse, Response
 from gprofiler_dev import S3ProfileDal
 from gprofiler_dev.postgres.db_manager import DBManager
 
+# Adhoc profiling models
+from pydantic import BaseModel
+
 logger = getLogger(__name__)
 router = APIRouter()
+
+
+# Adhoc profiling models
+class FlamegraphFile(BaseModel):
+    filename: str
+    timestamp: datetime
+    hostname: Optional[str] = None
+    size: Optional[int] = None
+    s3_path: str
+
+
+class FlamegraphContent(BaseModel):
+    content: str
+    filename: str
 
 
 def get_time_interval_value(start_time: datetime, end_time: datetime, interval: str) -> str:
@@ -934,3 +951,108 @@ def get_profiling_host_status(
         )
 
     return results
+
+
+@router.get("/adhoc_flamegraphs", response_model=List[FlamegraphFile])
+def get_adhoc_flamegraphs(
+    fg_params: FGParamsBaseModel = Depends(flamegraph_base_request_params),
+):
+    """
+    Get list of available adhoc flamegraph files from S3 for the given service and time range.
+    Files are stored in S3 path: products/{service}/stacks/flamegraph/
+    """
+    try:
+        s3_dal = S3ProfileDal(logger)
+        service_name = fg_params.service_name
+        
+        # Build S3 path for flamegraph files
+        flamegraph_prefix = f"products/{service_name}/stacks/flamegraph/"
+        
+        # List files in S3 with the flamegraph prefix
+        files = s3_dal.list_files_with_prefix(flamegraph_prefix)
+        
+        flamegraph_files = []
+        for file_info in files:
+            filename = file_info['Key'].split('/')[-1]  # Get just the filename
+            
+            # Only include flamegraph HTML files (they end with _flamegraph.html)
+            if not filename.endswith('_flamegraph.html'):
+                continue
+            
+            # Parse timestamp from filename (format: 2026-01-09T00:11:06_...)
+            try:
+                # Remove the _flamegraph.html suffix to get the base filename
+                base_filename = filename.replace('_flamegraph.html', '')
+                timestamp_str = base_filename.split('_')[0]
+                timestamp = datetime.fromisoformat(timestamp_str).replace(tzinfo=timezone.utc)
+                
+                # Filter by time range if specified
+                if fg_params.start_time and timestamp < fg_params.start_time:
+                    continue
+                if fg_params.end_time and timestamp > fg_params.end_time:
+                    continue
+                    
+            except (ValueError, IndexError):
+                # Skip files that don't match expected naming pattern
+                continue
+            
+            # Extract hostname from filename if available
+            hostname = None
+            base_filename_parts = base_filename.split('_')
+            if len(base_filename_parts) >= 3:
+                # Try to extract hostname from the filename pattern
+                # Format: timestamp_hash_hostname_hash (without _flamegraph.html)
+                hostname = base_filename_parts[2] if len(base_filename_parts) > 2 else None
+            
+            flamegraph_files.append(FlamegraphFile(
+                filename=filename,
+                timestamp=timestamp,
+                hostname=hostname,
+                size=file_info.get('Size'),
+                s3_path=file_info['Key']
+            ))
+        
+        # Sort by timestamp descending (newest first)
+        flamegraph_files.sort(key=lambda x: x.timestamp, reverse=True)
+        
+        return flamegraph_files
+        
+    except Exception as e:
+        logger.error(f"Error fetching adhoc flamegraphs: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch adhoc flamegraph files")
+
+
+@router.get("/adhoc_flamegraph_content", response_model=FlamegraphContent)
+def get_adhoc_flamegraph_content(
+    filename: str = Query(..., description="Flamegraph filename to fetch"),
+    service_name: str = Query(..., alias="serviceName"),
+    fg_filter: Optional[str] = Query(None, alias="filter"),
+):
+    """
+    Get the content of a specific adhoc flamegraph HTML file from S3.
+    """
+    try:
+        s3_dal = S3ProfileDal(logger)
+        
+        # Build full S3 path for flamegraph HTML files
+        s3_path = f"products/{service_name}/stacks/flamegraph/{filename}"
+        
+        # Fetch file content from S3 (flamegraph HTML files are not gzipped)
+        try:
+            html_content = s3_dal.get_object(s3_path, is_gzip=False)
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'NoSuchKey':
+                raise HTTPException(status_code=404, detail="Flamegraph file not found")
+            else:
+                raise HTTPException(status_code=500, detail="Failed to fetch flamegraph content from S3")
+        
+        return FlamegraphContent(
+            content=html_content,
+            filename=filename
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching adhoc flamegraph content: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch flamegraph content")
