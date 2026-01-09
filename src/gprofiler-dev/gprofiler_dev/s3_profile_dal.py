@@ -16,7 +16,7 @@
 import gzip
 from datetime import datetime
 from io import BytesIO
-from typing import Callable, Optional
+from typing import Callable, Optional, List, Dict
 
 import boto3
 from botocore.config import Config
@@ -88,3 +88,25 @@ class S3ProfileDal:
 
     def upload_file(self, local_path: str, dest_path: str) -> None:
         self._s3_client.upload_file(local_path, self.bucket_name, dest_path)
+
+    def list_files_with_prefix(self, prefix: str) -> List[Dict]:
+        """List files in S3 with the given prefix"""
+        try:
+            response = self._s3_client.list_objects_v2(
+                Bucket=self.bucket_name,
+                Prefix=prefix
+            )
+            
+            files = []
+            if 'Contents' in response:
+                for obj in response['Contents']:
+                    files.append({
+                        'Key': obj['Key'],
+                        'Size': obj['Size'],
+                        'LastModified': obj['LastModified']
+                    })
+            
+            return files
+        except Exception as e:
+            self.logger.error(f"Error listing files with prefix {prefix}: {e}")
+            return []

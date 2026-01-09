@@ -21,6 +21,7 @@ import { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
 import useGetFgMetrics from '@/api/hooks/useGetFgMetrics';
 import HtmlView from '@/components/profiles/views/htmlView/HtmlView';
+import AdhocProfilingView from '@/components/profiles/views/adhoc/AdhocProfilingView';
 
 import {
     countZoomedSearchMatches,
@@ -249,6 +250,8 @@ const ProfilesViews = () => {
         <TableView timeSelection={timeSelection} rows={tableViewData} filteredData={filteredData} />
     ) : viewMode === PROFILES_VIEWS.html ? (
         <HtmlView lastHtml={lastHtmlData} />
+    ) : viewMode === PROFILES_VIEWS.adhoc ? (
+        <AdhocProfilingView />
     ) : !isFGEmpty ? (
         <FlamegraphView
             flameGraphData={flameGraphData}
