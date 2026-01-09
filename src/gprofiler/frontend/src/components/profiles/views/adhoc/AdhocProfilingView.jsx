@@ -161,9 +161,12 @@ const AdhocProfilingView = () => {
                             sx={{ 
                                 flexGrow: 1, 
                                 width: '100%',
-                                height: '100%',
-                                minHeight: '700px',
-                                position: 'relative'
+                                minHeight: 0,
+                                display: 'flex',
+                                border: '1px solid',
+                                borderColor: 'divider',
+                                borderRadius: 1,
+                                overflow: 'hidden'
                             }}
                         >
                             <iframe
@@ -171,6 +174,7 @@ const AdhocProfilingView = () => {
                                     width: '100%',
                                     height: '100%',
                                     border: 'none',
+                                    display: 'block'
                                 }}
                                 title="Adhoc Flamegraph"
                                 srcDoc={selectedFileContent}
