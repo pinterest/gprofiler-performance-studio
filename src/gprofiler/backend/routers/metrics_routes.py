@@ -40,6 +40,7 @@ from backend.models.metrics_models import (
     MetricSummary,
     ProfilingHostStatus,
     ProfilingHostStatusRequest,
+    ProfilingHostStatusResponse,
     ProfilingRequest,
     ProfilingResponse,
     SampleCount,
@@ -881,7 +882,7 @@ def report_command_completion(completion: CommandCompletionRequest):
         raise HTTPException(status_code=500, detail="Internal server error while processing command completion")
 
 
-@router.get("/profiling/host_status", response_model=List[ProfilingHostStatus])
+@router.get("/profiling/host_status", response_model=ProfilingHostStatusResponse)
 def get_profiling_host_status(
     profiling_params: ProfilingHostStatusRequest = Depends(profiling_host_status_params),
 ):
@@ -899,7 +900,7 @@ def get_profiling_host_status(
         profiling_params: ProfilingHostStatusRequest object containing all filter parameters
 
     Returns:
-        List of host statuses filtered by the specified criteria
+        ProfilingHostStatusResponse with hosts list, active count, and total count
     """
     db_manager = DBManager()
 
@@ -911,6 +912,13 @@ def get_profiling_host_status(
         profiling_statuses=profiling_params.profiling_status,
         command_types=profiling_params.command_type,
         pids=profiling_params.pids,
+        exact_match=profiling_params.exact_match
+    )
+
+    # Get total host count (all hosts for the selected service)
+    # This shows the total fleet size for the service
+    total_count = db_manager.get_total_host_count(
+        service_names=profiling_params.service_name,
         exact_match=profiling_params.exact_match
     )
 
@@ -950,7 +958,11 @@ def get_profiling_host_status(
             )
         )
 
-    return results
+    return ProfilingHostStatusResponse(
+        hosts=results,
+        active_count=len(results),
+        total_count=total_count
+    )
 
 
 @router.get("/adhoc_flamegraphs", response_model=List[FlamegraphFile])

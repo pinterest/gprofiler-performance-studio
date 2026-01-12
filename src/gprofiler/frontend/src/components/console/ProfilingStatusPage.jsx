@@ -108,6 +108,8 @@ const ProfilingStatusPage = () => {
     const [rows, setRows] = useState([]);
     const [loading, setLoading] = useState(false);
     const [selectionModel, setSelectionModel] = useState([]);
+    const [activeCount, setActiveCount] = useState(0);
+    const [totalCount, setTotalCount] = useState(0);
     const [filters, setFilters] = useState({
         service: '',
         hostname: '',
@@ -205,8 +207,13 @@ const ProfilingStatusPage = () => {
         fetch(url)
             .then((res) => res.json())
             .then((data) => {
+                // Handle new response structure with hosts, active_count, and total_count
+                const hosts = data.hosts || data; // Fallback to data if old format
+                const active = data.active_count || hosts.length;
+                const total = data.total_count || hosts.length;
+                
                 setRows(
-                    data.map((row) => ({
+                    hosts.map((row) => ({
                         id: row.id,
                         service: row.service_name,
                         host: row.hostname,
@@ -217,6 +224,8 @@ const ProfilingStatusPage = () => {
                         heartbeat_timestamp: row.heartbeat_timestamp,
                     }))
                 );
+                setActiveCount(active);
+                setTotalCount(total);
                 setLoading(false);
             })
             .catch(() => setLoading(false));
@@ -538,7 +547,8 @@ const ProfilingStatusPage = () => {
                     fetchProfilingStatus={fetchProfilingStatus}
                     filters={appliedFilters}
                     loading={loading}
-                    rowsCount={rows.length}
+                    activeCount={activeCount}
+                    totalCount={totalCount}
                     clearAllFilters={clearAllFilters}
                     enablePerfSpect={enablePerfSpect}
                     onPerfSpectChange={setEnablePerfSpect}

@@ -1596,6 +1596,48 @@ class DBManager(metaclass=Singleton):
 
         return results
 
+    def get_total_host_count(
+        self,
+        service_names: Optional[List[str]] = None,
+        exact_match: bool = False,
+    ) -> int:
+        """
+        Get total host count for the selected service(s).
+        This count IS filtered by service_name - shows total hosts for the selected service.
+        Fast query using COUNT with indexed columns.
+        
+        Args:
+            service_names: Optional list of service names to filter by
+            exact_match: If True, use exact match for service names; if False, use partial match (ILIKE)
+        
+        Returns:
+            Total count of distinct hosts for the selected service(s)
+        """
+        query = """
+            SELECT COUNT(DISTINCT hostname) as total_count
+            FROM HostHeartbeats
+            WHERE 1=1
+        """
+        
+        values: Dict[str, Any] = {}
+        
+        # Apply service_name filter if provided
+        if service_names:
+            if exact_match:
+                query += " AND service_name = ANY(%(service_names)s)"
+                values["service_names"] = service_names
+            else:
+                # Use ILIKE with OR for partial matching across multiple service names
+                service_conditions = []
+                for idx, service_name in enumerate(service_names):
+                    param_name = f"service_name_{idx}"
+                    service_conditions.append(f"service_name ILIKE %({param_name})s")
+                    values[param_name] = f"%{service_name}%"
+                query += f" AND ({' OR '.join(service_conditions)})"
+        
+        result = self.db.execute(query, values, one_value=False, return_dict=True, fetch_all=True)
+        return result[0]["total_count"] if result and len(result) > 0 else 0
+
     def get_pending_profiling_command(
         self, hostname: str, service_name: str, exclude_command_id: Optional[str] = None
     ) -> Optional[Dict]:

@@ -12,7 +12,8 @@ const ProfilingTopPanel = ({
     fetchProfilingStatus,
     filters,
     loading,
-    rowsCount,
+    activeCount,
+    totalCount,
     clearAllFilters,
     enablePerfSpect,
     onPerfSpectChange,
@@ -337,7 +338,7 @@ const ProfilingTopPanel = ({
                             </Button>
                         )}
                         <Typography variant='body2' color='text.secondary'>
-                            {rowsCount} hosts found
+                            {activeCount} active hosts of {totalCount} total hosts
                         </Typography>
                     </Flexbox>
                 </Flexbox>
