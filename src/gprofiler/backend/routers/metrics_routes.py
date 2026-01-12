@@ -979,26 +979,26 @@ def get_adhoc_flamegraphs(
         for file_info in files:
             filename = file_info['Key'].split('/')[-1]  # Get just the filename
             
-            # Only include flamegraph HTML files (they end with _flamegraph.html)
-            if not filename.endswith('_flamegraph.html'):
+            # Only include adhoc flamegraph HTML files
+            if not filename.endswith('_adhoc_flamegraph.html'):
                 continue
             
             # Parse timestamp and hostname from filename
             try:
-                # Remove the _flamegraph.html suffix to get the base filename
-                base_filename = filename.replace('_flamegraph.html', '')
+                # Remove the _adhoc_flamegraph.html suffix to get the base filename
+                base_filename = filename.replace('_adhoc_flamegraph.html', '')
                 
-                # Parse timestamp (format: 2026-01-09T00:11:06_random_suffix_hostname)
+                # Parse timestamp and hostname
+                # Format: timestamp_random_suffix_hostname_adhoc
                 filename_parts = base_filename.split('_')
                 if len(filename_parts) < 3:
                     continue
-                    
+                
                 timestamp_str = filename_parts[0]
                 timestamp = datetime.fromisoformat(timestamp_str).replace(tzinfo=timezone.utc)
                 
-                # Extract hostname from filename (last part after underscores)
-                # Format: timestamp_random_suffix_hostname
-                hostname = '_'.join(filename_parts[2:]) if len(filename_parts) > 2 else None
+                # Extract hostname (everything after timestamp and random_suffix)
+                hostname = '_'.join(filename_parts[2:])
                 
                 # Filter by time range if specified
                 if fg_params.start_time and timestamp < fg_params.start_time:

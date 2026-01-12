@@ -44,8 +44,9 @@ type Frame struct {
 
 type FileInfo struct {
 	Metadata struct {
-		Hostname  string `json:"hostname"`
-		CloudInfo struct {
+		Hostname   string `json:"hostname"`
+		Continuous bool   `json:"continuous"`
+		CloudInfo  struct {
 			InstanceType string `json:"instance_type"`
 		} `json:"cloud_info"`
 		RunArguments struct {
@@ -307,7 +308,13 @@ func (pw *ProfilesWriter) ParseStackFrameFile(sess *session.Session, task SQSMes
 			baseFileName = strings.Join(parts, "_")
 		}
 		
-		flamegraphHTMLPath := fmt.Sprintf("products/%s/stacks/flamegraph/%s_flamegraph.html", task.Service, baseFileName)
+		// Determine profiling type based on metadata.continuous
+		profilingType := "adhoc"
+		if fileInfo.Metadata.Continuous {
+			profilingType = "continuous"
+		}
+		
+		flamegraphHTMLPath := fmt.Sprintf("products/%s/stacks/flamegraph/%s_%s_flamegraph.html", task.Service, baseFileName, profilingType)
 		
 		var flamegraphData []byte
 		// Try to decode as base64, if it fails, treat it as plain HTML
