@@ -276,3 +276,10 @@ class ProfilingHostStatus(BaseModel):
     command_type: str
     profiling_status: str
     heartbeat_timestamp: datetime
+
+
+class ProfilingHostStatusResponse(BaseModel):
+    """Response model for profiling host status with counts"""
+    hosts: List[ProfilingHostStatus]
+    active_count: int  # Hosts with heartbeat in last 2 minutes
+    total_count: int   # total number of hosts for the selected service

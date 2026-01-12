@@ -73,19 +73,32 @@ const columns = [
             if (!host || !service) return '';
             
             const baseUrl = `${window.location.protocol}//${window.location.host}`;
-            const profileUrl = `${baseUrl}${PAGES.profiles.to}?filter=hn,is,${encodeURIComponent(host)}&gtab=1&pm=1&rtms=1&service=${encodeURIComponent(service)}&time=1h&view=flamegraph&wp=100`;
+            const continuousProfileUrl = `${baseUrl}${PAGES.profiles.to}?filter=hn,is,${encodeURIComponent(host)}&gtab=1&pm=1&rtms=1&service=${encodeURIComponent(service)}&time=1h&view=flamegraph&wp=100`;
+            const adhocProfileUrl = `${baseUrl}${PAGES.profiles.to}?filter=hn,is,${encodeURIComponent(host)}&gtab=1&pm=1&rtms=1&service=${encodeURIComponent(service)}&time=1h&view=adhoc&wp=100`;
             
             return (
-                <a
-                    href={profileUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ color: '#1976d2', textDecoration: 'none' }}
-                    onMouseOver={(e) => e.target.style.textDecoration = 'underline'}
-                    onMouseOut={(e) => e.target.style.textDecoration = 'none'}
-                >
-                    View Profile
-                </a>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                    <a
+                        href={continuousProfileUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: '#1976d2', textDecoration: 'none', fontSize: '0.875rem' }}
+                        onMouseOver={(e) => e.target.style.textDecoration = 'underline'}
+                        onMouseOut={(e) => e.target.style.textDecoration = 'none'}
+                    >
+                        View Continuous Profile
+                    </a>
+                    <a
+                        href={adhocProfileUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: '#1976d2', textDecoration: 'none', fontSize: '0.875rem' }}
+                        onMouseOver={(e) => e.target.style.textDecoration = 'underline'}
+                        onMouseOut={(e) => e.target.style.textDecoration = 'none'}
+                    >
+                        View Adhoc Profile
+                    </a>
+                </Box>
             );
         },
     },
@@ -95,6 +108,8 @@ const ProfilingStatusPage = () => {
     const [rows, setRows] = useState([]);
     const [loading, setLoading] = useState(false);
     const [selectionModel, setSelectionModel] = useState([]);
+    const [activeCount, setActiveCount] = useState(0);
+    const [totalCount, setTotalCount] = useState(0);
     const [filters, setFilters] = useState({
         service: '',
         hostname: '',
@@ -192,8 +207,13 @@ const ProfilingStatusPage = () => {
         fetch(url)
             .then((res) => res.json())
             .then((data) => {
+                // Handle new response structure with hosts, active_count, and total_count
+                const hosts = data.hosts || data; // Fallback to data if old format
+                const active = data.active_count || hosts.length;
+                const total = data.total_count || hosts.length;
+                
                 setRows(
-                    data.map((row) => ({
+                    hosts.map((row) => ({
                         id: row.id,
                         service: row.service_name,
                         host: row.hostname,
@@ -204,6 +224,8 @@ const ProfilingStatusPage = () => {
                         heartbeat_timestamp: row.heartbeat_timestamp,
                     }))
                 );
+                setActiveCount(active);
+                setTotalCount(total);
                 setLoading(false);
             })
             .catch(() => setLoading(false));
@@ -525,7 +547,8 @@ const ProfilingStatusPage = () => {
                     fetchProfilingStatus={fetchProfilingStatus}
                     filters={appliedFilters}
                     loading={loading}
-                    rowsCount={rows.length}
+                    activeCount={activeCount}
+                    totalCount={totalCount}
                     clearAllFilters={clearAllFilters}
                     enablePerfSpect={enablePerfSpect}
                     onPerfSpectChange={setEnablePerfSpect}
