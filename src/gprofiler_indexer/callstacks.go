@@ -44,8 +44,9 @@ type Frame struct {
 
 type FileInfo struct {
 	Metadata struct {
-		Hostname  string `json:"hostname"`
-		CloudInfo struct {
+		Hostname   string `json:"hostname"`
+		Continuous bool   `json:"continuous"`
+		CloudInfo  struct {
 			InstanceType string `json:"instance_type"`
 		} `json:"cloud_info"`
 		RunArguments struct {
@@ -297,7 +298,23 @@ func (pw *ProfilesWriter) ParseStackFrameFile(sess *session.Session, task SQSMes
 	// Save flamegraph HTML if present
 	if fileInfo.FlamegraphHTML != "" {
 		baseFileName := strings.TrimSuffix(task.Filename, ".gz")
-		flamegraphHTMLPath := fmt.Sprintf("products/%s/stacks/flamegraph/%s_flamegraph.html", task.Service, baseFileName)
+		
+		// Replace hostname hash with actual hostname in the filename
+		// Format: <start_time_iso_format>_<random_suffix>_<hostname_hash> -> <start_time_iso_format>_<random_suffix>_<hostname>
+		parts := strings.Split(baseFileName, "_")
+		if len(parts) >= 3 {
+			// Replace the last part (hostname hash) with actual hostname
+			parts[len(parts)-1] = fileInfo.Metadata.Hostname
+			baseFileName = strings.Join(parts, "_")
+		}
+		
+		// Determine profiling type based on metadata.continuous
+		profilingType := "adhoc"
+		if fileInfo.Metadata.Continuous {
+			profilingType = "continuous"
+		}
+		
+		flamegraphHTMLPath := fmt.Sprintf("products/%s/stacks/flamegraph/%s_%s_flamegraph.html", task.Service, baseFileName, profilingType)
 		
 		var flamegraphData []byte
 		// Try to decode as base64, if it fails, treat it as plain HTML
