@@ -32,15 +32,13 @@ const AdhocProfilingView = () => {
     const [selectedFileContent, setSelectedFileContent] = useState(null);
 
     const timeParams = getStartEndDateTimeFromSelection(timeSelection);
-    const hostFilter = selectedHost ? `HostName = "${selectedHost}"` : '';
-    const filter = activeFilterTag?.filter ? JSON.stringify({ ...activeFilterTag, filter: `${activeFilterTag.filter} AND ${hostFilter}` }) : JSON.stringify({ filter: hostFilter });
 
     const { data: filesData, loading: filesLoading, error: filesError, run: fetchFiles } = useFetchWithRequest(
         {
             url: `${DATA_URLS.GET_ADHOC_FLAMEGRAPHS}?${stringify({
                 serviceName: selectedService,
                 ...timeParams,
-                filter: filter,
+                filter: activeFilterTag?.filter ? JSON.stringify(activeFilterTag) : undefined,
             })}`,
         },
         { manual: true }
