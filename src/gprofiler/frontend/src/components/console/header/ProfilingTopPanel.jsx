@@ -337,8 +337,8 @@ const ProfilingTopPanel = ({
                                 Clear Filters
                             </Button>
                         )}
-                        <Typography variant='body2' color='text.secondary'>
-                            {activeCount} active hosts of {totalCount} total hosts
+                        <Typography variant='body2' color='text.secondary' sx={{ fontSize: '0.8rem' }}>
+                            {activeCount} active hosts of {totalCount} hosts
                         </Typography>
                     </Flexbox>
                 </Flexbox>
