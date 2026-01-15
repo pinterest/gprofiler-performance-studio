@@ -137,7 +137,7 @@ const ProfilingStatusPage = () => {
     const [maxProcesses, setMaxProcesses] = useState(10);
     
     // Profiling mode state (Ad Hoc vs Continuous)
-    const [profilingMode, setProfilingMode] = useState('adhoc'); // 'adhoc' or 'continuous'
+    const [profilingMode, setProfilingMode] = useState('continuous'); // 'adhoc' or 'continuous'
     
     // Duration state
     const [duration, setDuration] = useState(60);
