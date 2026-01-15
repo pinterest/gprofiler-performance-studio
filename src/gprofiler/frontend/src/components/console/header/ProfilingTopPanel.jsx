@@ -259,7 +259,7 @@ const ProfilingTopPanel = ({
                     {/* Profiling Mode and Duration Section */}
                     <Flexbox alignItems='center' spacing={2}>
                         {/* Profiling Mode Radio Buttons */}
-                        <Tooltip title="Select profiling mode: Ad Hoc for one-time profiling with custom duration, or Continuous for ongoing profiling">
+                        <Tooltip title="Select profiling mode: Continuous for ongoing profiling (60s fixed), or Ad Hoc for one-time profiling with custom duration">
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                                 <Typography variant="body2" sx={{ fontSize: '0.875rem', whiteSpace: 'nowrap' }}>
                                     Mode:
@@ -271,15 +271,6 @@ const ProfilingTopPanel = ({
                                     sx={{ gap: 1, ml: 1 }}
                                 >
                                     <FormControlLabel
-                                        value="adhoc"
-                                        control={<Radio size="small" />}
-                                        label={
-                                            <Typography variant="body2" sx={{ fontSize: '0.875rem' }}>
-                                                Ad Hoc
-                                            </Typography>
-                                        }
-                                    />
-                                    <FormControlLabel
                                         value="continuous"
                                         control={<Radio size="small" />}
                                         label={
@@ -288,12 +279,21 @@ const ProfilingTopPanel = ({
                                             </Typography>
                                         }
                                     />
+                                    <FormControlLabel
+                                        value="adhoc"
+                                        control={<Radio size="small" />}
+                                        label={
+                                            <Typography variant="body2" sx={{ fontSize: '0.875rem' }}>
+                                                Ad Hoc
+                                            </Typography>
+                                        }
+                                    />
                                 </RadioGroup>
                             </Box>
                         </Tooltip>
                         
                         {/* Duration Field */}
-                        <Tooltip title={profilingMode === 'continuous' ? 'Duration is fixed at 60 seconds for Continuous mode' : 'Profiling duration in seconds (Ad Hoc mode)'}>
+                        <Tooltip title={profilingMode === 'continuous' ? 'Duration is fixed at 60 seconds for Continuous mode' : 'Profiling duration in seconds (only editable in Ad Hoc mode)'}>
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                                 <Typography variant="body2" sx={{ fontSize: '0.875rem', whiteSpace: 'nowrap' }}>
                                     Duration:
