@@ -855,6 +855,8 @@ class DBManager(metaclass=Singleton):
         ip_address: str,
         service_name: str,
         last_command_id: Optional[str] = None,
+        received_command_ids: Optional[List[str]] = None,
+        executed_command_ids: Optional[List[str]] = None,
         status: str = "active",
         heartbeat_timestamp: Optional[datetime] = None,
     ) -> bool:
@@ -865,16 +867,21 @@ class DBManager(metaclass=Singleton):
         query = """
         INSERT INTO HostHeartbeats (
             hostname, ip_address, service_name, last_command_id,
+            received_command_ids, executed_command_ids,
             status, heartbeat_timestamp, created_at, updated_at
         ) VALUES (
             %(hostname)s, %(ip_address)s::inet, %(service_name)s,
-            %(last_command_id)s::uuid, %(status)s::HostStatus,
+            %(last_command_id)s::uuid, %(received_command_ids)s::uuid[],
+            %(executed_command_ids)s::uuid[],
+            %(status)s::HostStatus,
             %(heartbeat_timestamp)s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         )
         ON CONFLICT (hostname, service_name)
         DO UPDATE SET
             ip_address = EXCLUDED.ip_address,
             last_command_id = EXCLUDED.last_command_id,
+            received_command_ids = EXCLUDED.received_command_ids,
+            executed_command_ids = EXCLUDED.executed_command_ids,
             status = EXCLUDED.status,
             heartbeat_timestamp = EXCLUDED.heartbeat_timestamp,
             updated_at = CURRENT_TIMESTAMP
@@ -885,6 +892,8 @@ class DBManager(metaclass=Singleton):
             "ip_address": ip_address,
             "service_name": service_name,
             "last_command_id": last_command_id,
+            "received_command_ids": received_command_ids,
+            "executed_command_ids": executed_command_ids,
             "status": status,
             "heartbeat_timestamp": heartbeat_timestamp,
         }
@@ -897,6 +906,7 @@ class DBManager(metaclass=Singleton):
         query = """
         SELECT
             hostname, ip_address, service_name, last_command_id,
+            received_command_ids, executed_command_ids,
             status, heartbeat_timestamp, created_at, updated_at
         FROM HostHeartbeats
         WHERE hostname = %(hostname)s
@@ -911,6 +921,7 @@ class DBManager(metaclass=Singleton):
         query = """
         SELECT
             hostname, ip_address, service_name, last_command_id,
+            received_command_ids, executed_command_ids,
             status, heartbeat_timestamp
         FROM HostHeartbeats
         WHERE status = 'active'
@@ -995,6 +1006,7 @@ class DBManager(metaclass=Singleton):
         query = """
         SELECT
             ID, hostname, ip_address, service_name, last_command_id,
+            received_command_ids, executed_command_ids,
             status, heartbeat_timestamp, created_at, updated_at
         FROM HostHeartbeats
         ORDER BY heartbeat_timestamp DESC
@@ -1024,6 +1036,7 @@ class DBManager(metaclass=Singleton):
         query = f"""
         SELECT
             ID, hostname, ip_address, service_name, last_command_id,
+            received_command_ids, executed_command_ids,
             status, heartbeat_timestamp, created_at, updated_at
         FROM HostHeartbeats
         {where_clause}
@@ -1042,6 +1055,7 @@ class DBManager(metaclass=Singleton):
         query = """
         SELECT
             ID, hostname, ip_address, service_name, last_command_id,
+            received_command_ids, executed_command_ids,
             status, heartbeat_timestamp, created_at, updated_at
         FROM HostHeartbeats
         WHERE status = %(status)s

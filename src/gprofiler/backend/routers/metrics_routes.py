@@ -702,6 +702,8 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                 ip_address=heartbeat.ip_address,
                 service_name=heartbeat.service_name,
                 last_command_id=heartbeat.last_command_id,
+                received_command_ids=heartbeat.received_command_ids,
+                executed_command_ids=heartbeat.executed_command_ids,
                 status=heartbeat.status,
                 heartbeat_timestamp=heartbeat.timestamp,
             )
