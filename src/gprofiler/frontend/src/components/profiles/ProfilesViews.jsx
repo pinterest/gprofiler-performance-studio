@@ -170,12 +170,17 @@ const ProfilesViews = () => {
     }, [searchedData, framesSelected]);
 
     useEffect(() => {
-        if (!_.isEmpty(flameGraphData[0]) && flameGraphData[0]?.children?.length === 0) {
-            setIsFGEmpty(true);
-        } else {
-            setIsFGEmpty(false);
+        // Only update isFGEmpty for views that depend on flamegraph data
+        // Only adhoc view doesn't depend on flamegraph data and manages its own empty state
+        const viewsDependingOnFgData = [PROFILES_VIEWS.flamegraph, PROFILES_VIEWS.table, PROFILES_VIEWS.service, PROFILES_VIEWS.html];
+        if (viewsDependingOnFgData.includes(viewMode)) {
+            if (!_.isEmpty(flameGraphData[0]) && flameGraphData[0]?.children?.length === 0) {
+                setIsFGEmpty(true);
+            } else {
+                setIsFGEmpty(false);
+            }
         }
-    }, [flameGraphData, setIsFGEmpty]);
+    }, [flameGraphData, setIsFGEmpty, viewMode]);
 
     useEffect(() => {
         if (searchValue) {
@@ -244,14 +249,18 @@ const ProfilesViews = () => {
         [setHoverData, searchedData]
     );
 
+    // Always render adhoc view when selected, regardless of isFGEmpty state
+    // since adhoc view has its own empty state handling
+    if (viewMode === PROFILES_VIEWS.adhoc) {
+        return <AdhocProfilingView />;
+    }
+
     return viewMode === PROFILES_VIEWS.service ? (
         <ServiceView />
     ) : viewMode === PROFILES_VIEWS.table ? (
         <TableView timeSelection={timeSelection} rows={tableViewData} filteredData={filteredData} />
     ) : viewMode === PROFILES_VIEWS.html ? (
         <HtmlView lastHtml={lastHtmlData} />
-    ) : viewMode === PROFILES_VIEWS.adhoc ? (
-        <AdhocProfilingView />
     ) : !isFGEmpty ? (
         <FlamegraphView
             flameGraphData={flameGraphData}

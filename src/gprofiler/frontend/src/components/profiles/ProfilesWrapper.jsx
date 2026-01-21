@@ -21,7 +21,8 @@ import { useContext, useEffect } from 'react';
 import useGetFgData from '../../api/hooks/useGetFgData';
 import useGetFgMetrics from '../../api/hooks/useGetFgMetrics';
 import UsePageTitle from '../../hooks/usePageTitle';
-import { FgContext } from '../../states';
+import { FgContext, SelectorsContext } from '../../states';
+import { PROFILES_VIEWS } from '../../utils/consts';
 import { getUpdatedFgData } from '../../utils/fgUtils';
 import FGLoader from './FGLoader';
 import ProfilesEmptyState from './ProfilesEmptyState';
@@ -42,6 +43,8 @@ const ProfilesWrapper = () => {
         setInstanceTypeLoading,
         setInstanceType,
     } = useContext(FgContext);
+
+    const { viewMode } = useContext(SelectorsContext);
 
     const { data, error, lastWeekDataError, lastWeekData, isLastWeekDataLoading, loading } = useGetFgData({});
     const {
@@ -108,12 +111,15 @@ const ProfilesWrapper = () => {
         }
     }, [instanceTypeData, setInstanceTypeLoading, setInstanceType, instanceTypeDataLoading]);
 
+    // Adhoc view doesn't depend on flamegraph data, so always show it when selected
+    const shouldShowView = isFgDisplayed || viewMode === PROFILES_VIEWS.adhoc;
+
     return (
         <>
             {loading || isLastWeekDataLoading ? (
                 <FGLoader />
             ) : (
-                <>{!isFgDisplayed ? <ProfilesEmptyState errorMessage={error} /> : <ProfilesViewsWrapper />}</>
+                <>{!shouldShowView ? <ProfilesEmptyState errorMessage={error} /> : <ProfilesViewsWrapper />}</>
             )}
         </>
     );

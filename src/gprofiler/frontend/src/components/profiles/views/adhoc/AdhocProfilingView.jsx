@@ -15,7 +15,7 @@
  */
 
 import { useContext, useEffect, useState } from 'react';
-import { Box, Typography, Select, MenuItem, FormControl, InputLabel, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Button } from '@mui/material';
+import { Box, Typography, Select, MenuItem, FormControl, InputLabel, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Button, IconButton, Collapse } from '@mui/material';
 import { SelectorsContext } from '@/states';
 import { FilterTagsContext } from '@/states/filters/FiltersTagsContext';
 import useFetchWithRequest from '@/api/useFetchWithRequest';
@@ -24,12 +24,15 @@ import { stringify } from 'query-string';
 import { getStartEndDateTimeFromSelection } from '@/api/utils';
 import { format } from 'date-fns';
 import Flexbox from '@/components/common/layout/Flexbox';
+import Icon from '@/components/common/icon/Icon';
+import { ICONS_NAMES } from '@/components/common/icon/iconsData';
 
 const AdhocProfilingView = () => {
     const { selectedService, timeSelection, selectedHost } = useContext(SelectorsContext);
     const { activeFilterTag } = useContext(FilterTagsContext);
     const [selectedFile, setSelectedFile] = useState(null);
     const [selectedFileContent, setSelectedFileContent] = useState(null);
+    const [isTableExpanded, setIsTableExpanded] = useState(true);
 
     const timeParams = getStartEndDateTimeFromSelection(timeSelection);
 
@@ -99,65 +102,88 @@ const AdhocProfilingView = () => {
 
     return (
         <Flexbox column sx={{ height: '100%', width: '100%', p: 2 }}>
-            <Box sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 2 }}>
+            <Box
+                sx={{
+                    mb: 2,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 2,
+                    backgroundColor: filesData && filesData.length > 0 ? 'grey.100' : 'transparent',
+                    p: filesData && filesData.length > 0 ? 2 : 0,
+                    borderRadius: 1,
+                    cursor: filesData && filesData.length > 0 ? 'pointer' : 'default',
+                    '&:hover': filesData && filesData.length > 0 ? {
+                        backgroundColor: 'grey.200',
+                    } : {}
+                }}
+                onClick={() => filesData && filesData.length > 0 && setIsTableExpanded(!isTableExpanded)}
+            >
                 <Typography variant="h6">Adhoc Profiling</Typography>
                 {filesData && filesData.length > 0 && (
-                    <FormControl sx={{ minWidth: 200 }}>
-                        <InputLabel id="select-file-label">Select Flamegraph File</InputLabel>
-                        <Select
-                            labelId="select-file-label"
-                            value={selectedFile?.filename || ''}
-                            label="Select Flamegraph File"
-                            onChange={handleFileSelect}
-                        >
-                            {filesData.map((file) => (
-                                <MenuItem key={file.filename} value={file.filename}>
-                                    {format(new Date(file.timestamp), 'yyyy-MM-dd HH:mm:ss')} - {file.hostname || 'N/A'}
-                                </MenuItem>
-                            ))}
-                        </Select>
-                    </FormControl>
+                    <>
+                        <FormControl sx={{ minWidth: 200 }}>
+                            <InputLabel id="select-file-label">Select Flamegraph File</InputLabel>
+                            <Select
+                                labelId="select-file-label"
+                                value={selectedFile?.filename || ''}
+                                label="Select Flamegraph File"
+                                onChange={handleFileSelect}
+                                onClick={(e) => e.stopPropagation()}
+                            >
+                                {filesData.map((file) => (
+                                    <MenuItem key={file.filename} value={file.filename}>
+                                        {format(new Date(file.timestamp), 'yyyy-MM-dd HH:mm:ss')} - {file.hostname || 'N/A'}
+                                    </MenuItem>
+                                ))}
+                            </Select>
+                        </FormControl>
+                        <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center' }}>
+                            <Icon name={isTableExpanded ? ICONS_NAMES.ChevronDown : ICONS_NAMES.ChevronRight} />
+                        </Box>
+                    </>
                 )}
             </Box>
 
             {filesData && filesData.length > 0 ? (
                 <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: 2, height: 'calc(100vh - 300px)' }}>
-                    <TableContainer component={Paper} sx={{ maxHeight: 300, overflowY: 'auto', flexShrink: 0 }}>
-                        <Table stickyHeader size="small">
-                            <TableHead>
-                                <TableRow>
-                                    <TableCell>Timestamp</TableCell>
-                                    <TableCell>Hostname</TableCell>
-                                    <TableCell>Size</TableCell>
-                                    <TableCell>Action</TableCell>
-                                </TableRow>
-                            </TableHead>
-                            <TableBody>
-                                {filesData.map((file) => (
-                                    <TableRow
-                                        key={file.filename}
-                                        onClick={() => handleRowClick(file)}
-                                        selected={selectedFile?.filename === file.filename}
-                                        sx={{ cursor: 'pointer', '&:hover': { backgroundColor: 'action.hover' } }}
-                                    >
-                                        <TableCell>{format(new Date(file.timestamp), 'yyyy-MM-dd HH:mm:ss')}</TableCell>
-                                        <TableCell>{file.hostname || 'N/A'}</TableCell>
-                                        <TableCell>{(file.size / 1024).toFixed(2)} KB</TableCell>
-                                        <TableCell>
-                                            <Button size="small" onClick={() => handleRowClick(file)}>View</Button>
-                                        </TableCell>
+                    <Collapse in={isTableExpanded}>
+                        <TableContainer component={Paper} sx={{ maxHeight: 300, overflowY: 'auto', flexShrink: 0 }}>
+                            <Table stickyHeader size="small">
+                                <TableHead>
+                                    <TableRow>
+                                        <TableCell>Timestamp</TableCell>
+                                        <TableCell>Hostname</TableCell>
+                                        <TableCell>Size</TableCell>
+                                        <TableCell>Action</TableCell>
                                     </TableRow>
-                                ))}
-                            </TableBody>
-                        </Table>
-                    </TableContainer>
+                                </TableHead>
+                                <TableBody>
+                                    {filesData.map((file) => (
+                                        <TableRow
+                                            key={file.filename}
+                                            onClick={() => handleRowClick(file)}
+                                            selected={selectedFile?.filename === file.filename}
+                                            sx={{ cursor: 'pointer', '&:hover': { backgroundColor: 'action.hover' } }}
+                                        >
+                                            <TableCell>{format(new Date(file.timestamp), 'yyyy-MM-dd HH:mm:ss')}</TableCell>
+                                            <TableCell>{file.hostname || 'N/A'}</TableCell>
+                                            <TableCell>{(file.size / 1024).toFixed(2)} KB</TableCell>
+                                            <TableCell>
+                                                <Button size="small" onClick={() => handleRowClick(file)}>View</Button>
+                                            </TableCell>
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        </TableContainer>
+                    </Collapse>
 
                     {contentLoading && <Typography>Loading flamegraph content...</Typography>}
                     {contentError && <Typography color="error">Error loading flamegraph content: {contentError.message}</Typography>}
                     {selectedFileContent ? (
-                        <Box 
-                            sx={{ 
-                                flexGrow: 1, 
+                        <Box
+                            sx={{
+                                flexGrow: 1,
                                 width: '100%',
                                 minHeight: 0,
                                 display: 'flex',
