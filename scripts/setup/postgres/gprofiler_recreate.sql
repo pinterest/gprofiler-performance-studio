@@ -256,6 +256,8 @@ CREATE TABLE HostHeartbeats (
     ip_address inet NOT NULL,
     service_name text NOT NULL,
     last_command_id uuid NULL,
+    received_command_ids uuid[] NULL,
+    executed_command_ids uuid[] NULL,
     status HostStatus NOT NULL DEFAULT 'active',
     heartbeat_timestamp timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
