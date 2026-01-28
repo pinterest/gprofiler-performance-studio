@@ -4,6 +4,12 @@ import React from 'react';
 import { COLORS } from '../../../theme/colors';
 import Flexbox from '../../common/layout/Flexbox';
 
+// Constants
+const DEFAULT_PROFILING_FREQUENCY = 11; // Hz - industry standard for low overhead
+const DEFAULT_MAX_PROCESSES = 10;
+const DEFAULT_DURATION = 60; // seconds
+const CONTINUOUS_MODE_DURATION = 60; // Fixed duration for continuous mode
+
 const PanelDivider = () => <Divider orientation='vertical' sx={{ borderColor: 'grey.dark', opacity: 0.1 }} flexItem />;
 
 const ProfilingTopPanel = ({
@@ -48,6 +54,37 @@ const ProfilingTopPanel = ({
             }
         }));
     };
+
+    // Helper function to handle perf profiler nested config changes
+    const handlePerfProfilerConfigChange = (field, value) => {
+        onProfilerConfigsChange(prev => ({
+            ...prev,
+            perf: {
+                ...prev.perf,
+                [field]: value
+            }
+        }));
+    };
+
+    // Helper function to toggle perf events
+    const handlePerfEventToggle = (eventName, isChecked) => {
+        const currentEvents = profilerConfigs.perf?.events || [];
+        const newEvents = isChecked
+            ? [...currentEvents, eventName]
+            : currentEvents.filter(ev => ev !== eventName);
+        handlePerfProfilerConfigChange('events', newEvents);
+    };
+
+    // Perf event configuration
+    const perfEvents = [
+        { value: 'cpu-cycles', label: 'CPU Cycles', tooltip: 'Total processor cycles executed' },
+        { value: 'instructions', label: 'Instructions', tooltip: 'Instructions executed by the CPU' },
+        { value: 'cache-misses', label: 'Cache Misses', tooltip: 'Failed cache lookups - indicates memory access issues' },
+        { value: 'cache-references', label: 'Cache References', tooltip: 'Total cache access attempts' },
+        { value: 'branch-instructions', label: 'Branch Instructions', tooltip: 'Conditional jump instructions executed' },
+        { value: 'branch-misses', label: 'Branch Misses', tooltip: 'Mispredicted branches - impacts pipeline efficiency' },
+        { value: 'stalled-cycles-frontend', label: 'Stalled Cycles (Frontend)', tooltip: 'CPU cycles stalled waiting for instructions' }
+    ];
 
     // Profiler configuration definitions
     const profilerDefinitions = [
@@ -361,46 +398,104 @@ const ProfilingTopPanel = ({
                     </AccordionSummary>
                     <AccordionDetails sx={{ p: 3 }}>
                         <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 3 }}>
-                            {/* Render Perf Profiler first */}
-                            {profilerDefinitions.filter(p => p.key === 'perf').map((profiler) => (
-                                <Box key={profiler.key} sx={{ 
+                            {/* Render Perf Profiler first with Event Selector */}
+                            <Box sx={{ 
                                     border: '1px solid #e0e0e0', 
                                     borderRadius: 2, 
                                     p: 2,
                                     backgroundColor: '#fafafa'
                                 }}>
                                     <Typography variant="body2" sx={{ fontSize: '0.875rem', fontWeight: 600, mb: 0.5 }}>
-                                        {profiler.name}
+                                    Perf Profiler
                                     </Typography>
                                     <Typography variant="body2" sx={{ fontSize: '0.75rem', color: 'text.secondary', mb: 2 }}>
-                                        {profiler.description}
+                                    C, C++, Go, Kernel
                                     </Typography>
+                                
+                                {/* Mode Selection */}
                                     <RadioGroup
-                                        value={profilerConfigs[profiler.key]}
-                                        onChange={(e) => handleProfilerConfigChange(profiler.key, e.target.value)}
+                                    value={profilerConfigs.perf?.mode || 'enabled_restricted'}
+                                    onChange={(e) => handlePerfProfilerConfigChange('mode', e.target.value)}
+                                >
+                                    <Tooltip 
+                                        title="Profiles only top N containers/process" 
+                                        placement="right"
+                                        arrow
                                     >
-                                        {profiler.options.map((option) => (
-                                            <Tooltip 
-                                                key={option.value} 
-                                                title={option.tooltip || ''} 
-                                                placement="right"
-                                                arrow
-                                            >
-                                                <FormControlLabel
-                                                    value={option.value}
-                                                    control={<Radio size="small" />}
-                                                    label={
-                                                        <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
-                                                            {option.label}
-                                                        </Typography>
-                                                    }
-                                                    sx={{ mb: 0.5 }}
-                                                />
-                                            </Tooltip>
-                                        ))}
-                                    </RadioGroup>
+                                        <FormControlLabel
+                                            value="enabled_restricted"
+                                            control={<Radio size="small" />}
+                                            label={
+                                                <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
+                                                    Enabled Restricted
+                                                </Typography>
+                                            }
+                                            sx={{ mb: 0.5 }}
+                                        />
+                                    </Tooltip>
+                                    <Tooltip 
+                                        title="Profiles all processes" 
+                                        placement="right"
+                                        arrow
+                                    >
+                                        <FormControlLabel
+                                            value="enabled_aggressive"
+                                            control={<Radio size="small" />}
+                                            label={
+                                                <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
+                                                    Enabled Aggressive
+                                                </Typography>
+                                            }
+                                            sx={{ mb: 0.5 }}
+                                        />
+                                    </Tooltip>
+                                    <FormControlLabel
+                                        value="disabled"
+                                        control={<Radio size="small" />}
+                                        label={
+                                            <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
+                                                Disabled
+                                            </Typography>
+                                        }
+                                        sx={{ mb: 0.5 }}
+                                    />
+                                </RadioGroup>
+                                
+                                {/* Event Selection - Only show when perf is enabled */}
+                                {profilerConfigs.perf?.mode !== 'disabled' && (
+                                    <Box sx={{ ml: 3, mt: 2 }}>
+                                        <Typography variant="body2" sx={{ fontSize: '0.75rem', fontWeight: 500, mb: 1 }}>
+                                            Event Types (select one or more):
+                                        </Typography>
+                                        <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                                            {perfEvents.map(event => (
+                                                <Tooltip 
+                                                    key={event.value}
+                                                    title={event.tooltip} 
+                                                    placement="right"
+                                                    arrow
+                                                >
+                                                    <FormControlLabel
+                                                        control={
+                                                            <Checkbox
+                                                                checked={profilerConfigs.perf?.events?.includes(event.value) || false}
+                                                                onChange={(e) => handlePerfEventToggle(event.value, e.target.checked)}
+                                                                size="small"
+                                                            />
+                                                        }
+                                                        label={
+                                                            <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
+                                                                {event.label}
+                                                            </Typography>
+                                                        }
+                                                        sx={{ mb: 0.5 }}
+                                                    />
+                                                </Tooltip>
+                                            ))}
+                                        </Box>
+                                    </Box>
+                                )}
                                 </Box>
-                            ))}
                             
                             {/* Custom Async Profiler Configuration - Right after Perf */}
                             <Box sx={{ 

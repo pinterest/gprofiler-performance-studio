@@ -20,6 +20,28 @@ import PageHeader from '../common/layout/PageHeader';
 import ProfilingHeader from './header/ProfilingHeader';
 import ProfilingTopPanel from './header/ProfilingTopPanel';
 
+// Constants
+const DEFAULT_PROFILING_FREQUENCY = 11;
+const DEFAULT_MAX_PROCESSES = 10;
+const DEFAULT_DURATION = 60;
+
+// Helper function to build profile URL
+const buildProfileUrl = (host, service, view) => {
+    const baseUrl = `${window.location.protocol}//${window.location.host}`;
+    const params = {
+        filter: `hn,is,${host}`,
+        gtab: '1',
+        pm: '1',
+        rtms: '1',
+        service: service,
+        time: '1h',
+        view: view,
+        wp: '100'
+    };
+    const queryParams = new URLSearchParams(params).toString();
+    return `${baseUrl}${PAGES.profiles.to}?${queryParams}`;
+};
+
 const columns = [
     { field: 'service', headerName: 'service name', flex: 1, sortable: true },
     { field: 'host', headerName: 'host name', flex: 1, sortable: true },
@@ -72,13 +94,12 @@ const columns = [
             
             if (!host || !service) return '';
             
-            const baseUrl = `${window.location.protocol}//${window.location.host}`;
-            const continuousProfileUrl = `${baseUrl}${PAGES.profiles.to}?filter=hn,is,${encodeURIComponent(host)}&gtab=1&pm=1&rtms=1&service=${encodeURIComponent(service)}&time=1h&view=flamegraph&wp=100`;
-            const adhocProfileUrl = `${baseUrl}${PAGES.profiles.to}?filter=hn,is,${encodeURIComponent(host)}&gtab=1&pm=1&rtms=1&service=${encodeURIComponent(service)}&time=1h&view=adhoc&wp=100`;
+            const continuousProfileUrl = buildProfileUrl(host, service, 'flamegraph');
+            const adhocProfileUrl = buildProfileUrl(host, service, 'adhoc');
             
             return (
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-                    <a
+                <a
                         href={continuousProfileUrl}
                         target="_blank"
                         rel="noopener noreferrer"
@@ -90,14 +111,14 @@ const columns = [
                     </a>
                     <a
                         href={adhocProfileUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                    target="_blank"
+                    rel="noopener noreferrer"
                         style={{ color: '#1976d2', textDecoration: 'none', fontSize: '0.875rem' }}
-                        onMouseOver={(e) => e.target.style.textDecoration = 'underline'}
-                        onMouseOut={(e) => e.target.style.textDecoration = 'none'}
-                    >
+                    onMouseOver={(e) => e.target.style.textDecoration = 'underline'}
+                    onMouseOut={(e) => e.target.style.textDecoration = 'none'}
+                >
                         View Adhoc Profile
-                    </a>
+                </a>
                 </Box>
             );
         },
@@ -131,20 +152,23 @@ const ProfilingStatusPage = () => {
     const [enablePerfSpect, setEnablePerfSpect] = useState(false);
     
     // Profiling frequency state
-    const [profilingFrequency, setProfilingFrequency] = useState(11);
+    const [profilingFrequency, setProfilingFrequency] = useState(DEFAULT_PROFILING_FREQUENCY);
     
     // Max processes state
-    const [maxProcesses, setMaxProcesses] = useState(10);
+    const [maxProcesses, setMaxProcesses] = useState(DEFAULT_MAX_PROCESSES);
     
     // Profiling mode state (Ad Hoc vs Continuous)
     const [profilingMode, setProfilingMode] = useState('continuous'); // 'adhoc' or 'continuous'
     
     // Duration state
-    const [duration, setDuration] = useState(60);
+    const [duration, setDuration] = useState(DEFAULT_DURATION);
     
     // Profiler configurations state
     const [profilerConfigs, setProfilerConfigs] = useState({
-        perf: 'enabled_restricted', // 'enabled_restricted', 'enabled_aggressive', 'disabled'
+        perf: {
+            mode: 'enabled_restricted', // 'enabled_restricted', 'enabled_aggressive', 'disabled'
+            events: ['cpu-cycles'] // Array of events: 'cpu-cycles', 'instructions', 'cache-misses', etc.
+        },
         async_profiler: {
             enabled: true,
             time: 'cpu' // 'cpu' or 'wall'
