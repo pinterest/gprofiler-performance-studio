@@ -19,7 +19,7 @@ import math
 import uuid
 from datetime import datetime, timedelta, timezone
 from logging import getLogger
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from backend.models.filters_models import FilterTypes
 from backend.models.flamegraph_models import FGParamsBaseModel
@@ -285,6 +285,52 @@ def get_html_metadata(
     except ClientError:
         raise HTTPException(status_code=404, detail="The html metadata file not found in S3")
     return HTMLMetadata(content=html_content)
+
+
+@router.post("/validate_perf_events")
+def validate_perf_events(
+    service_name: str = Query(...),
+    requested_events: List[str] = Query(...),
+    target_hostnames: Optional[List[str]] = Query(None)
+) -> Dict[str, Any]:
+    """
+    Validate if the requested perf events are supported by target hosts before creating a profile request.
+    
+    This endpoint performs a dry-run validation to check:
+    1. If the target hosts are active and reporting
+    2. If the hosts support the requested PMU events
+    3. Provides clear error messages if validation fails
+    
+    Args:
+        service_name: Service name to validate against
+        requested_events: List of perf events to validate (e.g., ['cpu-cycles', 'cache-misses'])
+        target_hostnames: Optional list of specific hosts to check (None = all hosts for service)
+    
+    Returns:
+        Validation result with details about unsupported hosts
+    """
+    try:
+        db_manager = DBManager()
+        validation_result = db_manager.validate_perf_events_support(
+            service_name=service_name,
+            requested_events=requested_events,
+            target_hostnames=target_hostnames
+        )
+        
+        if not validation_result["valid"]:
+            logger.warning(
+                f"Perf event validation failed for service {service_name}: {validation_result['error_message']}"
+            )
+        
+        return validation_result
+    
+    except Exception as e:
+        logger.error(f"Failed to validate perf events: {str(e)}", exc_info=True)
+        return {
+            "valid": False,
+            "unsupported_hosts": [],
+            "error_message": f"Validation error: {str(e)}"
+        }
 
 
 @router.post("/profile_request", response_model=ProfilingResponse)
@@ -706,6 +752,7 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                 executed_command_ids=heartbeat.executed_command_ids,
                 status=heartbeat.status,
                 heartbeat_timestamp=heartbeat.timestamp,
+                supported_perf_events=heartbeat.perf_supported_events,  # Use agent field name
             )
 
             # 2. Check for current profiling command for this host/service

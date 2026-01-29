@@ -48,6 +48,7 @@ export const DATA_URLS = {
     POST_PROFILING_REQUEST_BULK: `${API_PREFIX}/metrics/profile_request/bulk`,
     POST_HEARTBEAT: `${API_PREFIX}/metrics/heartbeat`,
     POST_COMMAND_COMPLETION: `${API_PREFIX}/metrics/command_completion`,
+    VALIDATE_PERF_EVENTS: `${API_PREFIX}/metrics/validate_perf_events`,
     // Filter endpoints
     FILTERS: `${API_PREFIX}${FILETERS_PREFIX}`,
     GET_FILTER_OPTIONS_VALUE: (filterType, params) =>

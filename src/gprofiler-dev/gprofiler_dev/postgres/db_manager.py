@@ -859,8 +859,13 @@ class DBManager(metaclass=Singleton):
         executed_command_ids: Optional[List[str]] = None,
         status: str = "active",
         heartbeat_timestamp: Optional[datetime] = None,
+        supported_perf_events: Optional[List[str]] = None,
     ) -> bool:
-        """Update or insert host heartbeat information using pure SQL"""
+        """
+        Update or insert host heartbeat information using pure SQL.
+        Always updates on conflict to ensure latest data is stored, including
+        hardware changes (e.g., new PMU events after CPU upgrade).
+        """
         if heartbeat_timestamp is None:
             heartbeat_timestamp = datetime.now()
 
@@ -868,13 +873,13 @@ class DBManager(metaclass=Singleton):
         INSERT INTO HostHeartbeats (
             hostname, ip_address, service_name, last_command_id,
             received_command_ids, executed_command_ids,
-            status, heartbeat_timestamp, created_at, updated_at
+            status, heartbeat_timestamp, supported_perf_events, created_at, updated_at
         ) VALUES (
             %(hostname)s, %(ip_address)s::inet, %(service_name)s,
             %(last_command_id)s::uuid, %(received_command_ids)s::uuid[],
             %(executed_command_ids)s::uuid[],
             %(status)s::HostStatus,
-            %(heartbeat_timestamp)s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            %(heartbeat_timestamp)s, %(supported_perf_events)s::text[], CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         )
         ON CONFLICT (hostname, service_name)
         DO UPDATE SET
@@ -884,6 +889,7 @@ class DBManager(metaclass=Singleton):
             executed_command_ids = EXCLUDED.executed_command_ids,
             status = EXCLUDED.status,
             heartbeat_timestamp = EXCLUDED.heartbeat_timestamp,
+            supported_perf_events = EXCLUDED.supported_perf_events,
             updated_at = CURRENT_TIMESTAMP
         """
 
@@ -896,6 +902,7 @@ class DBManager(metaclass=Singleton):
             "executed_command_ids": executed_command_ids,
             "status": status,
             "heartbeat_timestamp": heartbeat_timestamp,
+            "supported_perf_events": supported_perf_events,
         }
 
         self.db.execute(query, values, has_value=False)
@@ -963,6 +970,139 @@ class DBManager(metaclass=Singleton):
         
         result = self.db.execute(query, values, one_value=True, return_dict=True)
         return result.get("active_hosts_count", 0) if result else 0
+
+    def _normalize_perf_event_name(self, event: str) -> str:
+        """
+        Normalize perf event names to match what the agent stores.
+        The agent normalizes events like 'cpu-cycles' -> 'cycles', 'cpu/cache-misses/' -> 'cache-misses'
+        """
+        # Remove cpu/ prefix and trailing slash if present
+        event = event.replace("cpu/", "").replace("/", "")
+        
+        # Map common aliases to normalized names
+        event_mapping = {
+            "cpu-cycles": "cycles",
+            "cpu-instructions": "instructions",
+            "cpu-cache-misses": "cache-misses",
+            "cpu-cache-references": "cache-references",
+            "cpu-branch-instructions": "branch-instructions",
+            "cpu-branch-misses": "branch-misses",
+            "cpu-stalled-cycles-frontend": "stalled-cycles-frontend",
+            "cpu-stalled-cycles-backend": "stalled-cycles-backend",
+        }
+        
+        return event_mapping.get(event, event)
+
+    def validate_perf_events_support(
+        self, 
+        service_name: str, 
+        requested_events: List[str],
+        target_hostnames: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Validate if the requested perf events are supported by target hosts.
+        
+        Args:
+            service_name: Service name to check
+            requested_events: List of requested perf events (e.g., ['cpu-cycles', 'cache-misses'])
+            target_hostnames: Optional list of specific hostnames to check (None = all hosts for service)
+            
+        Returns:
+            Dict with validation results:
+            {
+                "valid": bool,
+                "unsupported_hosts": List[Dict], # Hosts that don't support some events
+                "error_message": Optional[str]
+            }
+        """
+        # Normalize requested events to match agent's format
+        normalized_requested_events = [self._normalize_perf_event_name(event) for event in requested_events]
+        
+        # Build query to get hosts and their supported events
+        query = """
+        SELECT 
+            hostname, 
+            supported_perf_events
+        FROM HostHeartbeats
+        WHERE service_name = %(service_name)s
+          AND heartbeat_timestamp >= NOW() - INTERVAL '2 minutes'
+        """
+        
+        values = {"service_name": service_name}
+        
+        # Filter by specific hostnames if provided
+        if target_hostnames:
+            query += " AND hostname = ANY(%(target_hostnames)s)"
+            values["target_hostnames"] = target_hostnames
+        
+        hosts = self.db.execute(query, values, one_value=False, return_dict=True, fetch_all=True)
+        
+        if not hosts:
+            return {
+                "valid": False,
+                "unsupported_hosts": [],
+                "error_message": f"No active hosts found for service '{service_name}'"
+            }
+        
+        unsupported_hosts = []
+        
+        for host in hosts:
+            hostname = host.get("hostname")
+            supported_events = host.get("supported_perf_events") or []
+            
+            # If host hasn't sent supported events yet, assume compatibility issue
+            if not supported_events:
+                unsupported_hosts.append({
+                    "hostname": hostname,
+                    "missing_events": requested_events,  # Use original names in error message
+                    "reason": "Host has not reported supported PMU events yet"
+                })
+                continue
+            
+            # Check which requested events are NOT supported (using normalized names)
+            missing_events = []
+            for i, normalized_event in enumerate(normalized_requested_events):
+                if normalized_event not in supported_events:
+                    missing_events.append(requested_events[i])  # Use original name in error message
+            
+            if missing_events:
+                unsupported_hosts.append({
+                    "hostname": hostname,
+                    "missing_events": missing_events,
+                    "supported_events": supported_events
+                })
+        
+        # Build error message if there are unsupported hosts
+        if unsupported_hosts:
+            total_unsupported = len(unsupported_hosts)
+            host_details = []
+            
+            # Show up to 10 hosts so users know exactly which hosts have issues
+            max_hosts_to_show = 10
+            for host_info in unsupported_hosts[:max_hosts_to_show]:
+                hostname = host_info["hostname"]
+                missing = ", ".join(host_info["missing_events"])
+                host_details.append(f"  - {hostname}: missing {missing}")
+            
+            more_hosts = total_unsupported - max_hosts_to_show
+            if more_hosts > 0:
+                host_details.append(f"  ...and {more_hosts} more host(s)")
+            
+            # Include summary for better context
+            summary = f"{total_unsupported} host(s) don't support the selected events:"
+            error_message = summary + "\n" + "\n".join(host_details)
+            
+            return {
+                "valid": False,
+                "unsupported_hosts": unsupported_hosts,
+                "error_message": error_message
+            }
+        
+        return {
+            "valid": True,
+            "unsupported_hosts": [],
+            "error_message": None
+        }
 
     def get_actively_profiling_hosts_count(self, service_name: Optional[str] = None, host_exclusion_list: Optional[List[str]] = None, host_inclusion_list: Optional[List[str]] = None) -> int:
         """

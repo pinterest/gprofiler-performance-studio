@@ -401,6 +401,73 @@ const ProfilingStatusPage = () => {
             errors: [],
         });
 
+        // Step 1: Validate PMU events support if perf is enabled and action is 'start'
+        if (action === 'start' && profilerConfigs.perf?.mode !== 'disabled' && profilerConfigs.perf?.events?.length > 0) {
+            const perfEventsValidationPromises = Object.entries(serviceGroups).map(([serviceName, hosts]) => {
+                // Build query parameters for validation endpoint
+                const params = new URLSearchParams();
+                params.append('service_name', serviceName);
+                profilerConfigs.perf.events.forEach(event => {
+                    params.append('requested_events', event);
+                });
+                if (hosts.length > 0) {
+                    hosts.forEach(host => {
+                        params.append('target_hostnames', host);
+                    });
+                }
+                
+                const validationUrl = `${DATA_URLS.VALIDATE_PERF_EVENTS}?${params.toString()}`;
+                
+                return fetch(validationUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                })
+                .then(res => res.json())
+                .then(validationResult => {
+                    if (!validationResult.valid) {
+                        return {
+                            service: serviceName,
+                            error: validationResult.error_message,
+                            unsupported_hosts: validationResult.unsupported_hosts
+                        };
+                    }
+                    return null;
+                });
+            });
+
+            Promise.all(perfEventsValidationPromises)
+                .then(validationResults => {
+                    const perfErrors = validationResults.filter(r => r !== null);
+                    
+                    if (perfErrors.length > 0) {
+                        // PMU validation failed - show errors and don't proceed
+                        const errorMessages = perfErrors.map(err => err.error);
+                        setDryRunValidation({
+                            isValidating: false,
+                            isValid: false,
+                            errors: errorMessages,
+                        });
+                        return; // Stop here - don't proceed to capacity validation
+                    }
+
+                    // PMU validation passed - proceed with capacity dry-run
+                    executeBulkDryRun(action, serviceGroups);
+                })
+                .catch(error => {
+                    setDryRunValidation({
+                        isValidating: false,
+                        isValid: false,
+                        errors: [`PMU event validation error: ${error.message}`],
+                    });
+                });
+        } else {
+            // No PMU validation needed - proceed directly to capacity dry-run
+            executeBulkDryRun(action, serviceGroups);
+        }
+    }
+
+    // Helper function to execute bulk dry-run (capacity validation)
+    function executeBulkDryRun(action, serviceGroups) {
         // Create bulk request with all services
         const requests = Object.entries(serviceGroups).map(([serviceName, hosts]) => {
             const target_host = hosts.reduce((hostObj, host) => {
