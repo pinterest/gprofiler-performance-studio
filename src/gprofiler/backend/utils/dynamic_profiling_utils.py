@@ -20,48 +20,6 @@ from backend.config import MAX_SIMULTANEOUS_PROFILING_HOSTS_PERCENT, MAX_PROFILI
 from backend.models.metrics_models import BulkProfilingRequest
 
 
-# Perf event name normalization mapping
-# Maps UI event names (e.g., 'cpu-cycles') to agent-normalized names (e.g., 'cycles')
-PERF_EVENT_NORMALIZATION_MAP = {
-    "cpu-cycles": "cycles",
-    "cpu-instructions": "instructions",
-    "cpu-cache-misses": "cache-misses",
-    "cpu-cache-references": "cache-references",
-    "cpu-branch-instructions": "branch-instructions",
-    "cpu-branch-misses": "branch-misses",
-    "cpu-stalled-cycles-frontend": "stalled-cycles-frontend",
-    "cpu-stalled-cycles-backend": "stalled-cycles-backend",
-}
-
-
-def normalize_perf_event_name(event: str) -> str:
-    """
-    Normalize perf event names to match what the agent stores.
-    
-    The agent normalizes events like 'cpu-cycles' -> 'cycles', 
-    'cpu/cache-misses/' -> 'cache-misses'
-    
-    Args:
-        event: Event name from UI or user input (e.g., 'cpu-cycles')
-        
-    Returns:
-        Normalized event name (e.g., 'cycles')
-        
-    Example:
-        >>> normalize_perf_event_name('cpu-cycles')
-        'cycles'
-        >>> normalize_perf_event_name('cpu/cache-misses/')
-        'cache-misses'
-        >>> normalize_perf_event_name('cycles')
-        'cycles'
-    """
-    # Remove cpu/ prefix and trailing slash if present
-    event = event.replace("cpu/", "").replace("/", "")
-    
-    # Apply normalization mapping
-    return PERF_EVENT_NORMALIZATION_MAP.get(event, event)
-
-
 def validate_profiling_capacity(
     bulk_profiling_request: BulkProfilingRequest,
     db_manager,
@@ -157,3 +115,61 @@ def validate_profiling_capacity(
         return False, error_msg, all_target_hostnames
     
     return True, None, all_target_hostnames
+
+
+def validate_pmu_events(
+    bulk_profiling_request: BulkProfilingRequest,
+    db_manager
+) -> tuple[bool, Optional[str]]:
+    """
+    Validate that all hosts in the bulk profiling request support the requested PMU events.
+    
+    This function validates PMU event support for all "start" requests with perf enabled.
+    It checks each service's requested events against host capabilities stored in the database.
+    
+    Args:
+        bulk_profiling_request: The BulkProfilingRequest object containing multiple requests
+        db_manager: Instance of DBManager to query host PMU capabilities
+        
+    Returns:
+        tuple: (is_valid: bool, error_message: Optional[str])
+            - is_valid: True if all hosts support requested events
+            - error_message: Combined error messages if validation fails for any service
+        
+    Example:
+        >>> from gprofiler_dev.postgres.db_manager import DBManager
+        >>> db_manager = DBManager()
+        >>> is_valid, error = validate_pmu_events(bulk_request, db_manager)
+        >>> if not is_valid:
+        ...     raise ValueError(error)
+    """
+    pmu_validation_errors = []
+    
+    for profiling_request in bulk_profiling_request.requests:
+        # Only validate "start" requests with additional_args
+        if profiling_request.request_type == "start" and profiling_request.additional_args:
+            profiler_configs = profiling_request.additional_args.get("profiler_configs", {})
+            perf_config = profiler_configs.get("perf", {})
+            perf_mode = perf_config.get("mode", "disabled")
+            perf_events = perf_config.get("events", [])
+            
+            # Only validate if perf is enabled and events are specified
+            if perf_mode != "disabled" and perf_events:
+                target_hostnames_for_service = list(profiling_request.target_hosts.keys())
+                
+                validation_result = db_manager.validate_perf_events_support(
+                    service_name=profiling_request.service_name,
+                    requested_events=perf_events,
+                    target_hostnames=target_hostnames_for_service if target_hostnames_for_service else None
+                )
+                
+                if not validation_result["valid"]:
+                    error_msg = validation_result["error_message"]
+                    pmu_validation_errors.append(f"Service '{profiling_request.service_name}': {error_msg}")
+    
+    # If PMU validation failed for any service, return combined error
+    if pmu_validation_errors:
+        combined_error = "\n\n".join(pmu_validation_errors)
+        return False, combined_error
+    
+    return True, None

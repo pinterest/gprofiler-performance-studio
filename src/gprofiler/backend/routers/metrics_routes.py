@@ -45,7 +45,7 @@ from backend.models.metrics_models import (
     ProfilingResponse,
     SampleCount,
 )
-from backend.utils.dynamic_profiling_utils import validate_profiling_capacity
+from backend.utils.dynamic_profiling_utils import validate_profiling_capacity, validate_pmu_events
 from backend.utils.filters_utils import get_rql_first_eq_key, get_rql_only_for_one_key, get_rql_all_eq_values
 from backend.utils.notifications import SlackNotifier
 from backend.utils.request_utils import flamegraph_base_request_params, get_metrics_response, get_query_response
@@ -545,43 +545,20 @@ def create_bulk_profiling_requests(bulk_request: BulkProfilingRequest) -> BulkPr
         )
 
         # Validate PMU events support for "start" requests with perf enabled
-        # Extract perf events from additional_args of "start" requests
-        pmu_validation_errors = []
-        for index, profiling_request in enumerate(bulk_request.requests):
-            if profiling_request.request_type == "start" and profiling_request.additional_args:
-                profiler_configs = profiling_request.additional_args.get("profiler_configs", {})
-                perf_config = profiler_configs.get("perf", {})
-                perf_mode = perf_config.get("mode", "disabled")
-                perf_events = perf_config.get("events", [])
-                
-                # Only validate if perf is enabled and events are specified
-                if perf_mode != "disabled" and perf_events:
-                    target_hostnames_for_service = list(profiling_request.target_hosts.keys())
-                    
-                    validation_result = db_manager.validate_perf_events_support(
-                        service_name=profiling_request.service_name,
-                        requested_events=perf_events,
-                        target_hostnames=target_hostnames_for_service if target_hostnames_for_service else None
-                    )
-                    
-                    if not validation_result["valid"]:
-                        error_msg = validation_result["error_message"]
-                        pmu_validation_errors.append(f"Service '{profiling_request.service_name}': {error_msg}")
-                        logger.warning(
-                            f"PMU event validation failed for service {profiling_request.service_name}: {error_msg}"
-                        )
+        is_pmu_valid, pmu_error_message = validate_pmu_events(
+            bulk_profiling_request=bulk_request,
+            db_manager=db_manager
+        )
         
-        # If PMU validation failed for any service, return error
-        if pmu_validation_errors:
-            combined_error = "\n\n".join(pmu_validation_errors)
-            logger.warning(f"Bulk profiling PMU validation failed:\n{combined_error}")
+        if not is_pmu_valid:
+            logger.warning(f"Bulk profiling PMU validation failed:\n{pmu_error_message}")
             return JSONResponse(
                 status_code=422,
                 content={
                     "detail": [
                         {
                             "loc": ["body", "requests"],
-                            "msg": f"PMU Event Validation Failed:\n\n{combined_error}",
+                            "msg": f"PMU Event Validation Failed:\n\n{pmu_error_message}",
                             "type": "value_error"
                         }
                     ]

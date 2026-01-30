@@ -390,23 +390,17 @@ const ProfilingStatusPage = () => {
         });
 
         // Trigger dry-run validation when dialog opens
-        executeDryRun(action, serviceGroups);
+        executeBulkDryRun(action, serviceGroups);
     }
 
-    // Execute dry-run validation
-    function executeDryRun(action, serviceGroups) {
+    // Execute bulk dry-run validation (backend handles capacity + PMU events)
+    function executeBulkDryRun(action, serviceGroups) {
         setDryRunValidation({
             isValidating: true,
             isValid: false,
             errors: [],
         });
 
-        // Execute bulk dry-run (backend handles all validation including PMU events)
-        executeBulkDryRun(action, serviceGroups);
-    }
-
-    // Helper function to execute bulk dry-run (capacity validation)
-    function executeBulkDryRun(action, serviceGroups) {
         // Create bulk request with all services
         const requests = Object.entries(serviceGroups).map(([serviceName, hosts]) => {
             const target_host = hosts.reduce((hostObj, host) => {

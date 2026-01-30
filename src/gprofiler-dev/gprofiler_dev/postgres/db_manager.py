@@ -33,7 +33,7 @@ from gprofiler_dev.postgres import get_postgres_db
 from gprofiler_dev.postgres.postgresdb import DBConflict
 from gprofiler_dev.postgres.queries import AggregationSQLQueries, SQLQueries
 from gprofiler_dev.postgres.schemas import AgentMetadata, CloudProvider, GetServiceResponse
-from backend.utils.dynamic_profiling_utils import normalize_perf_event_name
+from gprofiler_dev.perf_utils import normalize_perf_event_name
 
 AGENT_RETENTION_HOURS = 24
 LAST_SEEN_UPDATES_INTERVAL_MINUTES = 5
