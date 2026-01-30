@@ -260,6 +260,7 @@ CREATE TABLE HostHeartbeats (
     executed_command_ids uuid[] NULL,
     status HostStatus NOT NULL DEFAULT 'active',
     heartbeat_timestamp timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    supported_perf_events text[] NULL,
     created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "unique_host_heartbeat" UNIQUE (hostname, service_name)

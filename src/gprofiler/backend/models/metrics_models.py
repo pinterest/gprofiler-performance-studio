@@ -229,6 +229,7 @@ class HeartbeatRequest(BaseModel):
     executed_command_ids: Optional[List[str]] = None
     status: str = "active"  # active, idle, error
     timestamp: Optional[datetime] = None
+    perf_supported_events: Optional[List[str]] = None  # Changed to match agent format
 
 
 class HeartbeatResponse(BaseModel):

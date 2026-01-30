@@ -83,7 +83,8 @@ const ProfilingTopPanel = ({
         { value: 'cache-references', label: 'Cache References', tooltip: 'Total cache access attempts' },
         { value: 'branch-instructions', label: 'Branch Instructions', tooltip: 'Conditional jump instructions executed' },
         { value: 'branch-misses', label: 'Branch Misses', tooltip: 'Mispredicted branches - impacts pipeline efficiency' },
-        { value: 'stalled-cycles-frontend', label: 'Stalled Cycles (Frontend)', tooltip: 'CPU cycles stalled waiting for instructions' }
+        { value: 'stalled-cycles-frontend', label: 'Stalled Cycles (Frontend)', tooltip: 'CPU cycles stalled waiting for instructions' },
+        { value: 'stalled-cycles-backend', label: 'Stalled Cycles (Backend)', tooltip: 'CPU cycles stalled during execution (CPU-dependent)' }
     ];
 
     // Profiler configuration definitions

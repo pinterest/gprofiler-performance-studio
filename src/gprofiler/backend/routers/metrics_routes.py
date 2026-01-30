@@ -45,7 +45,7 @@ from backend.models.metrics_models import (
     ProfilingResponse,
     SampleCount,
 )
-from backend.utils.dynamic_profiling_utils import validate_profiling_capacity
+from backend.utils.dynamic_profiling_utils import validate_profiling_capacity, validate_pmu_events
 from backend.utils.filters_utils import get_rql_first_eq_key, get_rql_only_for_one_key, get_rql_all_eq_values
 from backend.utils.notifications import SlackNotifier
 from backend.utils.request_utils import flamegraph_base_request_params, get_metrics_response, get_query_response
@@ -521,7 +521,13 @@ def create_bulk_profiling_requests(bulk_request: BulkProfilingRequest) -> BulkPr
             db_manager=db_manager,
             service_name=None  # Validate globally across all services
         )
-        
+
+        # Validate PMU events support across all requests
+        is_valid, error_message = validate_pmu_events(
+            bulk_profiling_request=bulk_request,
+            db_manager=db_manager
+        )
+
         if not is_valid:
             logger.warning(
                 f"Bulk profiling capacity validation failed: {error_message}"
@@ -706,6 +712,7 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                 executed_command_ids=heartbeat.executed_command_ids,
                 status=heartbeat.status,
                 heartbeat_timestamp=heartbeat.timestamp,
+                supported_perf_events=heartbeat.perf_supported_events,  # Use agent field name
             )
 
             # 2. Check for current profiling command for this host/service
