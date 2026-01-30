@@ -390,11 +390,11 @@ const ProfilingStatusPage = () => {
         });
 
         // Trigger dry-run validation when dialog opens
-        executeBulkDryRun(action, serviceGroups);
+        executeDryRun(action, serviceGroups);
     }
 
-    // Execute bulk dry-run validation (backend handles capacity + PMU events)
-    function executeBulkDryRun(action, serviceGroups) {
+    // Execute dry-run validation
+    function executeDryRun(action, serviceGroups) {
         setDryRunValidation({
             isValidating: true,
             isValid: false,

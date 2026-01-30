@@ -19,7 +19,7 @@ import math
 import uuid
 from datetime import datetime, timedelta, timezone
 from logging import getLogger
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from backend.models.filters_models import FilterTypes
 from backend.models.flamegraph_models import FGParamsBaseModel
@@ -521,7 +521,13 @@ def create_bulk_profiling_requests(bulk_request: BulkProfilingRequest) -> BulkPr
             db_manager=db_manager,
             service_name=None  # Validate globally across all services
         )
-        
+
+        # Validate PMU events support across all requests
+        is_valid, error_message = validate_pmu_events(
+            bulk_profiling_request=bulk_request,
+            db_manager=db_manager
+        )
+
         if not is_valid:
             logger.warning(
                 f"Bulk profiling capacity validation failed: {error_message}"
@@ -543,27 +549,6 @@ def create_bulk_profiling_requests(bulk_request: BulkProfilingRequest) -> BulkPr
         logger.info(
             f"Bulk profiling capacity validated successfully. Total target hosts: {len(target_hostnames)}"
         )
-
-        # Validate PMU events support for "start" requests with perf enabled
-        is_pmu_valid, pmu_error_message = validate_pmu_events(
-            bulk_profiling_request=bulk_request,
-            db_manager=db_manager
-        )
-        
-        if not is_pmu_valid:
-            logger.warning(f"Bulk profiling PMU validation failed:\n{pmu_error_message}")
-            return JSONResponse(
-                status_code=422,
-                content={
-                    "detail": [
-                        {
-                            "loc": ["body", "requests"],
-                            "msg": f"PMU Event Validation Failed:\n\n{pmu_error_message}",
-                            "type": "value_error"
-                        }
-                    ]
-                }
-            )
 
         results: List[BulkProfilingRequestResult] = []
         successful_count = 0
