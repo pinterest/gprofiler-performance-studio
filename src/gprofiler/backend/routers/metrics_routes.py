@@ -287,52 +287,6 @@ def get_html_metadata(
     return HTMLMetadata(content=html_content)
 
 
-@router.post("/validate_perf_events")
-def validate_perf_events(
-    service_name: str = Query(...),
-    requested_events: List[str] = Query(...),
-    target_hostnames: Optional[List[str]] = Query(None)
-) -> Dict[str, Any]:
-    """
-    Validate if the requested perf events are supported by target hosts before creating a profile request.
-    
-    This endpoint performs a dry-run validation to check:
-    1. If the target hosts are active and reporting
-    2. If the hosts support the requested PMU events
-    3. Provides clear error messages if validation fails
-    
-    Args:
-        service_name: Service name to validate against
-        requested_events: List of perf events to validate (e.g., ['cpu-cycles', 'cache-misses'])
-        target_hostnames: Optional list of specific hosts to check (None = all hosts for service)
-    
-    Returns:
-        Validation result with details about unsupported hosts
-    """
-    try:
-        db_manager = DBManager()
-        validation_result = db_manager.validate_perf_events_support(
-            service_name=service_name,
-            requested_events=requested_events,
-            target_hostnames=target_hostnames
-        )
-        
-        if not validation_result["valid"]:
-            logger.warning(
-                f"Perf event validation failed for service {service_name}: {validation_result['error_message']}"
-            )
-        
-        return validation_result
-    
-    except Exception as e:
-        logger.error(f"Failed to validate perf events: {str(e)}", exc_info=True)
-        return {
-            "valid": False,
-            "unsupported_hosts": [],
-            "error_message": f"Validation error: {str(e)}"
-        }
-
-
 @router.post("/profile_request", response_model=ProfilingResponse)
 def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingResponse:
     """
@@ -589,6 +543,50 @@ def create_bulk_profiling_requests(bulk_request: BulkProfilingRequest) -> BulkPr
         logger.info(
             f"Bulk profiling capacity validated successfully. Total target hosts: {len(target_hostnames)}"
         )
+
+        # Validate PMU events support for "start" requests with perf enabled
+        # Extract perf events from additional_args of "start" requests
+        pmu_validation_errors = []
+        for index, profiling_request in enumerate(bulk_request.requests):
+            if profiling_request.request_type == "start" and profiling_request.additional_args:
+                profiler_configs = profiling_request.additional_args.get("profiler_configs", {})
+                perf_config = profiler_configs.get("perf", {})
+                perf_mode = perf_config.get("mode", "disabled")
+                perf_events = perf_config.get("events", [])
+                
+                # Only validate if perf is enabled and events are specified
+                if perf_mode != "disabled" and perf_events:
+                    target_hostnames_for_service = list(profiling_request.target_hosts.keys())
+                    
+                    validation_result = db_manager.validate_perf_events_support(
+                        service_name=profiling_request.service_name,
+                        requested_events=perf_events,
+                        target_hostnames=target_hostnames_for_service if target_hostnames_for_service else None
+                    )
+                    
+                    if not validation_result["valid"]:
+                        error_msg = validation_result["error_message"]
+                        pmu_validation_errors.append(f"Service '{profiling_request.service_name}': {error_msg}")
+                        logger.warning(
+                            f"PMU event validation failed for service {profiling_request.service_name}: {error_msg}"
+                        )
+        
+        # If PMU validation failed for any service, return error
+        if pmu_validation_errors:
+            combined_error = "\n\n".join(pmu_validation_errors)
+            logger.warning(f"Bulk profiling PMU validation failed:\n{combined_error}")
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "detail": [
+                        {
+                            "loc": ["body", "requests"],
+                            "msg": f"PMU Event Validation Failed:\n\n{combined_error}",
+                            "type": "value_error"
+                        }
+                    ]
+                }
+            )
 
         results: List[BulkProfilingRequestResult] = []
         successful_count = 0

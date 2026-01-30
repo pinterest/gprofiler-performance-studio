@@ -33,6 +33,7 @@ from gprofiler_dev.postgres import get_postgres_db
 from gprofiler_dev.postgres.postgresdb import DBConflict
 from gprofiler_dev.postgres.queries import AggregationSQLQueries, SQLQueries
 from gprofiler_dev.postgres.schemas import AgentMetadata, CloudProvider, GetServiceResponse
+from backend.utils.dynamic_profiling_utils import normalize_perf_event_name
 
 AGENT_RETENTION_HOURS = 24
 LAST_SEEN_UPDATES_INTERVAL_MINUTES = 5
@@ -971,28 +972,6 @@ class DBManager(metaclass=Singleton):
         result = self.db.execute(query, values, one_value=True, return_dict=True)
         return result.get("active_hosts_count", 0) if result else 0
 
-    def _normalize_perf_event_name(self, event: str) -> str:
-        """
-        Normalize perf event names to match what the agent stores.
-        The agent normalizes events like 'cpu-cycles' -> 'cycles', 'cpu/cache-misses/' -> 'cache-misses'
-        """
-        # Remove cpu/ prefix and trailing slash if present
-        event = event.replace("cpu/", "").replace("/", "")
-        
-        # Map common aliases to normalized names
-        event_mapping = {
-            "cpu-cycles": "cycles",
-            "cpu-instructions": "instructions",
-            "cpu-cache-misses": "cache-misses",
-            "cpu-cache-references": "cache-references",
-            "cpu-branch-instructions": "branch-instructions",
-            "cpu-branch-misses": "branch-misses",
-            "cpu-stalled-cycles-frontend": "stalled-cycles-frontend",
-            "cpu-stalled-cycles-backend": "stalled-cycles-backend",
-        }
-        
-        return event_mapping.get(event, event)
-
     def validate_perf_events_support(
         self, 
         service_name: str, 
@@ -1016,7 +995,7 @@ class DBManager(metaclass=Singleton):
             }
         """
         # Normalize requested events to match agent's format
-        normalized_requested_events = [self._normalize_perf_event_name(event) for event in requested_events]
+        normalized_requested_events = [normalize_perf_event_name(event) for event in requested_events]
         
         # Build query to get hosts and their supported events
         query = """

@@ -20,6 +20,48 @@ from backend.config import MAX_SIMULTANEOUS_PROFILING_HOSTS_PERCENT, MAX_PROFILI
 from backend.models.metrics_models import BulkProfilingRequest
 
 
+# Perf event name normalization mapping
+# Maps UI event names (e.g., 'cpu-cycles') to agent-normalized names (e.g., 'cycles')
+PERF_EVENT_NORMALIZATION_MAP = {
+    "cpu-cycles": "cycles",
+    "cpu-instructions": "instructions",
+    "cpu-cache-misses": "cache-misses",
+    "cpu-cache-references": "cache-references",
+    "cpu-branch-instructions": "branch-instructions",
+    "cpu-branch-misses": "branch-misses",
+    "cpu-stalled-cycles-frontend": "stalled-cycles-frontend",
+    "cpu-stalled-cycles-backend": "stalled-cycles-backend",
+}
+
+
+def normalize_perf_event_name(event: str) -> str:
+    """
+    Normalize perf event names to match what the agent stores.
+    
+    The agent normalizes events like 'cpu-cycles' -> 'cycles', 
+    'cpu/cache-misses/' -> 'cache-misses'
+    
+    Args:
+        event: Event name from UI or user input (e.g., 'cpu-cycles')
+        
+    Returns:
+        Normalized event name (e.g., 'cycles')
+        
+    Example:
+        >>> normalize_perf_event_name('cpu-cycles')
+        'cycles'
+        >>> normalize_perf_event_name('cpu/cache-misses/')
+        'cache-misses'
+        >>> normalize_perf_event_name('cycles')
+        'cycles'
+    """
+    # Remove cpu/ prefix and trailing slash if present
+    event = event.replace("cpu/", "").replace("/", "")
+    
+    # Apply normalization mapping
+    return PERF_EVENT_NORMALIZATION_MAP.get(event, event)
+
+
 def validate_profiling_capacity(
     bulk_profiling_request: BulkProfilingRequest,
     db_manager,
