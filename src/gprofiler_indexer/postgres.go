@@ -63,11 +63,6 @@ func StoreAdhocFlamegraphMetadata(
 		return fmt.Errorf("postgres connection not initialized")
 	}
 
-	// Only store metadata if we have perf events
-	if len(perfEvents) == 0 {
-		return nil
-	}
-
 	query := `
 		INSERT INTO AdhocFlamegraphMetadata 
 		(service_id, hostname, s3_key, perf_events, start_time, end_time, file_size)
