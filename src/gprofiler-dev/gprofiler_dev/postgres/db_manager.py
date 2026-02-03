@@ -2071,7 +2071,8 @@ class DBManager(metaclass=Singleton):
                 s3_key,
                 hostname,
                 perf_events,
-                start_time
+                start_time,
+                file_size
             FROM AdhocFlamegraphMetadata
             WHERE {where_clause}
             ORDER BY start_time DESC
@@ -2088,6 +2089,7 @@ class DBManager(metaclass=Singleton):
                 "hostname": row[1],
                 "perf_events": row[2] if row[2] else [],
                 "start_time": row[3].isoformat() if row[3] else None,
+                "file_size": row[4] if len(row) > 4 else None,
             }
             for row in results
         ]

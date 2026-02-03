@@ -21,11 +21,6 @@ from datetime import datetime, timedelta, timezone
 from logging import getLogger
 from typing import List, Optional
 
-from backend.utils.flamegraph_utils import (
-    parse_adhoc_flamegraph_filename,
-    should_include_flamegraph,
-)
-
 from backend.models.filters_models import FilterTypes
 from backend.models.flamegraph_models import FGParamsBaseModel
 from backend.models.metrics_models import (
@@ -985,29 +980,21 @@ def get_adhoc_flamegraphs(
     fg_params: FGParamsBaseModel = Depends(flamegraph_base_request_params),
 ):
     """
-    Get list of available adhoc flamegraph files from S3 for the given service and time range.
-    Files are stored in S3 path: products/{service}/stacks/flamegraph/
-    Supports filtering by hostname(s) if specified in the filter parameters.
-    Includes PMU events metadata from the database.
+    Get list of available adhoc flamegraph files for the given service and time range.
+    Retrieves metadata from the database which is populated by the indexer after successful
+    flamegraph HTML creation. Supports filtering by hostname(s) and time range.
     """
     try:
-        s3_dal = S3ProfileDal(logger)
         db_manager = DBManager()
         service_name = fg_params.service_name
         
         # Get service_id for metadata query
         service_id = db_manager.get_service(service_name)
         
-        # Extract all hostname filters from fg_params if present
+        # Extract hostname filters from fg_params if present
         hostname_filters = get_rql_all_eq_values(fg_params.filter, FilterTypes.HOSTNAME_KEY)
         
-        # Build S3 path for flamegraph files
-        flamegraph_prefix = f"products/{service_name}/stacks/flamegraph/"
-        
-        # List files in S3 with the flamegraph prefix
-        files = s3_dal.list_files_with_prefix(flamegraph_prefix)
-        
-        # Get metadata from database
+        # Get metadata from database (already filtered by service, time, and hostname)
         metadata_list = db_manager.get_adhoc_flamegraphs_metadata(
             service_id=service_id,
             start_time=fg_params.start_time,
@@ -1015,45 +1002,20 @@ def get_adhoc_flamegraphs(
             hostname_filters=hostname_filters,
         )
         
-        # Create lookup map: s3_key -> metadata
-        metadata_map = {m["s3_key"]: m for m in metadata_list}
-        
+        # Convert metadata to FlamegraphFile objects
         flamegraph_files = []
-        for file_info in files:
-            filename = file_info['Key'].split('/')[-1]  # Get just the filename
-            
-            # Parse filename to extract timestamp and hostname
-            parsed = parse_adhoc_flamegraph_filename(filename)
-            if not parsed:
-                logger.debug(f"Skipping file {filename}: invalid format")
-                continue
-            
-            timestamp, hostname = parsed
-            
-            # Apply time and hostname filters
-            if not should_include_flamegraph(
-                timestamp, hostname,
-                fg_params.start_time, fg_params.end_time,
-                hostname_filters
-            ):
-                continue
-            
-            # Get metadata if available
-            s3_key = file_info['Key']
-            metadata = metadata_map.get(s3_key, {})
-            perf_events = metadata.get("perf_events", None)
+        for metadata in metadata_list:
+            s3_key = metadata["s3_key"]
+            filename = s3_key.split('/')[-1]
             
             flamegraph_files.append(FlamegraphFile(
                 filename=filename,
-                timestamp=timestamp,
-                hostname=hostname,
-                size=file_info.get('Size'),
+                timestamp=datetime.fromisoformat(metadata["start_time"]),
+                hostname=metadata["hostname"],
+                size=metadata.get("file_size"),
                 s3_path=s3_key,
-                perf_events=perf_events
+                perf_events=metadata.get("perf_events")
             ))
-        
-        # Sort by timestamp descending (newest first)
-        flamegraph_files.sort(key=lambda x: x.timestamp, reverse=True)
         
         return flamegraph_files
         

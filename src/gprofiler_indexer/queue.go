@@ -28,10 +28,9 @@ import (
 )
 
 type SQSMessage struct {
-	Filename      string   `json:"filename"`
-	Service       string   `json:"service"`
-	ServiceId     int      `json:"service_id"`
-	PerfEvents    []string `json:"perf_events"`
+	Filename      string `json:"filename"`
+	Service       string `json:"service"`
+	ServiceId     int    `json:"service_id"`
 	MessageHandle string
 	QueueURL      string
 }

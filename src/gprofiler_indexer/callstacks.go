@@ -58,6 +58,7 @@ type FileInfo struct {
 		RunArguments struct {
 			ServiceName       string `json:"service_name"`
 			ProfileApiVersion string `json:"profile_api_version"`
+			PerfEvents        string `json:"perf_events"`
 		} `json:"run_arguments"`
 	} `json:"metadata"`
 	HTMLBlob       string `json:"htmlblob"`
@@ -339,21 +340,37 @@ func (pw *ProfilesWriter) ParseStackFrameFile(sess *session.Session, task SQSMes
 			log.Infof("successfully uploaded flamegraph HTML to %s", flamegraphHTMLPath)
 			
 			// Store metadata in PostgreSQL (only for adhoc profiles with perf events)
-			if profilingType == ProfilingTypeAdhoc && len(task.PerfEvents) > 0 {
-				err = StoreAdhocFlamegraphMetadata(
-					task.ServiceId,
-					fileInfo.Metadata.Hostname,
-					flamegraphHTMLPath,
-					task.PerfEvents,
-					timestamp,
-					int64(len(flamegraphData)),
-				)
-				if err != nil {
-					log.Errorf("failed to store flamegraph metadata for %s: %v", flamegraphHTMLPath, err)
-					// Don't fail the entire operation if metadata storage fails
-				} else {
-					log.Infof("successfully stored metadata for %s with events: %v", 
-						flamegraphHTMLPath, task.PerfEvents)
+			if profilingType == ProfilingTypeAdhoc {
+				// Extract perf_events from profile metadata
+				perfEventsStr := fileInfo.Metadata.RunArguments.PerfEvents
+				var perfEvents []string
+				if perfEventsStr != "" {
+					// Split comma-separated string into array
+					for _, event := range strings.Split(perfEventsStr, ",") {
+						trimmed := strings.TrimSpace(event)
+						if trimmed != "" {
+							perfEvents = append(perfEvents, trimmed)
+						}
+					}
+				}
+				
+				// Only store metadata if we have perf events
+				if len(perfEvents) > 0 {
+					err = StoreAdhocFlamegraphMetadata(
+						task.ServiceId,
+						fileInfo.Metadata.Hostname,
+						flamegraphHTMLPath,
+						perfEvents,
+						timestamp,
+						int64(len(flamegraphData)),
+					)
+					if err != nil {
+						log.Errorf("failed to store flamegraph metadata for %s: %v", flamegraphHTMLPath, err)
+						// Don't fail the entire operation if metadata storage fails
+					} else {
+						log.Infof("successfully stored metadata for %s with events: %v", 
+							flamegraphHTMLPath, perfEvents)
+					}
 				}
 			}
 		}
