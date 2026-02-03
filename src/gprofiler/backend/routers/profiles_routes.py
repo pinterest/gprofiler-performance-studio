@@ -19,7 +19,7 @@ import json
 import os
 import random
 from logging import getLogger
-from typing import List, Union
+from typing import Union
 
 import boto3
 from backend import config

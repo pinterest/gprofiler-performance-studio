@@ -2028,3 +2028,68 @@ class DBManager(metaclass=Singleton):
             combined_config.update(merged_additional_args)  # Merge directly into combined_config
 
         return combined_config
+
+    def get_adhoc_flamegraphs_metadata(
+        self,
+        service_id: int,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        hostname_filters: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve adhoc flamegraph metadata with optional filters.
+        
+        Args:
+            service_id: ID of the service
+            start_time: Optional filter for profiles after this time
+            end_time: Optional filter for profiles before this time
+            hostname_filters: Optional list of hostnames to filter by
+            
+        Returns:
+            List of metadata dictionaries containing s3_key, hostname, perf_events, and start_time
+        """
+        conditions = ["service_id = %s"]
+        params: List[Any] = [service_id]
+        
+        if start_time:
+            conditions.append("start_time >= %s")
+            params.append(start_time)
+        
+        if end_time:
+            conditions.append("end_time <= %s")
+            params.append(end_time)
+        
+        if hostname_filters:
+            placeholders = ", ".join(["%s"] * len(hostname_filters))
+            conditions.append(f"hostname IN ({placeholders})")
+            params.extend(hostname_filters)
+        
+        where_clause = " AND ".join(conditions)
+        
+        query = f"""
+            SELECT 
+                s3_key,
+                hostname,
+                perf_events,
+                start_time,
+                file_size
+            FROM AdhocFlamegraphMetadata
+            WHERE {where_clause}
+            ORDER BY start_time DESC
+        """
+        
+        results = self.db.execute(query, tuple(params), one_value=False, fetch_all=True)
+        
+        if not results:
+            return []
+        
+        return [
+            {
+                "s3_key": row[0],
+                "hostname": row[1],
+                "perf_events": row[2] if row[2] else [],
+                "start_time": row[3].isoformat() if row[3] else None,
+                "file_size": row[4] if len(row) > 4 else None,
+            }
+            for row in results
+        ]

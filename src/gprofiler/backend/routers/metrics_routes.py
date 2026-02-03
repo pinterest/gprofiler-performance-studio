@@ -69,6 +69,7 @@ class FlamegraphFile(BaseModel):
     hostname: Optional[str] = None
     size: Optional[int] = None
     s3_path: str
+    perf_events: Optional[List[str]] = None
 
 
 class FlamegraphContent(BaseModel):
@@ -979,74 +980,42 @@ def get_adhoc_flamegraphs(
     fg_params: FGParamsBaseModel = Depends(flamegraph_base_request_params),
 ):
     """
-    Get list of available adhoc flamegraph files from S3 for the given service and time range.
-    Files are stored in S3 path: products/{service}/stacks/flamegraph/
-    Supports filtering by hostname(s) if specified in the filter parameters.
+    Get list of available adhoc flamegraph files for the given service and time range.
+    Retrieves metadata from the database which is populated by the indexer after successful
+    flamegraph HTML creation. Supports filtering by hostname(s) and time range.
     """
     try:
-        s3_dal = S3ProfileDal(logger)
+        db_manager = DBManager()
         service_name = fg_params.service_name
         
-        # Extract all hostname filters from fg_params if present
+        # Get service_id for metadata query
+        service_id = db_manager.get_service(service_name)
+        
+        # Extract hostname filters from fg_params if present
         hostname_filters = get_rql_all_eq_values(fg_params.filter, FilterTypes.HOSTNAME_KEY)
         
-        # Build S3 path for flamegraph files
-        flamegraph_prefix = f"products/{service_name}/stacks/flamegraph/"
+        # Get metadata from database (already filtered by service, time, and hostname)
+        metadata_list = db_manager.get_adhoc_flamegraphs_metadata(
+            service_id=service_id,
+            start_time=fg_params.start_time,
+            end_time=fg_params.end_time,
+            hostname_filters=hostname_filters,
+        )
         
-        # List files in S3 with the flamegraph prefix
-        files = s3_dal.list_files_with_prefix(flamegraph_prefix)
-        
+        # Convert metadata to FlamegraphFile objects
         flamegraph_files = []
-        for file_info in files:
-            filename = file_info['Key'].split('/')[-1]  # Get just the filename
-            
-            # Only include adhoc flamegraph HTML files
-            if not filename.endswith('_adhoc_flamegraph.html'):
-                continue
-            
-            # Parse timestamp and hostname from filename
-            try:
-                # Remove the _adhoc_flamegraph.html suffix to get the base filename
-                base_filename = filename.replace('_adhoc_flamegraph.html', '')
-                
-                # Parse timestamp and hostname
-                # Format: timestamp_random_suffix_hostname_adhoc
-                filename_parts = base_filename.split('_')
-                if len(filename_parts) < 3:
-                    continue
-                
-                timestamp_str = filename_parts[0]
-                timestamp = datetime.fromisoformat(timestamp_str).replace(tzinfo=timezone.utc)
-                
-                # Extract hostname (everything after timestamp and random_suffix)
-                hostname = '_'.join(filename_parts[2:])
-                
-                # Filter by time range if specified
-                if fg_params.start_time and timestamp < fg_params.start_time:
-                    continue
-                if fg_params.end_time and timestamp > fg_params.end_time:
-                    continue
-                
-                # Filter by hostname(s) if specified in the filter
-                # If hostname_filters is not empty, only include files where hostname matches one of the filters
-                if hostname_filters and hostname and hostname not in hostname_filters:
-                    continue
-                    
-            except (ValueError, IndexError) as e:
-                # Skip files that don't match expected naming pattern
-                logger.debug(f"Skipping file {filename} due to parsing error: {e}")
-                continue
+        for metadata in metadata_list:
+            s3_key = metadata["s3_key"]
+            filename = s3_key.split('/')[-1]
             
             flamegraph_files.append(FlamegraphFile(
                 filename=filename,
-                timestamp=timestamp,
-                hostname=hostname,
-                size=file_info.get('Size'),
-                s3_path=file_info['Key']
+                timestamp=datetime.fromisoformat(metadata["start_time"]),
+                hostname=metadata["hostname"],
+                size=metadata.get("file_size"),
+                s3_path=s3_key,
+                perf_events=metadata.get("perf_events")
             ))
-        
-        # Sort by timestamp descending (newest first)
-        flamegraph_files.sort(key=lambda x: x.timestamp, reverse=True)
         
         return flamegraph_files
         

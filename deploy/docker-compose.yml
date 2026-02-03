@@ -218,10 +218,18 @@ services:
       - METRICS_SLI_UUID=$INDEXER_METRICS_SLI_UUID
       # Local Testing: LocalStack Endpoint
       - AWS_ENDPOINT_URL=$AWS_ENDPOINT_URL
+      # PostgreSQL Configuration for Adhoc Flamegraph Metadata (using same env vars as webapp)
+      - GPROFILER_POSTGRES_HOST=$POSTGRES_HOST
+      - GPROFILER_POSTGRES_PORT=$POSTGRES_PORT
+      - GPROFILER_POSTGRES_USERNAME=$POSTGRES_USER
+      - GPROFILER_POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+      - GPROFILER_POSTGRES_DB_NAME=$POSTGRES_DB
     depends_on:
       localstack:
         condition: service_healthy
       db_clickhouse:
+        condition: service_healthy
+      db_postgres:
         condition: service_healthy
   #---
   nginx-load-balancer:

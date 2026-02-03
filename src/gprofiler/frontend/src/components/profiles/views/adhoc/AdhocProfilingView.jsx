@@ -153,6 +153,7 @@ const AdhocProfilingView = () => {
                                     <TableRow>
                                         <TableCell>Timestamp</TableCell>
                                         <TableCell>Hostname</TableCell>
+                                        <TableCell>PMU Events</TableCell>
                                         <TableCell>Size</TableCell>
                                         <TableCell>Action</TableCell>
                                     </TableRow>
@@ -167,6 +168,11 @@ const AdhocProfilingView = () => {
                                         >
                                             <TableCell>{format(new Date(file.timestamp), 'yyyy-MM-dd HH:mm:ss')}</TableCell>
                                             <TableCell>{file.hostname || 'N/A'}</TableCell>
+                                            <TableCell>
+                                                {file.perf_events && file.perf_events.length > 0 
+                                                    ? file.perf_events.join(', ') 
+                                                    : 'N/A'}
+                                            </TableCell>
                                             <TableCell>{(file.size / 1024).toFixed(2)} KB</TableCell>
                                             <TableCell>
                                                 <Button size="small" onClick={() => handleRowClick(file)}>View</Button>

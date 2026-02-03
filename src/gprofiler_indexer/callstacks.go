@@ -30,6 +30,12 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// Profiling type constants
+const (
+	ProfilingTypeAdhoc      = "adhoc"
+	ProfilingTypeContinuous = "continuous"
+)
+
 type FrameValuesMap map[string]map[string]FrameValue
 
 type FrameValue struct {
@@ -52,6 +58,8 @@ type FileInfo struct {
 		RunArguments struct {
 			ServiceName       string `json:"service_name"`
 			ProfileApiVersion string `json:"profile_api_version"`
+			PerfEvents        string `json:"perf_events"`
+			PerfMode          string `json:"perf_mode"`
 		} `json:"run_arguments"`
 	} `json:"metadata"`
 	HTMLBlob       string `json:"htmlblob"`
@@ -309,9 +317,9 @@ func (pw *ProfilesWriter) ParseStackFrameFile(sess *session.Session, task SQSMes
 		}
 		
 		// Determine profiling type based on metadata.continuous
-		profilingType := "adhoc"
+		profilingType := ProfilingTypeAdhoc
 		if fileInfo.Metadata.Continuous {
-			profilingType = "continuous"
+			profilingType = ProfilingTypeContinuous
 		}
 		
 		flamegraphHTMLPath := fmt.Sprintf("products/%s/stacks/flamegraph/%s_%s_flamegraph.html", task.Service, baseFileName, profilingType)
@@ -331,6 +339,42 @@ func (pw *ProfilesWriter) ParseStackFrameFile(sess *session.Session, task SQSMes
 			log.Errorf("failed to upload flamegraph HTML for file %s: %v", task.Filename, err)
 		} else {
 			log.Infof("successfully uploaded flamegraph HTML to %s", flamegraphHTMLPath)
+			
+			// Store metadata in PostgreSQL for all adhoc profiles
+			if profilingType == ProfilingTypeAdhoc {
+				// Extract perf_events from profile metadata only if perf_mode is enabled
+				var perfEvents []string
+				perfMode := fileInfo.Metadata.RunArguments.PerfMode
+				if perfMode != "disabled" {
+					perfEventsStr := fileInfo.Metadata.RunArguments.PerfEvents
+					if perfEventsStr != "" {
+						// Split comma-separated string into array
+						for _, event := range strings.Split(perfEventsStr, ",") {
+							trimmed := strings.TrimSpace(event)
+							if trimmed != "" {
+								perfEvents = append(perfEvents, trimmed)
+							}
+						}
+					}
+				}
+				
+				// Store metadata for all adhoc profiles (perf_events will be empty array if perf_mode is not enabled)
+				err = StoreAdhocFlamegraphMetadata(
+					task.ServiceId,
+					fileInfo.Metadata.Hostname,
+					flamegraphHTMLPath,
+					perfEvents,
+					timestamp,
+					int64(len(flamegraphData)),
+				)
+				if err != nil {
+					log.Errorf("failed to store flamegraph metadata for %s: %v", flamegraphHTMLPath, err)
+					// Don't fail the entire operation if metadata storage fails
+				} else {
+					log.Infof("successfully stored metadata for %s with events: %v", 
+						flamegraphHTMLPath, perfEvents)
+				}
+			}
 		}
 	}
 
