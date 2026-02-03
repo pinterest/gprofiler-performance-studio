@@ -41,6 +41,12 @@ type CLIArgs struct {
 	MetricsAgentURL    string
 	MetricsServiceName string
 	MetricsSLIUUID     string
+	// PostgreSQL Configuration
+	PostgresHost     string
+	PostgresPort     int
+	PostgresUser     string
+	PostgresPassword string
+	PostgresDB       string
 }
 
 func NewCliArgs() *CLIArgs {
@@ -60,6 +66,12 @@ func NewCliArgs() *CLIArgs {
 		MetricsAgentURL:    "tcp://localhost:18126",
 		MetricsServiceName: "gprofiler-indexer",
 		MetricsSLIUUID:     "",
+		// PostgreSQL defaults
+		PostgresHost:     "localhost",
+		PostgresPort:     5432,
+		PostgresUser:     "gprofiler",
+		PostgresPassword: "",
+		PostgresDB:       "gprofiler_db",
 	}
 }
 
@@ -102,6 +114,17 @@ func (ca *CLIArgs) ParseArgs() {
 		"Service name for metrics (default gprofiler-indexer)")
 	flag.StringVar(&ca.MetricsSLIUUID, "metrics-sli-uuid", LookupEnvOrString("METRICS_SLI_UUID", ca.MetricsSLIUUID),
 		"SLI metric UUID")
+	// PostgreSQL Configuration (using same env vars as webapp for consistency)
+	flag.StringVar(&ca.PostgresHost, "postgres-host", LookupEnvOrString("GPROFILER_POSTGRES_HOST", ca.PostgresHost),
+		"PostgreSQL host (default localhost)")
+	flag.IntVar(&ca.PostgresPort, "postgres-port", LookupEnvOrInt("GPROFILER_POSTGRES_PORT", ca.PostgresPort),
+		"PostgreSQL port (default 5432)")
+	flag.StringVar(&ca.PostgresUser, "postgres-user", LookupEnvOrString("GPROFILER_POSTGRES_USERNAME", ca.PostgresUser),
+		"PostgreSQL user (default gprofiler)")
+	flag.StringVar(&ca.PostgresPassword, "postgres-password", LookupEnvOrString("GPROFILER_POSTGRES_PASSWORD", ca.PostgresPassword),
+		"PostgreSQL password")
+	flag.StringVar(&ca.PostgresDB, "postgres-db", LookupEnvOrString("GPROFILER_POSTGRES_DB_NAME", ca.PostgresDB),
+		"PostgreSQL database name (default gprofiler_db)")
 	flag.Parse()
 
 	if ca.SQSQueue == "" && ca.InputFolder == "" {

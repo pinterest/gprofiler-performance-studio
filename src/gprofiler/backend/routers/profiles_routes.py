@@ -24,6 +24,7 @@ from typing import List, Union
 import boto3
 from backend import config
 from backend.models.profiles_models import AgentData, ProfileResponse
+from backend.utils.flamegraph_utils import extract_perf_events_from_profile
 from backend.utils.metrics_publisher import (
     MetricsPublisher,
     RESPONSE_TYPE_SUCCESS,
@@ -199,6 +200,11 @@ def new_profile_v2(
         service_sample_threshold = db_manager.get_service_sample_threshold_by_id(service_id)
         random_value = random.uniform(0.0, 1.0)
 
+        # Extract perf_events from profile metadata
+        perf_events = extract_perf_events_from_profile(profile_header)
+        if perf_events:
+            logger.info(f"Extracted perf_events from metadata: {perf_events}")
+
         extra_info = {
             "service_id": service_id,
             "file_size": profile_file_size,
@@ -213,10 +219,11 @@ def new_profile_v2(
         # The threshold could be changed in range 0.0 to 1.0 per client/service.
         if random_value >= service_sample_threshold or "test" in service_name:
             sqs = boto3.client("sqs", config=SQS_CONFIG, endpoint_url=config.SQS_ENDPOINT_URL)
-            msg: dict[str, Union[str, int]] = {
+            msg: dict[str, Union[str, int, List[str]]] = {
                 "filename": profile_file_name,
                 "service": service_name,
                 "service_id": service_id,
+                "perf_events": perf_events if perf_events else [],
             }
             try:
                 sqs.send_message(QueueUrl=config.SQS_INDEXER_QUEUE_URL, MessageBody=json.dumps(msg))

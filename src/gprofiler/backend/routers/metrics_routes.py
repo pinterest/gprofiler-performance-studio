@@ -21,6 +21,11 @@ from datetime import datetime, timedelta, timezone
 from logging import getLogger
 from typing import List, Optional
 
+from backend.utils.flamegraph_utils import (
+    parse_adhoc_flamegraph_filename,
+    should_include_flamegraph,
+)
+
 from backend.models.filters_models import FilterTypes
 from backend.models.flamegraph_models import FGParamsBaseModel
 from backend.models.metrics_models import (
@@ -69,6 +74,7 @@ class FlamegraphFile(BaseModel):
     hostname: Optional[str] = None
     size: Optional[int] = None
     s3_path: str
+    perf_events: Optional[List[str]] = None
 
 
 class FlamegraphContent(BaseModel):
@@ -982,10 +988,15 @@ def get_adhoc_flamegraphs(
     Get list of available adhoc flamegraph files from S3 for the given service and time range.
     Files are stored in S3 path: products/{service}/stacks/flamegraph/
     Supports filtering by hostname(s) if specified in the filter parameters.
+    Includes PMU events metadata from the database.
     """
     try:
         s3_dal = S3ProfileDal(logger)
+        db_manager = DBManager()
         service_name = fg_params.service_name
+        
+        # Get service_id for metadata query
+        service_id = db_manager.get_service(service_name)
         
         # Extract all hostname filters from fg_params if present
         hostname_filters = get_rql_all_eq_values(fg_params.filter, FilterTypes.HOSTNAME_KEY)
@@ -996,53 +1007,49 @@ def get_adhoc_flamegraphs(
         # List files in S3 with the flamegraph prefix
         files = s3_dal.list_files_with_prefix(flamegraph_prefix)
         
+        # Get metadata from database
+        metadata_list = db_manager.get_adhoc_flamegraphs_metadata(
+            service_id=service_id,
+            start_time=fg_params.start_time,
+            end_time=fg_params.end_time,
+            hostname_filters=hostname_filters,
+        )
+        
+        # Create lookup map: s3_key -> metadata
+        metadata_map = {m["s3_key"]: m for m in metadata_list}
+        
         flamegraph_files = []
         for file_info in files:
             filename = file_info['Key'].split('/')[-1]  # Get just the filename
             
-            # Only include adhoc flamegraph HTML files
-            if not filename.endswith('_adhoc_flamegraph.html'):
+            # Parse filename to extract timestamp and hostname
+            parsed = parse_adhoc_flamegraph_filename(filename)
+            if not parsed:
+                logger.debug(f"Skipping file {filename}: invalid format")
                 continue
             
-            # Parse timestamp and hostname from filename
-            try:
-                # Remove the _adhoc_flamegraph.html suffix to get the base filename
-                base_filename = filename.replace('_adhoc_flamegraph.html', '')
-                
-                # Parse timestamp and hostname
-                # Format: timestamp_random_suffix_hostname_adhoc
-                filename_parts = base_filename.split('_')
-                if len(filename_parts) < 3:
-                    continue
-                
-                timestamp_str = filename_parts[0]
-                timestamp = datetime.fromisoformat(timestamp_str).replace(tzinfo=timezone.utc)
-                
-                # Extract hostname (everything after timestamp and random_suffix)
-                hostname = '_'.join(filename_parts[2:])
-                
-                # Filter by time range if specified
-                if fg_params.start_time and timestamp < fg_params.start_time:
-                    continue
-                if fg_params.end_time and timestamp > fg_params.end_time:
-                    continue
-                
-                # Filter by hostname(s) if specified in the filter
-                # If hostname_filters is not empty, only include files where hostname matches one of the filters
-                if hostname_filters and hostname and hostname not in hostname_filters:
-                    continue
-                    
-            except (ValueError, IndexError) as e:
-                # Skip files that don't match expected naming pattern
-                logger.debug(f"Skipping file {filename} due to parsing error: {e}")
+            timestamp, hostname = parsed
+            
+            # Apply time and hostname filters
+            if not should_include_flamegraph(
+                timestamp, hostname,
+                fg_params.start_time, fg_params.end_time,
+                hostname_filters
+            ):
                 continue
+            
+            # Get metadata if available
+            s3_key = file_info['Key']
+            metadata = metadata_map.get(s3_key, {})
+            perf_events = metadata.get("perf_events", None)
             
             flamegraph_files.append(FlamegraphFile(
                 filename=filename,
                 timestamp=timestamp,
                 hostname=hostname,
                 size=file_info.get('Size'),
-                s3_path=file_info['Key']
+                s3_path=s3_key,
+                perf_events=perf_events
             ))
         
         # Sort by timestamp descending (newest first)

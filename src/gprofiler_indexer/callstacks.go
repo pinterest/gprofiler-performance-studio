@@ -30,6 +30,12 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// Profiling type constants
+const (
+	ProfilingTypeAdhoc      = "adhoc"
+	ProfilingTypeContinuous = "continuous"
+)
+
 type FrameValuesMap map[string]map[string]FrameValue
 
 type FrameValue struct {
@@ -309,9 +315,9 @@ func (pw *ProfilesWriter) ParseStackFrameFile(sess *session.Session, task SQSMes
 		}
 		
 		// Determine profiling type based on metadata.continuous
-		profilingType := "adhoc"
+		profilingType := ProfilingTypeAdhoc
 		if fileInfo.Metadata.Continuous {
-			profilingType = "continuous"
+			profilingType = ProfilingTypeContinuous
 		}
 		
 		flamegraphHTMLPath := fmt.Sprintf("products/%s/stacks/flamegraph/%s_%s_flamegraph.html", task.Service, baseFileName, profilingType)
@@ -331,6 +337,25 @@ func (pw *ProfilesWriter) ParseStackFrameFile(sess *session.Session, task SQSMes
 			log.Errorf("failed to upload flamegraph HTML for file %s: %v", task.Filename, err)
 		} else {
 			log.Infof("successfully uploaded flamegraph HTML to %s", flamegraphHTMLPath)
+			
+			// Store metadata in PostgreSQL (only for adhoc profiles with perf events)
+			if profilingType == ProfilingTypeAdhoc && len(task.PerfEvents) > 0 {
+				err = StoreAdhocFlamegraphMetadata(
+					task.ServiceId,
+					fileInfo.Metadata.Hostname,
+					flamegraphHTMLPath,
+					task.PerfEvents,
+					timestamp,
+					int64(len(flamegraphData)),
+				)
+				if err != nil {
+					log.Errorf("failed to store flamegraph metadata for %s: %v", flamegraphHTMLPath, err)
+					// Don't fail the entire operation if metadata storage fails
+				} else {
+					log.Infof("successfully stored metadata for %s with events: %v", 
+						flamegraphHTMLPath, task.PerfEvents)
+				}
+			}
 		}
 	}
 
