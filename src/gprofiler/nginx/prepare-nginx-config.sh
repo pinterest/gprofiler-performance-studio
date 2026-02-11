@@ -26,6 +26,8 @@ export GPROFILER_TLS_CERT_PATH="${GPROFILER_TLS_CERT_PATH:-/usr/src/app/certs/se
 export GPROFILER_TLS_KEY_PATH="${GPROFILER_TLS_KEY_PATH:-/usr/src/app/certs/server.key}"
 export GPROFILER_TLS_CA_PATH="${GPROFILER_TLS_CA_PATH:-/usr/src/app/certs/ca.crt}"
 export GPROFILER_TLS_VERIFY_CLIENT="${GPROFILER_TLS_VERIFY_CLIENT:-optional}"
+export HTTPS_PORT="${HTTPS_PORT:-443}"
+export LISTEN_PORT="${LISTEN_PORT:-80}"
 
 echo "TLS Configuration:"
 echo "  Certificate: ${GPROFILER_TLS_CERT_PATH}"
@@ -34,7 +36,7 @@ echo "  CA: ${GPROFILER_TLS_CA_PATH}"
 echo "  Verify Client: ${GPROFILER_TLS_VERIFY_CLIENT}"
 
 # Substitute environment variables in nginx config template
-envsubst '${GPROFILER_TLS_CERT_PATH} ${GPROFILER_TLS_KEY_PATH} ${GPROFILER_TLS_CA_PATH} ${GPROFILER_TLS_VERIFY_CLIENT}' \
+envsubst '${GPROFILER_TLS_CERT_PATH} ${GPROFILER_TLS_KEY_PATH} ${GPROFILER_TLS_CA_PATH} ${GPROFILER_TLS_VERIFY_CLIENT} ${HTTPS_PORT} ${LISTEN_PORT}' \
   < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
 
 echo "NGINX configuration prepared"

@@ -82,7 +82,6 @@ GUNICORN_PID=$!
 # Prepare nginx config with TLS settings from environment variables
 /usr/local/bin/prepare-nginx-config.sh
 
-sed -i -E "s/listen [0-9]+/listen ${LISTEN_PORT}/" /etc/nginx/nginx.conf
 nginx -g "daemon off;" &
 NGINX_PID=$!
 

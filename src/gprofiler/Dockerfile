@@ -32,7 +32,7 @@ RUN echo "deb [signed-by=/etc/apt/keyrings/nginx_signing.gpg] https://nginx.org/
 RUN echo "deb-src [signed-by=/etc/apt/keyrings/nginx_signing.gpg] https://nginx.org/packages/mainline/debian bullseye nginx" >> /etc/apt/sources.list
 
 # install dependencies
-RUN apt-get update && apt-get install -y nginx bc logrotate && \
+RUN apt-get update && apt-get install -y nginx bc logrotate gettext-base && \
     mkdir /tmp/nginx/
 
 RUN git clone 'https://github.com/Granulate/FlameGraph' -b granulate-master --depth=1 && chmod +x FlameGraph/flamegraph.pl
