@@ -52,6 +52,7 @@ RUN pip install -e ./gprofiler-dev[postgres] && \
 # copy all files
 COPY gprofiler-dev gprofiler-dev
 COPY gprofiler/nginx/nginx.conf /etc/nginx/nginx.conf.template
+COPY gprofiler/nginx/https_nginx.conf /etc/nginx/https_nginx.conf.template
 COPY gprofiler/nginx/prepare-nginx-config.sh /usr/local/bin/prepare-nginx-config.sh
 RUN chmod +x /usr/local/bin/prepare-nginx-config.sh
 COPY gprofiler/run.sh run.sh

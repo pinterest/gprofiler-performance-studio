@@ -15,6 +15,7 @@ The mTLS implementation uses NGINX as the TLS termination point:
 
 - **HTTPS server (port 443 by default)**: Handles mTLS connections with client certificate verification
 - **HTTP server (port 80 by default)**: Maintains backward compatibility for legacy/development deployments
+- **Automatic HTTPS detection**: HTTPS is automatically enabled when valid certificate files are detected at configured paths
 - **Certificate auto-reload**: Supports short-lived certificates with periodic NGINX reloading
 
 NGINX forwards the following client certificate information to the FastAPI backend via HTTP headers:
@@ -23,6 +24,15 @@ NGINX forwards the following client certificate information to the FastAPI backe
 - `X-Client-Serial`: Client certificate serial number
 
 ## Configuration
+
+### Automatic HTTPS Detection
+
+The backend automatically enables HTTPS/mTLS when it detects valid certificate files:
+
+- **Certificate files exist and are readable** → HTTPS enabled (both port 443 and 80 active)
+- **Certificate files missing or unreadable** → HTTP-only mode (only port 80 active)
+
+This automatic detection means you don't need an explicit "enable HTTPS" flag - just provide certificates and HTTPS "just works".
 
 ### Environment Variables
 
@@ -55,11 +65,13 @@ All TLS configuration is controlled via environment variables, making it easy to
 
 ### Docker Compose Example
 
+#### With HTTPS/mTLS (Certificates Provided)
+
 ```yaml
 services:
   webapp:
     environment:
-      # TLS Certificate Paths
+      # TLS Certificate Paths - HTTPS automatically enabled when these files exist
       - GPROFILER_TLS_CERT_PATH=/path/to/server-chain.pem
       - GPROFILER_TLS_KEY_PATH=/path/to/server-key.pem
       - GPROFILER_TLS_CA_PATH=/path/to/ca-root.pem
@@ -71,13 +83,24 @@ services:
       - GPROFILER_ENABLE_CERT_RELOAD=true
       - GPROFILER_CERT_RELOAD_PERIOD=36000  # 10 hours
       
-      # Port Configuration
+      # Port Configuration (optional)
       - HTTPS_PORT=443
       - LISTEN_PORT=80
     
     volumes:
       # Mount your certificate directory
       - /etc/ssl/certs:/etc/ssl/certs:ro
+```
+
+#### HTTP-Only Mode (No Certificates)
+
+```yaml
+services:
+  webapp:
+    environment:
+      # No certificate paths needed - automatically uses HTTP-only mode
+      - LISTEN_PORT=80  # Optional: customize HTTP port
+    # No certificate volume mounts needed
 ```
 
 ## Deployment Modes
@@ -125,8 +148,25 @@ In production environments with existing PKI infrastructure:
 
 1. **Obtain certificates** from your organization's certificate authority
 2. **Mount certificate paths** into the container via volumes
-3. **Configure verification mode**: Use `GPROFILER_TLS_VERIFY_CLIENT=on` to enforce client authentication
-4. **Enable auto-reload** if using short-lived certificates
+3. **Set certificate paths** via environment variables (HTTPS will auto-enable)
+4. **Configure verification mode**: Use `GPROFILER_TLS_VERIFY_CLIENT=on` to enforce client authentication
+5. **Enable auto-reload** if using short-lived certificates
+
+**Note**: HTTPS is automatically enabled when the certificate and key files exist at the configured paths. No explicit "enable HTTPS" flag is needed.
+
+### HTTP-Only Deployment
+
+For deployments that don't need TLS/mTLS:
+
+1. **Don't set certificate environment variables**, or set them to non-existent paths
+2. The backend automatically detects missing certificates and runs in HTTP-only mode
+3. Only port 80 will be active
+
+```bash
+# No certificate configuration needed
+# Backend automatically runs in HTTP-only mode
+LISTEN_PORT=80
+```
 
 ### Optional Client Certificates
 
@@ -257,4 +297,6 @@ To migrate an existing gProfiler deployment to mTLS:
 - **Auditability**: Track which clients (identified by certificate DN) are accessing the service
 - **Flexibility**: Works with any PKI infrastructure (internal CA, Let's Encrypt, commercial CA, etc.)
 - **Minimal overhead**: TLS termination at NGINX with efficient connection reuse
+- **Automatic detection**: HTTPS automatically enables when certificates are present - no explicit flags needed
 - **Backward compatible**: HTTP endpoint can remain active during migration
+- **Simple configuration**: Just provide certificates and mTLS "just works"
