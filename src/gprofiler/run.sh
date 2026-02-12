@@ -19,7 +19,6 @@
 set -ueo pipefail
 
 CURRENT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-LISTEN_PORT="${NGINX_PORT:-80}"
 
 # TLS certificate reload configuration
 ENABLE_CERT_RELOAD="${GPROFILER_ENABLE_CERT_RELOAD:-false}"
