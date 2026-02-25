@@ -26,6 +26,7 @@ export GPROFILER_TLS_CERT_PATH="${GPROFILER_TLS_CERT_PATH:-/usr/src/app/certs/se
 export GPROFILER_TLS_KEY_PATH="${GPROFILER_TLS_KEY_PATH:-/usr/src/app/certs/server.key}"
 export GPROFILER_TLS_CA_PATH="${GPROFILER_TLS_CA_PATH:-/usr/src/app/certs/ca.crt}"
 export GPROFILER_TLS_VERIFY_CLIENT="${GPROFILER_TLS_VERIFY_CLIENT:-optional}"
+export GPROFILER_SSL_SESSION_TIMEOUT="${GPROFILER_SSL_SESSION_TIMEOUT:-21600}"  # Default: 6 hours (21600 seconds)
 export HTTPS_PORT="${HTTPS_PORT:-443}"
 export LISTEN_PORT="${LISTEN_PORT:-80}"
 
@@ -39,9 +40,10 @@ if [[ -f "${GPROFILER_TLS_CERT_PATH}" && -r "${GPROFILER_TLS_CERT_PATH}" && \
     echo "  Key: ${GPROFILER_TLS_KEY_PATH}"
     echo "  CA: ${GPROFILER_TLS_CA_PATH}"
     echo "  Verify Client: ${GPROFILER_TLS_VERIFY_CLIENT}"
+    echo "  SSL Session Timeout: ${GPROFILER_SSL_SESSION_TIMEOUT}s"
     
     # Use HTTPS template (includes both HTTPS and HTTP server blocks)
-    envsubst '${GPROFILER_TLS_CERT_PATH} ${GPROFILER_TLS_KEY_PATH} ${GPROFILER_TLS_CA_PATH} ${GPROFILER_TLS_VERIFY_CLIENT} ${HTTPS_PORT} ${LISTEN_PORT}' \
+    envsubst '${GPROFILER_TLS_CERT_PATH} ${GPROFILER_TLS_KEY_PATH} ${GPROFILER_TLS_CA_PATH} ${GPROFILER_TLS_VERIFY_CLIENT} ${GPROFILER_SSL_SESSION_TIMEOUT} ${HTTPS_PORT} ${LISTEN_PORT}' \
       < /etc/nginx/https_nginx.conf.template > /etc/nginx/nginx.conf
 else
     echo "HTTPS/mTLS disabled - certificate files not found or not readable"

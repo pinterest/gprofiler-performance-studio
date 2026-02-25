@@ -60,8 +60,11 @@ All TLS configuration is controlled via environment variables, making it easy to
 |----------|-------------|---------|
 | `GPROFILER_ENABLE_CERT_RELOAD` | Enable automatic certificate reloading | `false` |
 | `GPROFILER_CERT_RELOAD_PERIOD` | Reload period in seconds | `21600` (6 hours) |
+| `GPROFILER_SSL_SESSION_TIMEOUT` | SSL session cache timeout in seconds | `3600` (1 hour) |
 
 **Note on certificate rotation**: When using short-lived certificates (e.g., 12-hour expiry), enable auto-reload and set the period to be less than the certificate lifetime. For example, with 12-hour certificates, use a 10-hour (36000 seconds) reload period.
+
+**Best practice for session timeout**: Set `GPROFILER_SSL_SESSION_TIMEOUT` to match your `GPROFILER_CERT_RELOAD_PERIOD` for optimal security. This ensures SSL sessions don't outlive your certificate rotation, maintaining the security benefits of short-lived credentials. Cached sessions allow clients to resume previous TLS connections without a full handshake, but should expire at the same rate as certificate rotation.
 
 ### Docker Compose Example
 
@@ -82,6 +85,7 @@ services:
       # Certificate Auto-Reload (for short-lived certs)
       - GPROFILER_ENABLE_CERT_RELOAD=true
       - GPROFILER_CERT_RELOAD_PERIOD=36000  # 10 hours
+      - GPROFILER_SSL_SESSION_TIMEOUT=36000  # Match reload period for security
       
       # Port Configuration (optional)
       - HTTPS_PORT=443
@@ -140,6 +144,7 @@ GPROFILER_TLS_CERT_PATH=./server-cert.pem
 GPROFILER_TLS_KEY_PATH=./server-key.pem
 GPROFILER_TLS_CA_PATH=./ca-cert.pem
 GPROFILER_TLS_VERIFY_CLIENT=optional  # Use 'on' to require client certs
+GPROFILER_SSL_SESSION_TIMEOUT=3600  # 1 hour (default)
 ```
 
 ### Production (Enterprise PKI)
