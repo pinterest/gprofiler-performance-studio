@@ -186,16 +186,6 @@ This allows:
 - Clients without certificates to connect anonymously
 - Backend can implement custom authorization logic based on certificate presence
 
-## Load Balancer Configuration
-
-The included NGINX load balancer (`deploy/https_nginx.conf`) supports:
-
-- **Port 8082**: HTTP proxy to webapp (no TLS)
-- **Port 443**: HTTPS with TLS termination at load balancer
-- **Port 8083**: TLS passthrough (encrypted traffic forwarded to webapp:443 without decryption)
-
-For mTLS to work end-to-end, use **port 8083** which forwards the encrypted traffic directly to the webapp container where client certificate verification occurs.
-
 ## Security Considerations
 
 ### Certificate Chain Depth
@@ -247,7 +237,7 @@ async def log_client_identity(request: Request, call_next):
 
 If you see errors about certificate chain depth:
 - Check your certificate chain length
-- Increase `ssl_verify_depth` in `nginx.conf` if needed (current default: 10)
+- Increase `ssl_verify_depth` in `https_nginx.conf` if needed (current default: 10)
 
 ### "No required SSL certificate was sent"
 
@@ -293,7 +283,7 @@ To migrate an existing gProfiler deployment to mTLS:
    GPROFILER_TLS_VERIFY_CLIENT=on
    ```
 
-5. **Optional**: Disable HTTP server by removing the HTTP server block from nginx.conf
+5. **Optional**: Disable HTTP server by removing the HTTP server block from `https_nginx.conf`, or stop exposing the HTTP port
 
 ## Benefits
 
