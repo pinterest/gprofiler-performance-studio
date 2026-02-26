@@ -107,6 +107,14 @@ services:
       - METRICS_AGENT_URL=$METRICS_AGENT_URL
       - METRICS_SERVICE_NAME=$METRICS_SERVICE_NAME
       - METRICS_SLI_UUID=$METRICS_SLI_UUID
+      # TLS/mTLS Configuration
+      - GPROFILER_TLS_CERT_PATH=$GPROFILER_TLS_CERT_PATH
+      - GPROFILER_TLS_KEY_PATH=$GPROFILER_TLS_KEY_PATH
+      - GPROFILER_TLS_CA_PATH=$GPROFILER_TLS_CA_PATH
+      - GPROFILER_TLS_VERIFY_CLIENT=$GPROFILER_TLS_VERIFY_CLIENT
+      - GPROFILER_ENABLE_CERT_RELOAD=$GPROFILER_ENABLE_CERT_RELOAD
+      - GPROFILER_CERT_RELOAD_PERIOD=$GPROFILER_CERT_RELOAD_PERIOD
+      - GPROFILER_SSL_SESSION_TIMEOUT=$GPROFILER_SSL_SESSION_TIMEOUT
 # for debug
 #    ports:
 #      - "8888:80"
@@ -120,6 +128,7 @@ services:
 
   # ---
   ch-rest-service:
+    user: "888:888"
     build:
       context: ../src/gprofiler_flamedb_rest
       dockerfile: Dockerfile
@@ -238,6 +247,7 @@ services:
     restart: always
     ports:
       - "8080:80"
+      - "8443:8443"
       - "4433:443"
     volumes:
       - ./https_nginx.conf:/etc/nginx/nginx.conf
@@ -267,10 +277,11 @@ services:
       - "./localstack_init:/etc/localstack/init/ready.d"
       - "/var/run/docker.sock:/var/run/docker.sock"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      test: ["CMD", "bash", "-c", "curl -s http://localhost:4566/_localstack/health | grep -q '\"s3\": \"running\"' && curl -s http://localhost:4566/_localstack/health | grep -q '\"sqs\": \"running\"'"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 15s
 
 volumes:
   db_clickhouse:
