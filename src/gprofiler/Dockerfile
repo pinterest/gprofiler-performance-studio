@@ -32,7 +32,7 @@ RUN echo "deb [signed-by=/etc/apt/keyrings/nginx_signing.gpg] https://nginx.org/
 RUN echo "deb-src [signed-by=/etc/apt/keyrings/nginx_signing.gpg] https://nginx.org/packages/mainline/debian bullseye nginx" >> /etc/apt/sources.list
 
 # install dependencies
-RUN apt-get update && apt-get install -y nginx bc logrotate && \
+RUN apt-get update && apt-get install -y nginx bc logrotate gettext-base && \
     mkdir /tmp/nginx/
 
 RUN git clone 'https://github.com/Granulate/FlameGraph' -b granulate-master --depth=1 && chmod +x FlameGraph/flamegraph.pl
@@ -51,7 +51,10 @@ RUN pip install -e ./gprofiler-dev[postgres] && \
 
 # copy all files
 COPY gprofiler-dev gprofiler-dev
-COPY gprofiler/nginx/nginx.conf /etc/nginx/nginx.conf
+COPY gprofiler/nginx/nginx.conf /etc/nginx/nginx.conf.template
+COPY gprofiler/nginx/https_nginx.conf /etc/nginx/https_nginx.conf.template
+COPY gprofiler/nginx/prepare-nginx-config.sh /usr/local/bin/prepare-nginx-config.sh
+RUN chmod +x /usr/local/bin/prepare-nginx-config.sh
 COPY gprofiler/run.sh run.sh
 COPY --from=frontend_dependencies /frontend/build frontend
 COPY gprofiler/backend backend
