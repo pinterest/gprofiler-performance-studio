@@ -400,14 +400,14 @@ The agent uses two independent execution slots so that non-overlapping profiler 
 
 ```
 DynamicGProfilerManager
-├── primary: ContinuousProfilerSlot   ← main continuous / single-run profiler
+├── continuous: ContinuousProfilerSlot   ← main continuous / single-run profiler
 ├── adhoc:   AdhocProfilerSlot        ← parallel ad-hoc profiler
 └── command_manager: CommandManager   ← priority queue (stop > adhoc > continuous)
 ```
 
 #### ContinuousProfilerSlot
 
-Handles commands where `combined_config.continuous=true` or single-run commands sent to the primary slot. Can be paused (preempted) when a new higher-priority command arrives, and will resume after the ad-hoc command finishes.
+Handles commands where `combined_config.continuous=true` or single-run commands sent to the continuous slot. Can be paused (preempted) when a new higher-priority command arrives, and will resume after the ad-hoc command finishes.
 
 #### AdhocProfilerSlot
 
