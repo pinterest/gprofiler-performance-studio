@@ -712,8 +712,8 @@ const ProfilingStatusPage = () => {
                                         Profiler Settings:
                                     </Typography>
                                     <Typography variant="body2">• Perf (C/C++/Go): {
-                                        profilerConfigs.perf === 'enabled_restricted' ? 'Enabled (Restricted)' :
-                                        profilerConfigs.perf === 'enabled_aggressive' ? 'Enabled (Aggressive)' : 'Disabled'
+                                        profilerConfigs.perf?.mode === 'enabled_restricted' ? 'Enabled (Restricted)' :
+                                        profilerConfigs.perf?.mode === 'enabled_aggressive' ? 'Enabled (Aggressive)' : 'Disabled'
                                     }</Typography>
                                     <Typography variant="body2">• Java Async Profiler: {
                                         profilerConfigs.async_profiler?.enabled 
