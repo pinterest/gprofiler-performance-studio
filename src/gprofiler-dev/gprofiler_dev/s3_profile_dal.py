@@ -14,9 +14,10 @@
 # limitations under the License.
 #
 import gzip
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from io import BytesIO
-from typing import Callable, Optional, List, Dict
+from typing import Callable, Optional, List, Dict, Set
 
 import boto3
 from botocore.config import Config
@@ -88,6 +89,37 @@ class S3ProfileDal:
 
     def upload_file(self, local_path: str, dest_path: str) -> None:
         self._s3_client.upload_file(local_path, self.bucket_name, dest_path)
+
+    def check_keys_exist(self, keys: List[str]) -> Set[str]:
+        """Check which S3 keys in *keys* actually exist.
+
+        Issues one head_object call per key, all in parallel via a
+        ThreadPoolExecutor, so total latency ≈ one S3 round-trip.
+
+        Returns a set of keys that are present in S3.
+        """
+        if not keys:
+            return set()
+
+        def _head(key: str) -> Optional[str]:
+            try:
+                self._s3_client.head_object(Bucket=self.bucket_name, Key=key)
+                return key
+            except ClientError as e:
+                if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey"):
+                    return None
+                # Unexpected error – treat as absent but log it
+                self.logger.warning(f"Unexpected S3 error for key {key!r}: {e}")
+                return None
+
+        existing: Set[str] = set()
+        with ThreadPoolExecutor(max_workers=min(len(keys), 32)) as executor:
+            futures = {executor.submit(_head, key): key for key in keys}
+            for future in as_completed(futures):
+                result = future.result()
+                if result is not None:
+                    existing.add(result)
+        return existing
 
     def list_files_with_prefix(self, prefix: str) -> List[Dict]:
         """List files in S3 with the given prefix"""

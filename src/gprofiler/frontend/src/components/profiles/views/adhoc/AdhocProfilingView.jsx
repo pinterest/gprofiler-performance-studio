@@ -15,7 +15,7 @@
  */
 
 import { useContext, useEffect, useState } from 'react';
-import { Box, Typography, Select, MenuItem, FormControl, InputLabel, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Button, IconButton, Collapse } from '@mui/material';
+import { Box, Typography, Select, MenuItem, FormControl, InputLabel, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Button, Chip, IconButton, Collapse } from '@mui/material';
 import { SelectorsContext } from '@/states';
 import { FilterTagsContext } from '@/states/filters/FiltersTagsContext';
 import useFetchWithRequest from '@/api/useFetchWithRequest';
@@ -89,6 +89,7 @@ const AdhocProfilingView = () => {
     };
 
     const handleRowClick = (file) => {
+        if (file.removed) return;
         setSelectedFile(file);
     };
 
@@ -131,8 +132,9 @@ const AdhocProfilingView = () => {
                                 onClick={(e) => e.stopPropagation()}
                             >
                                 {filesData.map((file) => (
-                                    <MenuItem key={file.filename} value={file.filename}>
+                                    <MenuItem key={file.filename} value={file.filename} disabled={file.removed}>
                                         {format(new Date(file.timestamp), 'yyyy-MM-dd HH:mm:ss')} - {file.hostname || 'N/A'}
+                                        {file.removed && ' (removed)'}
                                     </MenuItem>
                                 ))}
                             </Select>
@@ -159,26 +161,37 @@ const AdhocProfilingView = () => {
                                     </TableRow>
                                 </TableHead>
                                 <TableBody>
-                                    {filesData.map((file) => (
-                                        <TableRow
-                                            key={file.filename}
-                                            onClick={() => handleRowClick(file)}
-                                            selected={selectedFile?.filename === file.filename}
-                                            sx={{ cursor: 'pointer', '&:hover': { backgroundColor: 'action.hover' } }}
-                                        >
-                                            <TableCell>{format(new Date(file.timestamp), 'yyyy-MM-dd HH:mm:ss')}</TableCell>
-                                            <TableCell>{file.hostname || 'N/A'}</TableCell>
-                                            <TableCell>
-                                                {file.perf_events && file.perf_events.length > 0 
-                                                    ? file.perf_events.join(', ') 
-                                                    : 'N/A'}
-                                            </TableCell>
-                                            <TableCell>{(file.size / 1024).toFixed(2)} KB</TableCell>
-                                            <TableCell>
-                                                <Button size="small" onClick={() => handleRowClick(file)}>View</Button>
-                                            </TableCell>
-                                        </TableRow>
-                                    ))}
+                                    {filesData.map((file) => {
+                                        const removedCellSx = file.removed
+                                            ? { textDecoration: 'line-through', color: 'text.disabled' }
+                                            : {};
+                                        return (
+                                            <TableRow
+                                                key={file.filename}
+                                                onClick={() => handleRowClick(file)}
+                                                selected={selectedFile?.filename === file.filename}
+                                                sx={{
+                                                    cursor: file.removed ? 'default' : 'pointer',
+                                                    '&:hover': file.removed ? {} : { backgroundColor: 'action.hover' },
+                                                }}
+                                            >
+                                                <TableCell sx={removedCellSx}>{format(new Date(file.timestamp), 'yyyy-MM-dd HH:mm:ss')}</TableCell>
+                                                <TableCell sx={removedCellSx}>{file.hostname || 'N/A'}</TableCell>
+                                                <TableCell sx={removedCellSx}>
+                                                    {file.perf_events && file.perf_events.length > 0
+                                                        ? file.perf_events.join(', ')
+                                                        : 'N/A'}
+                                                </TableCell>
+                                                <TableCell sx={removedCellSx}>{(file.size / 1024).toFixed(2)} KB</TableCell>
+                                                <TableCell>
+                                                    {file.removed
+                                                        ? <Chip label="Removed" size="small" color="error" variant="outlined" />
+                                                        : <Button size="small" onClick={(e) => { e.stopPropagation(); handleRowClick(file); }}>View</Button>
+                                                    }
+                                                </TableCell>
+                                            </TableRow>
+                                        );
+                                    })}
                                 </TableBody>
                             </Table>
                         </TableContainer>

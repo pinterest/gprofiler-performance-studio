@@ -70,6 +70,7 @@ class FlamegraphFile(BaseModel):
     size: Optional[int] = None
     s3_path: str
     perf_events: Optional[List[str]] = None
+    removed: bool = False
 
 
 class FlamegraphContent(BaseModel):
@@ -1007,7 +1008,7 @@ def get_adhoc_flamegraphs(
         for metadata in metadata_list:
             s3_key = metadata["s3_key"]
             filename = s3_key.split('/')[-1]
-            
+
             flamegraph_files.append(FlamegraphFile(
                 filename=filename,
                 timestamp=datetime.fromisoformat(metadata["start_time"]),
@@ -1016,7 +1017,17 @@ def get_adhoc_flamegraphs(
                 s3_path=s3_key,
                 perf_events=metadata.get("perf_events")
             ))
-        
+
+        # Mark entries whose S3 file no longer exists.
+        # All head_object calls are issued in parallel (one thread per key)
+        # so the total latency is ~one S3 round-trip regardless of list size.
+        if flamegraph_files:
+            s3_dal = S3ProfileDal(logger)
+            all_s3_paths = [f.s3_path for f in flamegraph_files]
+            existing_keys = s3_dal.check_keys_exist(all_s3_paths)
+            for f in flamegraph_files:
+                f.removed = f.s3_path not in existing_keys
+
         return flamegraph_files
         
     except Exception as e:
