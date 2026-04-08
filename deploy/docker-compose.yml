@@ -72,6 +72,8 @@ services:
     build:
       context: ../src
       dockerfile: gprofiler/Dockerfile
+      args:
+        - VITE_DOCUMENTATION_URL=${VITE_DOCUMENTATION_URL}
     container_name: gprofiler-ps-webapp
     restart: always
     extra_hosts:
