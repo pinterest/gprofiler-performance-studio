@@ -1,13 +1,13 @@
-import { 
-    Box, 
-    Typography, 
-    Dialog, 
-    DialogTitle, 
-    DialogContent, 
-    DialogActions, 
-    Button, 
-    Divider, 
-    Chip 
+import {
+    Box,
+    Button,
+    Chip,
+    Dialog,
+    DialogActions,
+    DialogContent,
+    DialogTitle,
+    Divider,
+    Typography,
 } from '@mui/material';
 import queryString from 'query-string';
 import React, { useCallback, useEffect, useState } from 'react';
@@ -36,7 +36,7 @@ const buildProfileUrl = (host, service, view) => {
         service: service,
         time: '1h',
         view: view,
-        wp: '100'
+        wp: '100',
     };
     const queryParams = new URLSearchParams(params).toString();
     return `${baseUrl}${PAGES.profiles.to}?${queryParams}`;
@@ -86,39 +86,37 @@ const columns = [
         flex: 1,
         renderCell: (params) => {
             const { host, service, commandType, status } = params.row;
-            
+
             // Only show profile link for rows with commandType="start" and status="completed"
             if (commandType !== 'start' || status !== 'completed') {
                 return '';
             }
-            
+
             if (!host || !service) return '';
-            
+
             const continuousProfileUrl = buildProfileUrl(host, service, 'flamegraph');
             const adhocProfileUrl = buildProfileUrl(host, service, 'adhoc');
-            
+
             return (
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-                <a
+                    <a
                         href={continuousProfileUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                        target='_blank'
+                        rel='noopener noreferrer'
                         style={{ color: '#1976d2', textDecoration: 'none', fontSize: '0.875rem' }}
-                        onMouseOver={(e) => e.target.style.textDecoration = 'underline'}
-                        onMouseOut={(e) => e.target.style.textDecoration = 'none'}
-                    >
+                        onMouseOver={(e) => (e.target.style.textDecoration = 'underline')}
+                        onMouseOut={(e) => (e.target.style.textDecoration = 'none')}>
                         View Continuous Profile
                     </a>
                     <a
                         href={adhocProfileUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                        target='_blank'
+                        rel='noopener noreferrer'
                         style={{ color: '#1976d2', textDecoration: 'none', fontSize: '0.875rem' }}
-                    onMouseOver={(e) => e.target.style.textDecoration = 'underline'}
-                    onMouseOut={(e) => e.target.style.textDecoration = 'none'}
-                >
+                        onMouseOver={(e) => (e.target.style.textDecoration = 'underline')}
+                        onMouseOut={(e) => (e.target.style.textDecoration = 'none')}>
                         View Adhoc Profile
-                </a>
+                    </a>
                 </Box>
             );
         },
@@ -147,31 +145,31 @@ const ProfilingStatusPage = () => {
         commandType: '',
         status: '',
     });
-    
+
     // PerfSpect state
     const [enablePerfSpect, setEnablePerfSpect] = useState(false);
-    
+
     // Profiling frequency state
     const [profilingFrequency, setProfilingFrequency] = useState(DEFAULT_PROFILING_FREQUENCY);
-    
+
     // Max processes state
     const [maxProcesses, setMaxProcesses] = useState(DEFAULT_MAX_PROCESSES);
-    
+
     // Profiling mode state (Ad Hoc vs Continuous)
     const [profilingMode, setProfilingMode] = useState('continuous'); // 'adhoc' or 'continuous'
-    
+
     // Duration state
     const [duration, setDuration] = useState(DEFAULT_DURATION);
-    
+
     // Profiler configurations state
     const [profilerConfigs, setProfilerConfigs] = useState({
         perf: {
             mode: 'enabled_restricted', // 'enabled_restricted', 'enabled_aggressive', 'disabled'
-            events: ['cpu-cycles'] // Array of events: 'cpu-cycles', 'instructions', 'cache-misses', etc.
+            events: ['cpu-cycles'], // Array of events: 'cpu-cycles', 'instructions', 'cache-misses', etc.
         },
         async_profiler: {
             enabled: true,
-            time: 'cpu' // 'cpu' or 'wall'
+            time: 'cpu', // 'cpu' or 'wall'
         },
         pyperf: 'enabled', // 'enabled', 'disabled'
         pyspy: 'enabled_fallback', // 'enabled_fallback', 'enabled', 'disabled'
@@ -188,14 +186,14 @@ const ProfilingStatusPage = () => {
         selectedRows: [],
         serviceGroups: {},
     });
-    
+
     // Dry-run validation state
     const [dryRunValidation, setDryRunValidation] = useState({
         isValidating: false,
         isValid: false,
         errors: [],
     });
-    
+
     const history = useHistory();
     const location = useLocation();
 
@@ -235,7 +233,7 @@ const ProfilingStatusPage = () => {
                 const hosts = data.hosts || data; // Fallback to data if old format
                 const active = data.active_count || hosts.length;
                 const total = data.total_count || hosts.length;
-                
+
                 setRows(
                     hosts.map((row) => ({
                         id: row.id,
@@ -259,9 +257,9 @@ const ProfilingStatusPage = () => {
     useEffect(() => {
         const searchParams = queryString.parse(location.search);
         const hasFilterParams = ['service', 'hostname', 'pids', 'ip', 'commandType', 'status'].some(
-            param => searchParams[param]
+            (param) => searchParams[param]
         );
-        
+
         // Only initialize from URL if there are actual filter parameters
         if (hasFilterParams) {
             const urlFilters = {
@@ -288,15 +286,30 @@ const ProfilingStatusPage = () => {
             };
             fetchProfilingStatus(emptyFilters);
         }
-        
+
         // Clean up profile-specific parameters if they exist (mixed URLs)
-        const profileParams = ['gtab', 'view', 'time', 'startTime', 'endTime', 'filter', 'rt', 'rtms', 'p', 'pm', 'wt', 'wp', 'search', 'fullscreen'];
-        const hasProfileParams = profileParams.some(param => searchParams[param]);
-        
+        const profileParams = [
+            'gtab',
+            'view',
+            'time',
+            'startTime',
+            'endTime',
+            'filter',
+            'rt',
+            'rtms',
+            'p',
+            'pm',
+            'wt',
+            'wp',
+            'search',
+            'fullscreen',
+        ];
+        const hasProfileParams = profileParams.some((param) => searchParams[param]);
+
         if (hasProfileParams) {
             // Remove only profile params, keep filter params
             const cleanedParams = { ...searchParams };
-            profileParams.forEach(param => {
+            profileParams.forEach((param) => {
                 delete cleanedParams[param];
             });
             history.replace({ search: queryString.stringify(cleanedParams) });
@@ -329,7 +342,7 @@ const ProfilingStatusPage = () => {
             });
 
             const newSearch = queryString.stringify(searchParams);
-            
+
             // Use replace instead of push to minimize focus disruption
             if (newSearch === '') {
                 history.replace('/profiling');
@@ -342,7 +355,7 @@ const ProfilingStatusPage = () => {
 
     // Function to update individual filter (optimized for focus preservation)
     const updateFilter = useCallback((field, value) => {
-        setFilters(prev => ({ ...prev, [field]: value }));
+        setFilters((prev) => ({ ...prev, [field]: value }));
     }, []); // Stable function reference
 
     // Apply filters function
@@ -441,23 +454,26 @@ const ProfilingStatusPage = () => {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(bulkRequest),
         })
-            .then(res => {
+            .then((res) => {
                 if (!res.ok) {
-                    return res.json().then(errData => {
-                        // Extract detailed validation messages
-                        if (errData.detail && Array.isArray(errData.detail)) {
-                            const messages = errData.detail.map(err => err.msg || JSON.stringify(err)).join('; ');
-                            throw new Error(messages);
-                        } else if (typeof errData.detail === 'string') {
-                            throw new Error(errData.detail);
-                        } else {
-                            throw new Error(`Validation failed`);
-                        }
-                    }).catch(err => {
-                        // If error is already thrown from above, re-throw it
-                        if (err.message) throw err;
-                        throw new Error(`Validation failed with status ${res.status}`);
-                    });
+                    return res
+                        .json()
+                        .then((errData) => {
+                            // Extract detailed validation messages
+                            if (errData.detail && Array.isArray(errData.detail)) {
+                                const messages = errData.detail.map((err) => err.msg || JSON.stringify(err)).join('; ');
+                                throw new Error(messages);
+                            } else if (typeof errData.detail === 'string') {
+                                throw new Error(errData.detail);
+                            } else {
+                                throw new Error(`Validation failed`);
+                            }
+                        })
+                        .catch((err) => {
+                            // If error is already thrown from above, re-throw it
+                            if (err.message) throw err;
+                            throw new Error(`Validation failed with status ${res.status}`);
+                        });
                 }
                 return res.json();
             })
@@ -465,7 +481,7 @@ const ProfilingStatusPage = () => {
                 // Process bulk response to extract errors
                 const errors = [];
 
-                bulkResponse.results.forEach(result => {
+                bulkResponse.results.forEach((result) => {
                     if (!result.success) {
                         errors.push(`${result.service_name}: ${result.error}`);
                     }
@@ -477,7 +493,7 @@ const ProfilingStatusPage = () => {
                     errors: errors,
                 });
             })
-            .catch(error => {
+            .catch((error) => {
                 // Handle global validation errors (e.g., capacity exceeded)
                 setDryRunValidation({
                     isValidating: false,
@@ -530,7 +546,7 @@ const ProfilingStatusPage = () => {
         // Close dialog and execute bulk request
         setConfirmationDialog({ open: false, action: null, selectedRows: [], serviceGroups: {} });
         setDryRunValidation({ isValidating: false, isValid: false, errors: [] }); // Reset dry-run state
-        
+
         fetch(DATA_URLS.POST_PROFILING_REQUEST_BULK, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -552,9 +568,9 @@ const ProfilingStatusPage = () => {
 
     return (
         <Box sx={{ backgroundColor: 'white.main', height: '100%' }}>
-            <ProfilingHeader 
-                filters={filters} 
-                updateFilter={updateFilter} 
+            <ProfilingHeader
+                filters={filters}
+                updateFilter={updateFilter}
                 isLoading={loading}
                 onApplyFilters={applyFilters}
                 onClearFilters={clearAllFilters}
@@ -610,14 +626,9 @@ const ProfilingStatusPage = () => {
             </Box>
 
             {/* Confirmation Dialog */}
-            <Dialog
-                open={confirmationDialog.open}
-                onClose={handleDialogClose}
-                maxWidth="md"
-                fullWidth
-            >
+            <Dialog open={confirmationDialog.open} onClose={handleDialogClose} maxWidth='md' fullWidth>
                 <DialogTitle>
-                    <Typography variant="h6" component="div">
+                    <Typography variant='h6' component='div'>
                         Confirm {confirmationDialog.action === 'start' ? 'Start' : 'Stop'} Profiling
                     </Typography>
                 </DialogTitle>
@@ -625,45 +636,52 @@ const ProfilingStatusPage = () => {
                     {/* Validation Status */}
                     {dryRunValidation.isValidating && (
                         <Box sx={{ mb: 2, p: 2, backgroundColor: '#f5f5f5', borderRadius: 1 }}>
-                            <Typography variant="body2" color="text.secondary">
+                            <Typography variant='body2' color='text.secondary'>
                                 Validating request...
                             </Typography>
                         </Box>
                     )}
-                    
+
                     {!dryRunValidation.isValidating && dryRunValidation.isValid && (
                         <Box sx={{ mb: 2, p: 2, backgroundColor: '#e8f5e9', borderRadius: 1 }}>
-                            <Typography variant="body2" color="success.dark">
+                            <Typography variant='body2' color='success.dark'>
                                 ✓ Validation successful
                             </Typography>
                         </Box>
                     )}
-                    
-                    {!dryRunValidation.isValidating && !dryRunValidation.isValid && dryRunValidation.errors.length > 0 && (
-                        <Box sx={{ mb: 2, p: 2, backgroundColor: '#ffebee', borderRadius: 1 }}>
-                            <Typography variant="body2" color="error.dark" sx={{ fontWeight: 600, mb: 1 }}>
-                                ✗ Validation failed
-                            </Typography>
-                            {dryRunValidation.errors.map((error, idx) => (
-                                <Typography key={idx} variant="body2" color="error.dark" sx={{ mt: 0.5, whiteSpace: 'pre-line' }}>
-                                    • {error}
-                                </Typography>
-                            ))}
-                        </Box>
-                    )}
 
-                    <Typography variant="body1" sx={{ mb: 2 }}>
-                        Are you sure you want to <strong>{confirmationDialog.action}</strong> profiling for the following hosts?
+                    {!dryRunValidation.isValidating &&
+                        !dryRunValidation.isValid &&
+                        dryRunValidation.errors.length > 0 && (
+                            <Box sx={{ mb: 2, p: 2, backgroundColor: '#ffebee', borderRadius: 1 }}>
+                                <Typography variant='body2' color='error.dark' sx={{ fontWeight: 600, mb: 1 }}>
+                                    ✗ Validation failed
+                                </Typography>
+                                {dryRunValidation.errors.map((error, idx) => (
+                                    <Typography
+                                        key={idx}
+                                        variant='body2'
+                                        color='error.dark'
+                                        sx={{ mt: 0.5, whiteSpace: 'pre-line' }}>
+                                        • {error}
+                                    </Typography>
+                                ))}
+                            </Box>
+                        )}
+
+                    <Typography variant='body1' sx={{ mb: 2 }}>
+                        Are you sure you want to <strong>{confirmationDialog.action}</strong> profiling for the
+                        following hosts?
                     </Typography>
-                    
+
                     {/* Selected Hosts Summary */}
                     <Box sx={{ mb: 3 }}>
-                        <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+                        <Typography variant='subtitle2' sx={{ mb: 1, fontWeight: 600 }}>
                             Selected Hosts ({confirmationDialog.selectedRows.length}):
                         </Typography>
                         {Object.entries(confirmationDialog.serviceGroups).map(([serviceName, hosts]) => (
                             <Box key={serviceName} sx={{ mb: 2 }}>
-                                <Typography variant="body2" sx={{ fontWeight: 500, mb: 0.5 }}>
+                                <Typography variant='body2' sx={{ fontWeight: 500, mb: 0.5 }}>
                                     {serviceName}:
                                 </Typography>
                                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
@@ -671,8 +689,8 @@ const ProfilingStatusPage = () => {
                                         <Chip
                                             key={host}
                                             label={host}
-                                            size="small"
-                                            variant="outlined"
+                                            size='small'
+                                            variant='outlined'
                                             sx={{
                                                 borderColor: dryRunValidation.isValid ? '#2e7d32' : '#d32f2f',
                                                 color: dryRunValidation.isValid ? '#2e7d32' : '#d32f2f',
@@ -688,62 +706,93 @@ const ProfilingStatusPage = () => {
                     {confirmationDialog.action === 'start' && (
                         <>
                             <Divider sx={{ my: 2 }} />
-                            <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600 }}>
+                            <Typography variant='subtitle2' sx={{ mb: 2, fontWeight: 600 }}>
                                 Profiling Configuration:
                             </Typography>
-                            
+
                             <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2 }}>
                                 {/* Basic Settings */}
                                 <Box>
-                                    <Typography variant="body2" sx={{ fontWeight: 500, mb: 1 }}>
+                                    <Typography variant='body2' sx={{ fontWeight: 500, mb: 1 }}>
                                         Basic Settings:
                                     </Typography>
-                                    <Typography variant="body2">• Frequency: {profilingFrequency} Hz</Typography>
-                                    <Typography variant="body2">• Max Processes: {maxProcesses}</Typography>
-                                    <Typography variant="body2">• PerfSpect HW Metrics: {enablePerfSpect ? 'Enabled' : 'Disabled'}</Typography>
-                                    <Typography variant="body2">• Profiling Mode: {profilingMode === 'adhoc' ? 'Ad Hoc' : 'Continuous'}</Typography>
-                                    <Typography variant="body2">• Duration: {profilingMode === 'continuous' ? 60 : duration} seconds</Typography>
-                                    <Typography variant="body2">• Mode: CPU profiling</Typography>
+                                    <Typography variant='body2'>• Frequency: {profilingFrequency} Hz</Typography>
+                                    <Typography variant='body2'>• Max Processes: {maxProcesses}</Typography>
+                                    <Typography variant='body2'>
+                                        • PerfSpect HW Metrics: {enablePerfSpect ? 'Enabled' : 'Disabled'}
+                                    </Typography>
+                                    <Typography variant='body2'>
+                                        • Profiling Mode: {profilingMode === 'adhoc' ? 'Ad Hoc' : 'Continuous'}
+                                    </Typography>
+                                    <Typography variant='body2'>
+                                        • Duration: {profilingMode === 'continuous' ? 60 : duration} seconds
+                                    </Typography>
+                                    <Typography variant='body2'>• Mode: CPU profiling</Typography>
                                 </Box>
 
                                 {/* Profiler Settings */}
                                 <Box>
-                                    <Typography variant="body2" sx={{ fontWeight: 500, mb: 1 }}>
+                                    <Typography variant='body2' sx={{ fontWeight: 500, mb: 1 }}>
                                         Profiler Settings:
                                     </Typography>
-                                    <Typography variant="body2">• Perf (C/C++/Go): {
-                                        profilerConfigs.perf?.mode === 'enabled_restricted' ? 'Enabled (Restricted)' :
-                                        profilerConfigs.perf?.mode === 'enabled_aggressive' ? 'Enabled (Aggressive)' : 'Disabled'
-                                    }</Typography>
-                                    <Typography variant="body2">• Java Async Profiler: {
-                                        profilerConfigs.async_profiler?.enabled 
-                                            ? `Enabled (${profilerConfigs.async_profiler.time === 'wall' ? 'Wall Time' : 'CPU Time'})`
-                                            : 'Disabled'
-                                    }</Typography>
-                                    <Typography variant="body2">• Pyperf (Python): {profilerConfigs.pyperf === 'enabled' ? 'Enabled' : 'Disabled'}</Typography>
-                                    <Typography variant="body2">• Pyspy (Python): {
-                                        profilerConfigs.pyspy === 'enabled_fallback' ? 'Enabled (Fallback)' :
-                                        profilerConfigs.pyspy === 'enabled' ? 'Enabled' : 'Disabled'
-                                    }</Typography>
-                                    <Typography variant="body2">• Rbspy (Ruby): {profilerConfigs.rbspy === 'enabled' ? 'Enabled' : 'Disabled'}</Typography>
-                                    <Typography variant="body2">• PHPspy (PHP): {profilerConfigs.phpspy === 'enabled' ? 'Enabled' : 'Disabled'}</Typography>
-                                    <Typography variant="body2">• .NET Trace: {profilerConfigs.dotnet_trace === 'enabled' ? 'Enabled' : 'Disabled'}</Typography>
-                                    <Typography variant="body2">• NodeJS Perf: {profilerConfigs.nodejs_perf === 'enabled' ? 'Enabled' : 'Disabled'}</Typography>
+                                    <Typography variant='body2'>
+                                        • Perf (C/C++/Go):{' '}
+                                        {profilerConfigs.perf?.mode === 'enabled_restricted'
+                                            ? 'Enabled (Restricted)'
+                                            : profilerConfigs.perf?.mode === 'enabled_aggressive'
+                                            ? 'Enabled (Aggressive)'
+                                            : 'Disabled'}
+                                    </Typography>
+                                    <Typography variant='body2'>
+                                        • Java Async Profiler:{' '}
+                                        {profilerConfigs.async_profiler?.enabled
+                                            ? `Enabled (${
+                                                  profilerConfigs.async_profiler.time === 'wall'
+                                                      ? 'Wall Time'
+                                                      : 'CPU Time'
+                                              })`
+                                            : 'Disabled'}
+                                    </Typography>
+                                    <Typography variant='body2'>
+                                        • Pyperf (Python):{' '}
+                                        {profilerConfigs.pyperf === 'enabled' ? 'Enabled' : 'Disabled'}
+                                    </Typography>
+                                    <Typography variant='body2'>
+                                        • Pyspy (Python):{' '}
+                                        {profilerConfigs.pyspy === 'enabled_fallback'
+                                            ? 'Enabled (Fallback)'
+                                            : profilerConfigs.pyspy === 'enabled'
+                                            ? 'Enabled'
+                                            : 'Disabled'}
+                                    </Typography>
+                                    <Typography variant='body2'>
+                                        • Rbspy (Ruby): {profilerConfigs.rbspy === 'enabled' ? 'Enabled' : 'Disabled'}
+                                    </Typography>
+                                    <Typography variant='body2'>
+                                        • PHPspy (PHP): {profilerConfigs.phpspy === 'enabled' ? 'Enabled' : 'Disabled'}
+                                    </Typography>
+                                    <Typography variant='body2'>
+                                        • .NET Trace:{' '}
+                                        {profilerConfigs.dotnet_trace === 'enabled' ? 'Enabled' : 'Disabled'}
+                                    </Typography>
+                                    <Typography variant='body2'>
+                                        • NodeJS Perf:{' '}
+                                        {profilerConfigs.nodejs_perf === 'enabled' ? 'Enabled' : 'Disabled'}
+                                    </Typography>
                                 </Box>
                             </Box>
                         </>
                     )}
                 </DialogContent>
                 <DialogActions>
-                    <Button onClick={handleDialogClose} color="primary">
+                    <Button onClick={handleDialogClose} color='primary'>
                         Cancel
                     </Button>
-                    <Button 
-                        onClick={executeProfilingAction} 
+                    <Button
+                        onClick={executeProfilingAction}
                         color={confirmationDialog.action === 'start' ? 'success' : 'error'}
-                        variant="contained"
-                        disabled={dryRunValidation.isValidating || !dryRunValidation.isValid}
-                    >
+                        variant='contained'
+                        disabled={dryRunValidation.isValidating || !dryRunValidation.isValid}>
                         {confirmationDialog.action === 'start' ? 'Start Profiling' : 'Stop Profiling'}
                     </Button>
                 </DialogActions>
