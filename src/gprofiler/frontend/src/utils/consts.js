@@ -58,7 +58,7 @@ export const EXTERNAL_URLS = {
     documentation: {
         key: 'documentation',
         label: 'documentation',
-        to: 'https://docs.gprofiler.io/',
+        to: import.meta.env.VITE_DOCUMENTATION_URL || 'https://docs.gprofiler.io/',
     },
     github: {
         key: 'github',
