@@ -22,8 +22,8 @@ import useFetchWithRequest from '@/api/useFetchWithRequest';
 import { DATA_URLS } from '@/api/urls';
 import { stringify } from 'query-string';
 import { getStartEndDateTimeFromSelection } from '@/api/utils';
-import { format } from 'date-fns';
 import Flexbox from '@/components/common/layout/Flexbox';
+import { formatDate, TIME_FORMATS } from '@/utils/datetimesUtils';
 import Icon from '@/components/common/icon/Icon';
 import { ICONS_NAMES } from '@/components/common/icon/iconsData';
 
@@ -133,7 +133,7 @@ const AdhocProfilingView = () => {
                             >
                                 {filesData.map((file) => (
                                     <MenuItem key={file.filename} value={file.filename} disabled={file.removed}>
-                                        {format(new Date(file.timestamp), 'yyyy-MM-dd HH:mm:ss')} - {file.hostname || 'N/A'}
+                                        {formatDate(new Date(file.timestamp), TIME_FORMATS.DATETIME_WITH_SECONDS)} - {file.hostname || 'N/A'}
                                         {file.removed && ' (removed)'}
                                     </MenuItem>
                                 ))}
@@ -175,7 +175,7 @@ const AdhocProfilingView = () => {
                                                     '&:hover': file.removed ? {} : { backgroundColor: 'action.hover' },
                                                 }}
                                             >
-                                                <TableCell sx={removedCellSx}>{format(new Date(file.timestamp), 'yyyy-MM-dd HH:mm:ss')}</TableCell>
+                                                <TableCell sx={removedCellSx}>{formatDate(new Date(file.timestamp), TIME_FORMATS.DATETIME_WITH_SECONDS)}</TableCell>
                                                 <TableCell sx={removedCellSx}>{file.hostname || 'N/A'}</TableCell>
                                                 <TableCell sx={removedCellSx}>
                                                     {file.perf_events && file.perf_events.length > 0

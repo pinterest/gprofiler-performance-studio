@@ -23,14 +23,17 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter as Router } from 'react-router-dom';
 
 import App from './App';
+import { initDateLocale } from './utils/localeUtils';
 
 const container = document.getElementById('root');
 const root = createRoot(container);
 
-root.render(
-    <Router>
-        <StrictMode>
-            <App />
-        </StrictMode>
-    </Router>
-);
+initDateLocale().then(() => {
+    root.render(
+        <Router>
+            <StrictMode>
+                <App />
+            </StrictMode>
+        </Router>
+    );
+});

@@ -29,8 +29,10 @@ import { ICONS_NAMES } from '@/components/common/icon/iconsData';
 import Flexbox from '@/components/common/layout/Flexbox';
 import { COLORS } from '@/theme/colors';
 import { formatDate, getCurrentTime, TIME_FORMATS } from '@/utils/datetimesUtils';
+import { getDateLocale } from '@/utils/localeUtils';
 
 const DateTimeRangePicker = ({ onChange, startValueOnPicker, endValueOnPicker }) => {
+    const locale = getDateLocale();
     const [customStartDatetime, setCustomStartDatetime] = useState(startValueOnPicker);
     const [customEndDatetime, setCustomEndDatetime] = useState(endValueOnPicker);
     useEffect(() => {
@@ -57,7 +59,7 @@ const DateTimeRangePicker = ({ onChange, startValueOnPicker, endValueOnPicker })
                         <Typography variant='body1_lato'>Local time ({getCurrentTime()})</Typography>
                     </Flexbox>
                 </Flexbox>
-                <LocalizationProvider dateAdapter={AdapterDateFns}>
+                <LocalizationProvider dateAdapter={AdapterDateFns} adapterLocale={locale}>
                     <Box sx={{ maxWidth: 625, mt: 6 }}>
                         <Flexbox
                             sx={{ marginTop: -10, marginLeft: 7 }}
@@ -67,7 +69,6 @@ const DateTimeRangePicker = ({ onChange, startValueOnPicker, endValueOnPicker })
                             <Flexbox alignItems='center'>
                                 <DateTimeField
                                     label='Start time'
-                                    ampm={false}
                                     value={customStartDatetime}
                                     maxDateTime={customEndDatetime}
                                     InputProps={{
@@ -82,7 +83,6 @@ const DateTimeRangePicker = ({ onChange, startValueOnPicker, endValueOnPicker })
                                             border: 'light',
                                         },
                                     }}
-                                    format={TIME_FORMATS.DATETIME_PRINTED}
                                     onChange={(newValue) => {
                                         if (newValue && newValue.toString() !== 'Invalid Date') {
                                             setCustomStartDatetime(newValue);
@@ -93,8 +93,6 @@ const DateTimeRangePicker = ({ onChange, startValueOnPicker, endValueOnPicker })
                             <Flexbox alignItems='space-between' spacing={4}>
                                 <DateTimeField
                                     label='End time'
-                                    ampm={false}
-                                    format={TIME_FORMATS.DATETIME_PRINTED}
                                     value={customEndDatetime}
                                     minDateTime={customStartDatetime}
                                     InputProps={{
