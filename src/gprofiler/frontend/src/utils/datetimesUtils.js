@@ -47,6 +47,7 @@ export const TIME_FORMATS = {
     DATETIME_PRINTED: 'Pp',
     DATETIME_WITH_SECONDS: 'PPpp',
     DATE_BASIC: 'P',
+    TIME_LOCALE: 'p',
     TIME_24H: 'HH:mm',
 };
 
@@ -131,5 +132,5 @@ export const isDateYesterday = (date) => {
 
 // Datetimes creation
 export const getCurrentTime = () => {
-    return formatDate(new Date(), TIME_FORMATS.TIME_24H);
+    return formatDate(new Date(), TIME_FORMATS.TIME_LOCALE);
 };
