@@ -65,7 +65,7 @@ const ProfilesActions = ({ isGrayedOut }) => {
     const { activeFilterTag } = useContext(FilterTagsContext);
 
     const { search } = useLocation();
-    
+
     // Check if HTML/PerfSpect view is active
     const isHtmlViewDisplayed = viewMode === 'html';
 
@@ -82,29 +82,29 @@ const ProfilesActions = ({ isGrayedOut }) => {
         }
         handleClose();
     }, [handleClose, isFgDisplayed]);
-    
+
     // Extract hostname from active filters for PerfSpect download
     const getHostnameFromFilters = useCallback(() => {
         if (!activeFilterTag?.filter) return null;
-        
+
         // Handle RQL object format: {$and: [{HostName: {$eq: "hostname"}}]}
         const [, rules] = Object.entries(activeFilterTag.filter)[0] || [];
         if (rules && Array.isArray(rules)) {
-            const hostnameRule = rules.find(rule => {
+            const hostnameRule = rules.find((rule) => {
                 const [ruleType] = Object.entries(rule)[0] || [];
                 return ruleType === FILTER_TYPES.HostName.value;
             });
-            
+
             if (hostnameRule) {
                 const [, condition] = Object.entries(hostnameRule)[0];
                 const [, value] = Object.entries(condition)[0] || [];
                 return value;
             }
         }
-        
+
         return null;
     }, [activeFilterTag]);
-    
+
     const onClickDownloadPerfSpect = useCallback(() => {
         if (isHtmlViewDisplayed && downloadPerfSpectRef.current) {
             downloadPerfSpectRef.current.click();
@@ -137,7 +137,7 @@ const ProfilesActions = ({ isGrayedOut }) => {
                         <ListItemText>Download Flame Graph</ListItemText>
                     </MenuItem>
                 )}
-                
+
                 {isHtmlViewDisplayed && (
                     <MenuItem onClick={onClickDownloadPerfSpect}>
                         <ListItemIcon>
@@ -178,7 +178,7 @@ const ProfilesActions = ({ isGrayedOut }) => {
                     downloadRef={downloadSvgRef}
                 />
             )}
-            
+
             {isHtmlViewDisplayed && hostname && (
                 <a
                     href={`${DATA_URLS.GET_PERFSPECT_REPORT_DOWNLOAD}?${stringify({
