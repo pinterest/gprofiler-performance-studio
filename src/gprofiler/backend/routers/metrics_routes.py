@@ -1011,7 +1011,7 @@ def get_adhoc_flamegraphs(
 
             flamegraph_files.append(FlamegraphFile(
                 filename=filename,
-                timestamp=datetime.fromisoformat(metadata["start_time"]),
+                timestamp=datetime.fromisoformat(metadata["start_time"]).replace(tzinfo=timezone.utc),
                 hostname=metadata["hostname"],
                 size=metadata.get("file_size"),
                 s3_path=s3_key,
