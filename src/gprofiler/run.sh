@@ -58,6 +58,7 @@ gunicorn_cmd_line=" --workers=${GUNICORN_PROCESS_COUNT} \
 function clean_up {
     kill "${GUNICORN_PID}"
     kill "${NGINX_PID}"
+    kill "${ROTATE_LOGS_PID}" 2>/dev/null || true
     if [[ "${CERT_RELOAD_PID:-}" != "" ]]; then
         kill "${CERT_RELOAD_PID}" 2>/dev/null || true
     fi
@@ -65,6 +66,14 @@ function clean_up {
 }
 trap clean_up SIGHUP SIGINT SIGTERM
 rm -f ${gunicorn_pid_file}
+
+# Background process for periodic log rotation
+function rotate_logs {
+    while true; do
+        sleep 900  # every 15 minutes
+        logrotate /etc/nginx/logrotate.conf
+    done
+}
 
 # Background process for periodic certificate reload
 function reload_certificates {
@@ -84,6 +93,10 @@ GUNICORN_PID=$!
 nginx -g "daemon off;" &
 NGINX_PID=$!
 
+# Start log rotation background process
+rotate_logs &
+ROTATE_LOGS_PID=$!
+
 # Start certificate reload process if enabled
 if [[ "${ENABLE_CERT_RELOAD}" == "true" ]]; then
     echo "Certificate auto-reload enabled (period: ${CERT_RELOAD_PERIOD} seconds)"
@@ -93,4 +106,4 @@ else
     echo "Certificate auto-reload disabled"
 fi
 
-wait ${GUNICORN_PID} ${NGINX_PID}
+wait ${GUNICORN_PID} ${NGINX_PID} ${ROTATE_LOGS_PID}
