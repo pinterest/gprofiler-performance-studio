@@ -773,6 +773,24 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                 supported_perf_events=heartbeat.perf_supported_events,  # Use agent field name
             )
 
+            # 1b. Auto-subscribe newly-registered hosts to an active service-wide
+            # profiling session. Hosts that join a service after a service-scoped
+            # request was issued (e.g. cluster autoscaling) are enrolled here so
+            # users do not have to re-select the service.
+            try:
+                if db_manager.auto_subscribe_host_to_service(
+                    hostname=heartbeat.hostname,
+                    service_name=heartbeat.service_name,
+                ):
+                    logger.info(
+                        f"Auto-subscribed host {heartbeat.hostname} to active service-wide "
+                        f"profiling for service {heartbeat.service_name}"
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"Auto-subscribe check failed for {heartbeat.hostname}/{heartbeat.service_name}: {e}"
+                )
+
             # 2. Check for current profiling command for this host/service
             current_command = db_manager.get_current_profiling_command(
                 hostname=heartbeat.hostname,

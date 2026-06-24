@@ -18,6 +18,7 @@ import hashlib
 import json
 import threading
 import time
+import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta
 from secrets import token_urlsafe
@@ -1375,6 +1376,78 @@ class DBManager(metaclass=Singleton):
 
         self.db.execute(upsert_query, values, has_value=False)
         return True
+
+    def get_active_service_subscription(self, service_name: str) -> Optional[str]:
+        """Return the request_id of the active service-wide profiling subscription
+        for a service, or None.
+
+        A service is "actively subscribed" when its most recent service-scoped
+        continuous "start" request is newer than any service-scoped "stop" request
+        (and was not cancelled). This is what lets hosts that register *after* a
+        service-wide profiling request auto-join the in-progress profile.
+        """
+        start_query = """
+        SELECT request_id, created_at
+        FROM ProfilingRequests
+        WHERE service_name = %(service_name)s
+          AND request_type = 'start'
+          AND continuous = TRUE
+          AND COALESCE(additional_args->>'target_scope', 'host') = 'service'
+          AND status != 'cancelled'
+        ORDER BY created_at DESC
+        LIMIT 1
+        """
+        start_row = self.db.execute(
+            start_query, {"service_name": service_name}, one_value=True, return_dict=True
+        )
+        if not start_row:
+            return None
+
+        stop_query = """
+        SELECT created_at
+        FROM ProfilingRequests
+        WHERE service_name = %(service_name)s
+          AND request_type = 'stop'
+          AND COALESCE(additional_args->>'target_scope', 'host') = 'service'
+        ORDER BY created_at DESC
+        LIMIT 1
+        """
+        stop_row = self.db.execute(
+            stop_query, {"service_name": service_name}, one_value=True, return_dict=True
+        )
+        if stop_row and stop_row["created_at"] >= start_row["created_at"]:
+            return None
+
+        return str(start_row["request_id"])
+
+    def auto_subscribe_host_to_service(self, hostname: str, service_name: str) -> bool:
+        """Enroll a host into its service's active service-wide profiling.
+
+        Invoked on every heartbeat. When a service has an active service-wide
+        profiling subscription and the reporting host has no current command
+        (e.g. a node that was just added to the cluster by autoscaling), a start
+        command is created for it from the subscription's configuration. Hosts
+        that already have command state are left untouched so explicit per-host
+        actions (including stops) are preserved.
+
+        Returns True if a new subscription command was created for the host.
+        """
+        subscription_request_id = self.get_active_service_subscription(service_name)
+        if not subscription_request_id:
+            return False
+
+        current_command = self.get_current_profiling_command(hostname, service_name)
+        if current_command is not None:
+            return False
+
+        command_id = str(uuid.uuid4())
+        return self.create_or_update_profiling_command(
+            command_id=command_id,
+            hostname=hostname,
+            service_name=service_name,
+            command_type="start",
+            new_request_id=subscription_request_id,
+        )
 
     def _merge_profiling_configs(self, existing_config: Dict, new_config: Dict) -> Dict:
         """Merge two profiling configurations, combining parameters appropriately"""

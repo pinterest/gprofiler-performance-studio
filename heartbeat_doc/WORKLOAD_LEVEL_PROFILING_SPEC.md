@@ -30,6 +30,37 @@ profiling from the level they reason about operationally:
 - container
 - process
 
+## Motivation
+
+Before this work, Performance Studio only supported **host-level** profiling:
+the user picked individual hosts and profiling commands were issued per host.
+Workload-level profiling exists to address two concrete operational pain points.
+
+### 1. Cluster churn breaks host-pinned profiling
+
+Hosts are constantly removed from and added to a cluster (autoscaling, spot
+reclamation, rolling replacements). With host-pinned selection, every time the
+fleet changes the user has to return to the UI and re-select hosts, and any
+host added after the original selection is simply **not profiled**.
+
+Workload-level profiling fixes this by letting the user select an entire
+**service** (and, in future, broader scopes). When a service is selected for
+continuous profiling, the selection is treated as a durable **subscription**:
+as new hosts for that service register via heartbeat, they are **immediately
+and automatically enrolled** in profiling — no manual re-selection. See
+[Continuous Service Subscriptions & Auto-Enrollment](#continuous-service-subscriptions--auto-enrollment).
+
+### 2. Users often want a specific process/container/pod, not whole hosts
+
+A host can run many workloads, but the user frequently cares about one
+container, pod, or process (e.g. a single Java service in a shared node). Whole-
+host profiling is both noisier and more expensive than necessary.
+
+Workload-level profiling lets the user target the precise scope they reason
+about (`namespace`, `workload`, `pod`, `container`, `process`) and the backend
+resolves that selection down to the exact `hostname -> [pid, ...]` mapping the
+agent executes. See [Resolution Model](#resolution-model).
+
 ## Goals
 
 1. Add workload-aware inventory without breaking the current heartbeat protocol.
@@ -139,6 +170,54 @@ fresh heartbeat inventory:
    - `hostname -> [pid, ...]` for process-scoped execution
 
 The command queue remains unchanged after this resolution step.
+
+## Continuous Service Subscriptions & Auto-Enrollment
+
+This realizes [Motivation #1](#1-cluster-churn-breaks-host-pinned-profiling):
+a service-wide continuous profiling request behaves as a standing subscription
+so that hosts which register *after* the request still get profiled.
+
+### Subscription definition
+
+A service is **actively subscribed** when its most recent service-scoped
+(`additional_args.target_scope == "service"`) continuous (`continuous == true`)
+`start` request in `ProfilingRequests` is newer than any service-scoped `stop`
+request for that service, and the start request was not cancelled.
+Implemented by `DBManager.get_active_service_subscription(service_name)`.
+
+### Auto-enrollment on heartbeat
+
+On every `POST /api/metrics/heartbeat`, after the host row is upserted, the
+backend calls `DBManager.auto_subscribe_host_to_service(hostname, service_name)`
+(see `receive_heartbeat`). The logic is:
+
+1. Look up the active service subscription. If none, do nothing.
+2. If the reporting host already has a current command, do nothing (so explicit
+   per-host actions — including stops — are preserved).
+3. Otherwise create a `start` command for the host, rebuilt from the
+   subscription request's stored configuration (frequency, duration, mode,
+   profiler configs). The command is created *before* the command lookup in the
+   same heartbeat, so the new host receives it on the very next response.
+
+### Behavior summary
+
+| Situation | Result |
+|-----------|--------|
+| New host heartbeats for a service with an active subscription | Auto-enrolled (start command created immediately) |
+| New host heartbeats for a service with no subscription | No command |
+| New host heartbeats after a service-wide stop | No command (stop is newer than start) |
+| Existing host already has a command | Left untouched |
+
+### Edge cases / limitations (v1)
+
+- Auto-enrollment only fires when a host has **no** current command. A host
+  whose previous command reached a terminal state (`completed`/`failed`) is not
+  re-enrolled in v1; continuous commands remain in `sent` state, so this is rare.
+- Subscriptions are scoped to `service` only. Namespace/pod/container/process
+  subscriptions are intentionally deferred (see Future Extensions).
+- A host-level stop issued while a service subscription is active will keep that
+  host stopped only until its command state is cleared; durable per-host opt-out
+  within a subscription is future work.
 
 ## UI Design
 
