@@ -265,6 +265,78 @@ This design preserves compatibility because:
 - commands sent to agents remain host/PID based
 - the UI can still represent host-only rows
 
+## Acceptance Tests
+
+These acceptance criteria define "done" for the studio side of workload-level
+profiling. They are written as Given/When/Then so they can drive spec-first
+development and be implemented as automated API/integration tests. The freshness
+window referenced below is the active-host heartbeat window (currently 2
+minutes).
+
+### Inventory & status views
+
+- **AT-S1 — Heartbeat populates inventory.** *Given* an agent posts a heartbeat
+  with `hostname`, `service_name`, optional `namespace`/`pod_name`, and
+  `containers[]` with processes, *When* it is stored, *Then*
+  `GET /api/metrics/profiling/workload_status?scope=host` returns a row for that
+  host while the heartbeat is within the freshness window.
+- **AT-S2 — Tab counts per scope.** *Given* a set of fresh heartbeats, *When*
+  `workload_status` is queried, *Then* `tabCounts` reports the correct number of
+  distinct groups for each of `service`, `namespace`, `host`, `pod`,
+  `container`, and `process`, and `activeHosts` equals the distinct fresh
+  hostnames.
+- **AT-S3 — Service tab is grouped by service.** *Given* multiple hosts of one
+  service, *When* `scope=service`, *Then* exactly **one** aggregated row is
+  returned per service (with host/pod/container/process counts), not one row per
+  host.
+- **AT-S4 — Freshness filtering.** *Given* a host whose latest heartbeat is older
+  than the freshness window, *When* `workload_status` is queried, *Then* that
+  host (and its pods/containers/processes) is excluded from all tabs.
+
+### Resolution & command creation
+
+- **AT-S5 — Host-level start.** *Given* `scope=host` targeting host `H`, *When* a
+  start request is submitted, *Then* a `start` command is created for `H` and is
+  returned to `H` on its next heartbeat with the requested config.
+- **AT-S6 — Service-level start fans out.** *Given* service `S` with hosts
+  `{H1, H2}`, *When* a `scope=service` start is submitted, *Then* a `start`
+  command is created for every current host of `S`.
+- **AT-S7 — Workload scope resolves to PIDs.** *Given* a `process`, `container`,
+  or `pod` selection, *When* a start request is submitted, *Then* it resolves to
+  `hostname -> [pid, ...]` and the resulting commands carry exactly those PIDs.
+- **AT-S8 — Empty resolution is rejected.** *Given* a selection that resolves to
+  zero active targets, *When* submitted, *Then* the API responds `422` and no
+  command is created.
+- **AT-S9 — PMU validation.** *Given* requested perf events that a target host
+  does not report in `supported_perf_events`, *When* a start is submitted with
+  perf enabled, *Then* the API rejects it with a clear per-host validation error.
+
+### Continuous service subscriptions & auto-enrollment
+
+- **AT-S10 — New host auto-enrolls.** *Given* service `S` has an active
+  service-wide continuous `start` subscription, *When* a host that was **not**
+  part of the original selection heartbeats for `S` and has no current command,
+  *Then* a `start` command (built from the subscription config) is created and
+  returned on that same heartbeat.
+- **AT-S11 — No subscription, no enrollment.** *Given* `S` has no active
+  subscription, *When* a new host heartbeats, *Then* no command is created.
+- **AT-S12 — Stop deactivates the subscription.** *Given* a service-wide `stop`
+  newer than the latest service-wide `start`, *When* a new host heartbeats for
+  `S`, *Then* it is **not** enrolled.
+- **AT-S13 — Existing command preserved.** *Given* a host already has a current
+  command, *When* it heartbeats under an active subscription, *Then*
+  auto-enrollment does **not** overwrite that command (explicit per-host actions
+  win).
+
+### Compatibility & failure handling
+
+- **AT-S14 — Legacy heartbeat.** *Given* a heartbeat without any workload fields,
+  *When* stored, *Then* host-level status and host/service commands still work,
+  and the host simply contributes no namespace/pod/container/process rows.
+- **AT-S15 — Partial inventory.** *Given* heartbeats missing some workload fields
+  (e.g. no `pod_name`), *When* tabs are computed, *Then* unaffected scopes still
+  return rows and the backend does not invent missing relationships.
+
 ## Spec-Driven Development Workflow
 
 All future workload-level backend or UI changes should follow:
