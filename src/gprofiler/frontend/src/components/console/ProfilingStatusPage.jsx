@@ -1,4 +1,5 @@
 import {
+    Alert,
     Box,
     Button,
     Chip,
@@ -7,6 +8,7 @@ import {
     DialogContent,
     DialogTitle,
     Divider,
+    Snackbar,
     Tab,
     Tabs,
     Typography,
@@ -17,6 +19,8 @@ import { useHistory, useLocation } from 'react-router-dom';
 
 import { DATA_URLS } from '../../api/urls';
 import { PAGES } from '../../utils/consts';
+import Icon from '../common/icon/Icon';
+import { ICONS_NAMES } from '../common/icon/iconsData';
 import MuiTable from '../common/dataDisplay/table/MuiTable';
 import ProfilingHeader from './header/ProfilingHeader';
 import ProfilingTopPanel from './header/ProfilingTopPanel';
@@ -24,6 +28,7 @@ import ProfilingTopPanel from './header/ProfilingTopPanel';
 const DEFAULT_PROFILING_FREQUENCY = 11;
 const DEFAULT_MAX_PROCESSES = 10;
 const DEFAULT_DURATION = 60;
+const CONFIG_STORAGE_KEY = 'gprofiler.adhocProfilingConfig';
 
 const SCOPES = [
     { id: 'service', label: 'Services' },
@@ -307,8 +312,42 @@ const ProfilingStatusPage = () => {
         isValid: false,
         errors: [],
     });
+    const [snackbar, setSnackbar] = useState({ open: false, message: '' });
 
     const columns = useMemo(() => getScopeColumns(activeScope), [activeScope]);
+
+    useEffect(() => {
+        try {
+            const saved = JSON.parse(localStorage.getItem(CONFIG_STORAGE_KEY));
+            if (saved) {
+                if (typeof saved.enablePerfSpect === 'boolean') setEnablePerfSpect(saved.enablePerfSpect);
+                if (saved.profilingFrequency) setProfilingFrequency(saved.profilingFrequency);
+                if (saved.maxProcesses != null) setMaxProcesses(saved.maxProcesses);
+                if (saved.profilingMode) setProfilingMode(saved.profilingMode);
+                if (saved.duration) setDuration(saved.duration);
+                if (saved.profilerConfigs) setProfilerConfigs(saved.profilerConfigs);
+            }
+        } catch (error) {
+            // ignore malformed persisted config
+        }
+    }, []);
+
+    const handleSaveConfiguration = useCallback(() => {
+        const config = {
+            enablePerfSpect,
+            profilingFrequency,
+            maxProcesses,
+            profilingMode,
+            duration,
+            profilerConfigs,
+        };
+        try {
+            localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(config));
+            setSnackbar({ open: true, message: 'Configuration saved' });
+        } catch (error) {
+            setSnackbar({ open: true, message: 'Failed to save configuration' });
+        }
+    }, [duration, enablePerfSpect, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
 
     const fetchProfilingStatus = useCallback((filterParams, scope = activeScope) => {
         setLoading(true);
@@ -519,6 +558,37 @@ const ProfilingStatusPage = () => {
 
     return (
         <Box sx={{ backgroundColor: 'white.main', height: '100%' }}>
+            <Box
+                sx={{
+                    px: 4,
+                    pt: 3,
+                    pb: 1,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'flex-start',
+                    gap: 2,
+                }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                    <Icon name={ICONS_NAMES.Crosshairs} size={28} color="#583FFD" />
+                    <Box>
+                        <Typography variant="h5" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+                            Adhoc Profile Configuration
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                            Select workloads and configure profiling parameters
+                        </Typography>
+                    </Box>
+                </Box>
+                <Box sx={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                        Active Hosts
+                    </Typography>
+                    <Typography variant="subtitle1" sx={{ fontWeight: 700, color: '#16a34a' }}>
+                        {(activeCount || 0).toLocaleString()} of {(totalCount || 0).toLocaleString()}
+                    </Typography>
+                </Box>
+            </Box>
+
             <ProfilingHeader
                 filters={filters}
                 updateFilter={updateFilter}
@@ -540,17 +610,30 @@ const ProfilingStatusPage = () => {
             </Box>
 
             <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                <Box sx={{ px: 4, pt: 3, pb: 1, '& .MuiDataGrid-root': { border: 'none' } }}>
+                    <MuiTable
+                        columns={columns}
+                        data={rows}
+                        isLoading={loading}
+                        pageSize={50}
+                        rowHeight={50}
+                        autoPageSize
+                        checkboxSelection
+                        onSelectionModelChange={setSelectionModel}
+                        selectionModel={selectionModel}
+                    />
+                    <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                        Showing {rows.length} {scopeEntityLabel(activeScope)}
+                        {selectionModel.length ? ` \u00b7 ${selectionModel.length} selected` : ''}
+                    </Typography>
+                </Box>
+
                 <ProfilingTopPanel
                     selectionModel={selectionModel}
                     handleBulkAction={handleBulkAction}
                     fetchProfilingStatus={(scopeFilters) => fetchProfilingStatus(scopeFilters, activeScope)}
                     filters={appliedFilters}
                     loading={loading}
-                    activeCount={activeCount}
-                    totalCount={totalCount}
-                    activeLabel="active hosts"
-                    totalLabel={scopeEntityLabel(activeScope)}
-                    clearAllFilters={clearAllFilters}
                     enablePerfSpect={enablePerfSpect}
                     onPerfSpectChange={setEnablePerfSpect}
                     profilingFrequency={profilingFrequency}
@@ -563,21 +646,8 @@ const ProfilingStatusPage = () => {
                     onDurationChange={setDuration}
                     profilerConfigs={profilerConfigs}
                     onProfilerConfigsChange={setProfilerConfigs}
+                    onSaveConfiguration={handleSaveConfiguration}
                 />
-
-                <Box sx={{ p: 4, '& .MuiDataGrid-root': { border: 'none' } }}>
-                    <MuiTable
-                        columns={columns}
-                        data={rows}
-                        isLoading={loading}
-                        pageSize={50}
-                        rowHeight={50}
-                        autoPageSize
-                        checkboxSelection
-                        onSelectionModelChange={setSelectionModel}
-                        selectionModel={selectionModel}
-                    />
-                </Box>
             </Box>
 
             <Dialog open={confirmationDialog.open} onClose={handleDialogClose} maxWidth="md" fullWidth>
@@ -702,6 +772,22 @@ const ProfilingStatusPage = () => {
                     </Button>
                 </DialogActions>
             </Dialog>
+
+            <Snackbar
+                open={snackbar.open}
+                autoHideDuration={3000}
+                onClose={() => setSnackbar({ open: false, message: '' })}
+                anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+            >
+                <Alert
+                    onClose={() => setSnackbar({ open: false, message: '' })}
+                    severity="success"
+                    variant="filled"
+                    sx={{ width: '100%' }}
+                >
+                    {snackbar.message}
+                </Alert>
+            </Snackbar>
         </Box>
     );
 };
