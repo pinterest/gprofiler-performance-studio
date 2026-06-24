@@ -20,6 +20,8 @@ const ProfilingTopPanel = ({
     loading,
     activeCount,
     totalCount,
+    activeLabel = 'active hosts',
+    totalLabel = 'hosts',
     clearAllFilters,
     enablePerfSpect,
     onPerfSpectChange,
@@ -376,7 +378,7 @@ const ProfilingTopPanel = ({
                             </Button>
                         )}
                         <Typography variant='body2' color='text.secondary' sx={{ fontSize: '0.8rem' }}>
-                            {activeCount} active hosts of {totalCount} hosts
+                            {activeCount} {activeLabel} of {totalCount} {totalLabel}
                         </Typography>
                     </Flexbox>
                 </Flexbox>

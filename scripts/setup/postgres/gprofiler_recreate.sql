@@ -276,6 +276,11 @@ CREATE TABLE HostHeartbeats (
     hostname text NOT NULL,
     ip_address inet NOT NULL,
     service_name text NOT NULL,
+    agent_version text NULL,
+    run_mode text NULL,
+    namespace text NULL,
+    pod_name text NULL,
+    containers jsonb NOT NULL DEFAULT '[]'::jsonb,
     last_command_id uuid NULL,
     received_command_ids uuid[] NULL,
     executed_command_ids uuid[] NULL,
@@ -292,6 +297,8 @@ CREATE INDEX idx_hostheartbeats_hostname ON HostHeartbeats (hostname);
 CREATE INDEX idx_hostheartbeats_service_name ON HostHeartbeats (service_name);
 CREATE INDEX idx_hostheartbeats_status ON HostHeartbeats (status);
 CREATE INDEX idx_hostheartbeats_heartbeat_timestamp ON HostHeartbeats (heartbeat_timestamp);
+CREATE INDEX idx_hostheartbeats_namespace ON HostHeartbeats (namespace);
+CREATE INDEX idx_hostheartbeats_pod_name ON HostHeartbeats (pod_name);
 
 -- Profiling Requests Table (simplified)
 CREATE TABLE ProfilingRequests (

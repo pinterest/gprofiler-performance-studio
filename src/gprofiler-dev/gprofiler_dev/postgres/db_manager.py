@@ -608,11 +608,16 @@ class DBManager(metaclass=Singleton):
         target_hostnames: Optional[List[str]] = None,
         pids: Optional[List[int]] = None,
         host_pid_mapping: Optional[Dict[str, List[int]]] = None,
+        target_scope: str = "host",
+        target_entities: Optional[List[Dict[str, Any]]] = None,
         additional_args: Optional[Dict] = None,
     ) -> bool:
         """Save a profiling request with support for host-to-PID mapping"""
         # Store additional_args WITHOUT host_pid_mapping (keep that separate)
         clean_additional_args = additional_args.copy() if additional_args else {}
+        clean_additional_args["target_scope"] = target_scope
+        if target_entities:
+            clean_additional_args["target_entities"] = target_entities
 
         # Store host_pid_mapping separately in a dedicated field if we add one,
         # for now, we'll handle it during command creation to avoid polluting additional_args
@@ -855,6 +860,11 @@ class DBManager(metaclass=Singleton):
         hostname: str,
         ip_address: str,
         service_name: str,
+        agent_version: Optional[str] = None,
+        run_mode: Optional[str] = None,
+        namespace: Optional[str] = None,
+        pod_name: Optional[str] = None,
+        containers: Optional[List[Dict[str, Any]]] = None,
         last_command_id: Optional[str] = None,
         received_command_ids: Optional[List[str]] = None,
         executed_command_ids: Optional[List[str]] = None,
@@ -872,11 +882,12 @@ class DBManager(metaclass=Singleton):
 
         query = """
         INSERT INTO HostHeartbeats (
-            hostname, ip_address, service_name, last_command_id,
+            hostname, ip_address, service_name, agent_version, run_mode, namespace, pod_name, containers, last_command_id,
             received_command_ids, executed_command_ids,
             status, heartbeat_timestamp, supported_perf_events, created_at, updated_at
         ) VALUES (
-            %(hostname)s, %(ip_address)s::inet, %(service_name)s,
+            %(hostname)s, %(ip_address)s::inet, %(service_name)s, %(agent_version)s, %(run_mode)s,
+            %(namespace)s, %(pod_name)s, %(containers)s::jsonb,
             %(last_command_id)s::uuid, %(received_command_ids)s::uuid[],
             %(executed_command_ids)s::uuid[],
             %(status)s::HostStatus,
@@ -885,6 +896,11 @@ class DBManager(metaclass=Singleton):
         ON CONFLICT (hostname, service_name)
         DO UPDATE SET
             ip_address = EXCLUDED.ip_address,
+            agent_version = EXCLUDED.agent_version,
+            run_mode = EXCLUDED.run_mode,
+            namespace = EXCLUDED.namespace,
+            pod_name = EXCLUDED.pod_name,
+            containers = EXCLUDED.containers,
             last_command_id = EXCLUDED.last_command_id,
             received_command_ids = EXCLUDED.received_command_ids,
             executed_command_ids = EXCLUDED.executed_command_ids,
@@ -898,6 +914,11 @@ class DBManager(metaclass=Singleton):
             "hostname": hostname,
             "ip_address": ip_address,
             "service_name": service_name,
+            "agent_version": agent_version,
+            "run_mode": run_mode,
+            "namespace": namespace,
+            "pod_name": pod_name,
+            "containers": json.dumps(containers or []),
             "last_command_id": last_command_id,
             "received_command_ids": received_command_ids,
             "executed_command_ids": executed_command_ids,
@@ -1539,6 +1560,482 @@ class DBManager(metaclass=Singleton):
 
         result = self.db.execute(query, values, one_value=True, return_dict=True)
         return result if result else None
+
+    @staticmethod
+    def _parse_json_field(value: Any, default: Any) -> Any:
+        if value is None:
+            return default
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return default
+        return value
+
+    @staticmethod
+    def _matches_any_filter(value: Optional[Any], filters: Optional[List[Any]], exact_match: bool = False) -> bool:
+        if not filters:
+            return True
+        if value is None:
+            return False
+
+        value_str = str(value).lower()
+        for raw_filter in filters:
+            filter_str = str(raw_filter).lower()
+            if exact_match:
+                if value_str == filter_str:
+                    return True
+            elif filter_str in value_str:
+                return True
+        return False
+
+    @staticmethod
+    def _normalize_profiling_status(command_type: Optional[str], command_status: Optional[str]) -> str:
+        if command_status is None:
+            return "stopped"
+        if command_type == "start" and command_status in ["pending", "sent", "completed"]:
+            return "active"
+        return command_status
+
+    @staticmethod
+    def _summarize_enabled_profilers(combined_config: Dict[str, Any]) -> str:
+        profiler_configs = combined_config.get("profiler_configs", {}) or {}
+        if not profiler_configs:
+            return "Default"
+
+        profiler_labels = {
+            "perf": "Perf",
+            "async_profiler": "Java",
+            "pyperf": "Pyperf",
+            "pyspy": "Pyspy",
+            "rbspy": "Rbspy",
+            "phpspy": "PHPspy",
+            "dotnet_trace": ".NET",
+            "nodejs_perf": "NodeJS",
+        }
+        enabled = []
+        for key, label in profiler_labels.items():
+            value = profiler_configs.get(key)
+            if value is None:
+                continue
+            if isinstance(value, dict):
+                if value.get("enabled") is False or value.get("mode") == "disabled":
+                    continue
+            elif value == "disabled":
+                continue
+            enabled.append(label)
+        return ", ".join(enabled) if enabled else "Disabled"
+
+    def _extract_command_metadata(self, combined_config: Any, command_type: Optional[str], command_status: Optional[str]) -> Dict[str, Any]:
+        config = self._parse_json_field(combined_config, {}) or {}
+        current_pids = []
+        for pid in config.get("pids", []) or []:
+            if str(pid).isdigit():
+                current_pids.append(int(pid))
+
+        return {
+            "combined_config": config,
+            "pids": current_pids,
+            "frequency": config.get("frequency"),
+            "profiling_mode": "Continuous" if config.get("continuous") else "Ad Hoc",
+            "profiler_summary": self._summarize_enabled_profilers(config),
+            "command_type": command_type or "N/A",
+            "profiling_status": self._normalize_profiling_status(command_type, command_status),
+        }
+
+    def _get_recent_workload_heartbeat_rows(
+        self,
+        service_names: Optional[List[str]] = None,
+        exact_match: bool = False,
+    ) -> List[Dict[str, Any]]:
+        query = """
+        WITH latest_commands AS (
+            SELECT
+                pc.hostname,
+                pc.service_name,
+                pc.command_type,
+                pc.status,
+                pc.combined_config,
+                pc.created_at,
+                ROW_NUMBER() OVER (PARTITION BY pc.hostname, pc.service_name ORDER BY pc.created_at DESC) as rn
+            FROM ProfilingCommands pc
+        ),
+        current_commands AS (
+            SELECT
+                hostname,
+                service_name,
+                command_type,
+                status,
+                combined_config
+            FROM latest_commands
+            WHERE rn = 1
+        )
+        SELECT
+            h.id,
+            h.hostname,
+            h.ip_address,
+            h.service_name,
+            h.agent_version,
+            h.run_mode,
+            h.namespace,
+            h.pod_name,
+            h.containers,
+            h.heartbeat_timestamp,
+            c.command_type,
+            c.status,
+            c.combined_config
+        FROM HostHeartbeats h
+        LEFT JOIN current_commands c
+            ON h.hostname = c.hostname AND h.service_name = c.service_name
+        WHERE h.heartbeat_timestamp > NOW() - INTERVAL '2 minutes'
+        """
+
+        values: Dict[str, Any] = {}
+        if service_names:
+            if exact_match:
+                query += " AND h.service_name = ANY(%(service_names)s)"
+                values["service_names"] = service_names
+            else:
+                service_conditions = []
+                for idx, service_name in enumerate(service_names):
+                    param_name = f"service_name_{idx}"
+                    service_conditions.append(f"h.service_name ILIKE %({param_name})s")
+                    values[param_name] = f"%{service_name}%"
+                query += f" AND ({' OR '.join(service_conditions)})"
+
+        query += " ORDER BY h.heartbeat_timestamp DESC"
+        return self.db.execute(query, values, one_value=False, return_dict=True, fetch_all=True)
+
+    def _build_inventory_records(self, heartbeat_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        records: List[Dict[str, Any]] = []
+
+        for row in heartbeat_rows:
+            command_metadata = self._extract_command_metadata(
+                row.get("combined_config"),
+                row.get("command_type"),
+                row.get("status"),
+            )
+            base_record = {
+                "host_id": row.get("id"),
+                "hostname": row.get("hostname"),
+                "ip_address": row.get("ip_address"),
+                "service_name": row.get("service_name"),
+                "agent_version": row.get("agent_version"),
+                "run_mode": row.get("run_mode"),
+                "agent_namespace": row.get("namespace"),
+                "agent_pod_name": row.get("pod_name"),
+                "heartbeat_timestamp": row.get("heartbeat_timestamp"),
+                **command_metadata,
+            }
+
+            containers = self._parse_json_field(row.get("containers"), []) or []
+            if not containers:
+                records.append(base_record.copy())
+                continue
+
+            for container in containers:
+                if not isinstance(container, dict):
+                    continue
+
+                container_record = {
+                    **base_record,
+                    "container_id": container.get("container_id"),
+                    "container_name": container.get("container_name"),
+                    "namespace": container.get("namespace"),
+                    "pod_name": container.get("pod_name"),
+                    "workload_name": container.get("workload_name"),
+                    "workload_kind": container.get("workload_kind"),
+                }
+                processes = container.get("processes", []) or []
+                if not processes:
+                    records.append(container_record)
+                    continue
+
+                for process in processes:
+                    if not isinstance(process, dict):
+                        continue
+
+                    pid = process.get("pid")
+                    if not str(pid).isdigit():
+                        continue
+                    records.append(
+                        {
+                            **container_record,
+                            "pid": int(pid),
+                            "process_name": process.get("process_name"),
+                        }
+                    )
+
+        return records
+
+    def _inventory_record_matches_filters(
+        self,
+        record: Dict[str, Any],
+        hostnames: Optional[List[str]] = None,
+        ip_addresses: Optional[List[str]] = None,
+        namespaces: Optional[List[str]] = None,
+        pod_names: Optional[List[str]] = None,
+        container_names: Optional[List[str]] = None,
+        workload_names: Optional[List[str]] = None,
+        process_names: Optional[List[str]] = None,
+        profiling_statuses: Optional[List[str]] = None,
+        command_types: Optional[List[str]] = None,
+        pids: Optional[List[int]] = None,
+    ) -> bool:
+        if not self._matches_any_filter(record.get("hostname"), hostnames):
+            return False
+        if not self._matches_any_filter(record.get("ip_address"), ip_addresses):
+            return False
+        if not self._matches_any_filter(record.get("namespace"), namespaces):
+            return False
+        if not self._matches_any_filter(record.get("pod_name"), pod_names):
+            return False
+        if not self._matches_any_filter(record.get("container_name"), container_names):
+            return False
+        if not self._matches_any_filter(record.get("workload_name"), workload_names):
+            return False
+        if not self._matches_any_filter(record.get("process_name"), process_names):
+            return False
+        if profiling_statuses and not self._matches_any_filter(record.get("profiling_status"), profiling_statuses, exact_match=True):
+            return False
+        if command_types and not self._matches_any_filter(record.get("command_type"), command_types, exact_match=True):
+            return False
+        if pids and record.get("pid") not in pids:
+            return False
+        return True
+
+    def _group_inventory_records(
+        self,
+        scope: str,
+        inventory_records: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        grouped: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+
+        def ensure_group(key: Tuple[Any, ...], seed: Dict[str, Any]) -> Dict[str, Any]:
+            if key not in grouped:
+                grouped[key] = {
+                    "scope": scope,
+                    "service_name": seed.get("service_name"),
+                    "namespace": seed.get("namespace"),
+                    "hostname": seed.get("hostname"),
+                    "ip_address": seed.get("ip_address"),
+                    "pod_name": seed.get("pod_name"),
+                    "container_name": seed.get("container_name"),
+                    "workload_name": seed.get("workload_name"),
+                    "workload_kind": seed.get("workload_kind"),
+                    "process_name": seed.get("process_name"),
+                    "pid": seed.get("pid"),
+                    "pids": set(),
+                    "hostnames": set(),
+                    "namespaces": set(),
+                    "pods": set(),
+                    "containers": set(),
+                    "processes": set(),
+                    "latest_record": seed,
+                }
+            return grouped[key]
+
+        for record in inventory_records:
+            if scope == "service":
+                key = (record.get("service_name"),)
+            elif scope == "namespace":
+                if record.get("namespace") is None:
+                    continue
+                key = (record.get("service_name"), record.get("namespace"))
+            elif scope == "host":
+                key = (record.get("service_name"), record.get("hostname"))
+            elif scope == "pod":
+                if record.get("pod_name") is None:
+                    continue
+                key = (record.get("service_name"), record.get("namespace"), record.get("pod_name"))
+            elif scope == "container":
+                if record.get("container_name") is None:
+                    continue
+                key = (
+                    record.get("service_name"),
+                    record.get("hostname"),
+                    record.get("namespace"),
+                    record.get("pod_name"),
+                    record.get("container_name"),
+                )
+            else:
+                if record.get("pid") is None:
+                    continue
+                key = (record.get("service_name"), record.get("hostname"), record.get("pid"))
+
+            group = ensure_group(key, record)
+            group["hostnames"].add(record.get("hostname"))
+            if record.get("namespace"):
+                group["namespaces"].add(record.get("namespace"))
+            if record.get("pod_name"):
+                group["pods"].add(record.get("pod_name"))
+            if record.get("container_name"):
+                group["containers"].add(record.get("container_name"))
+            if record.get("pid") is not None:
+                group["processes"].add((record.get("pid"), record.get("process_name")))
+                group["pids"].add(record.get("pid"))
+            if record.get("heartbeat_timestamp") and record["heartbeat_timestamp"] >= group["latest_record"].get("heartbeat_timestamp"):
+                group["latest_record"] = record
+
+        rows: List[Dict[str, Any]] = []
+        for _, group in grouped.items():
+            latest = group["latest_record"]
+            rows.append(
+                {
+                    "id": "|".join("" if value is None else str(value) for value in _),
+                    "scope": scope,
+                    "service_name": latest.get("service_name"),
+                    "namespace": latest.get("namespace"),
+                    "hostname": latest.get("hostname"),
+                    "ip_address": latest.get("ip_address"),
+                    "pod_name": latest.get("pod_name"),
+                    "container_name": latest.get("container_name"),
+                    "workload_name": latest.get("workload_name"),
+                    "workload_kind": latest.get("workload_kind"),
+                    "process_name": latest.get("process_name"),
+                    "pid": latest.get("pid"),
+                    "pids": sorted(group["pids"]),
+                    "active_hosts": len(group["hostnames"]),
+                    "host_count": len(group["hostnames"]),
+                    "namespace_count": len(group["namespaces"]),
+                    "pod_count": len(group["pods"]),
+                    "container_count": len(group["containers"]),
+                    "process_count": len(group["processes"]),
+                    "command_type": latest.get("command_type"),
+                    "profiling_status": latest.get("profiling_status"),
+                    "profiling_mode": latest.get("profiling_mode"),
+                    "frequency": latest.get("frequency"),
+                    "profiler_summary": latest.get("profiler_summary"),
+                    "heartbeat_timestamp": latest.get("heartbeat_timestamp"),
+                    "agent_version": latest.get("agent_version"),
+                    "run_mode": latest.get("run_mode"),
+                }
+            )
+
+        rows.sort(key=lambda row: (row.get("service_name") or "", row.get("namespace") or "", row.get("hostname") or "", row.get("pod_name") or "", row.get("container_name") or "", row.get("pid") or 0))
+        return rows
+
+    def get_workload_inventory_status(
+        self,
+        scope: str,
+        service_names: Optional[List[str]] = None,
+        hostnames: Optional[List[str]] = None,
+        ip_addresses: Optional[List[str]] = None,
+        namespaces: Optional[List[str]] = None,
+        pod_names: Optional[List[str]] = None,
+        container_names: Optional[List[str]] = None,
+        workload_names: Optional[List[str]] = None,
+        process_names: Optional[List[str]] = None,
+        profiling_statuses: Optional[List[str]] = None,
+        command_types: Optional[List[str]] = None,
+        pids: Optional[List[int]] = None,
+        exact_match: bool = False,
+    ) -> Dict[str, Any]:
+        heartbeat_rows = self._get_recent_workload_heartbeat_rows(service_names=service_names, exact_match=exact_match)
+        inventory_records = self._build_inventory_records(heartbeat_rows)
+        filtered_records = [
+            record
+            for record in inventory_records
+            if self._matches_any_filter(record.get("service_name"), service_names, exact_match=exact_match)
+            and self._inventory_record_matches_filters(
+                record,
+                hostnames=hostnames,
+                ip_addresses=ip_addresses,
+                namespaces=namespaces,
+                pod_names=pod_names,
+                container_names=container_names,
+                workload_names=workload_names,
+                process_names=process_names,
+                profiling_statuses=profiling_statuses,
+                command_types=command_types,
+                pids=pids,
+            )
+        ]
+
+        tab_counts = {
+            tab_scope: len(self._group_inventory_records(tab_scope, filtered_records))
+            for tab_scope in ["service", "namespace", "host", "pod", "container", "process"]
+        }
+        rows = self._group_inventory_records(scope, filtered_records)
+        active_hosts = len({row.get("hostname") for row in filtered_records if row.get("hostname")})
+
+        return {
+            "scope": scope,
+            "rows": rows,
+            "tab_counts": tab_counts,
+            "active_hosts": active_hosts,
+            "total_count": len(rows),
+        }
+
+    def resolve_workload_targets(
+        self,
+        service_name: str,
+        target_scope: str,
+        target_entities: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Optional[List[int]]]:
+        heartbeat_rows = self._get_recent_workload_heartbeat_rows(service_names=[service_name], exact_match=True)
+        inventory_records = self._build_inventory_records(heartbeat_rows)
+        entities = target_entities or [{"service_name": service_name}]
+        host_pid_mapping: Dict[str, Set[int]] = defaultdict(set)
+        host_only_targets: Set[str] = set()
+
+        for entity in entities:
+            entity_service_name = entity.get("service_name")
+            if entity_service_name and entity_service_name != service_name:
+                continue
+
+            if target_scope in ["service", "host"]:
+                for record in inventory_records:
+                    if target_scope == "service" and record.get("service_name") == service_name:
+                        host_only_targets.add(record["hostname"])
+                    elif target_scope == "host" and record.get("hostname") == entity.get("hostname"):
+                        host_only_targets.add(record["hostname"])
+                continue
+
+            for record in inventory_records:
+                hostname = record.get("hostname")
+                pid = record.get("pid")
+                if hostname is None or pid is None:
+                    continue
+
+                matches = False
+                if target_scope == "namespace":
+                    matches = record.get("namespace") == entity.get("namespace")
+                elif target_scope == "workload":
+                    matches = (
+                        record.get("workload_name") == entity.get("workload_name")
+                        and (entity.get("namespace") is None or record.get("namespace") == entity.get("namespace"))
+                    )
+                elif target_scope == "pod":
+                    matches = (
+                        record.get("pod_name") == entity.get("pod_name")
+                        and (entity.get("namespace") is None or record.get("namespace") == entity.get("namespace"))
+                    )
+                elif target_scope == "container":
+                    matches = (
+                        record.get("container_name") == entity.get("container_name")
+                        and (entity.get("pod_name") is None or record.get("pod_name") == entity.get("pod_name"))
+                        and (entity.get("namespace") is None or record.get("namespace") == entity.get("namespace"))
+                    )
+                elif target_scope == "process":
+                    matches = (
+                        (entity.get("pid") is not None and pid == entity.get("pid"))
+                        or (
+                            entity.get("process_name") is not None
+                            and record.get("process_name") == entity.get("process_name")
+                            and (entity.get("container_name") is None or record.get("container_name") == entity.get("container_name"))
+                            and (entity.get("pod_name") is None or record.get("pod_name") == entity.get("pod_name"))
+                            and (entity.get("namespace") is None or record.get("namespace") == entity.get("namespace"))
+                        )
+                    )
+
+                if matches:
+                    host_pid_mapping[hostname].add(pid)
+
+        resolved_targets: Dict[str, Optional[List[int]]] = {hostname: None for hostname in sorted(host_only_targets)}
+        for hostname, pid_set in host_pid_mapping.items():
+            resolved_targets[hostname] = sorted(pid_set)
+        return resolved_targets
 
     def get_profiling_host_status_optimized(
         self,
