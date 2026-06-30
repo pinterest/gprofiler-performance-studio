@@ -185,6 +185,40 @@ Content-Type: application/json
 | `additional_args` | no | `{}` | Merged flat into `combined_config` |
 | `dry_run` | no | `false` | Validates and returns a response without writing to the database |
 
+#### `additional_args.profiler_configs`
+
+The `profiler_configs` key inside `additional_args` controls which profilers are enabled and how they run. All keys are optional; omitting a key uses the profiler's default.
+
+**Async Profiler (Java)**
+
+```json
+"profiler_configs": {
+  "async_profiler": {
+    "enabled": true,
+    "time": "cpu",
+    "alloc_interval": "2mb"
+  }
+}
+```
+
+| Field | Default | Values | Notes |
+|---|---|---|---|
+| `enabled` | `true` | `true` / `false` | Set `false` to disable Java profiling entirely |
+| `time` | `"cpu"` | `"cpu"`, `"itimer"`, `"wall"`, `"auto"`, `"alloc"` | Profiling mode for async-profiler (see table below) |
+| `alloc_interval` | `"2mb"` | non-empty string e.g. `"2mb"`, `"512kb"` | Allocation interval; **required** when `time` is `"alloc"` |
+
+| `time` value | Description |
+|---|---|
+| `"cpu"` | CPU time — samples only while the thread is on-CPU |
+| `"itimer"` | Interval timer — uses OS `SIGPROF`; lower overhead than `cpu` |
+| `"wall"` | Wall-clock time — includes threads blocked on I/O or locks |
+| `"auto"` | Auto-select between `cpu` and `itimer` at runtime based on host capabilities |
+| `"alloc"` | Allocation profiling — samples on heap allocations instead of time; `alloc_interval` controls the sampling granularity |
+
+> **Validation:** The server rejects any `time` value outside the five listed above with HTTP 422. For `"alloc"` mode, an empty or absent `alloc_interval` is also rejected.
+
+**Other profilers** (`perf`, `pyperf`, `pyspy`, `phpspy`, `rbspy`, `dotnet_trace`, `nodejs_perf`) are unchanged and described in the Agent Integration section.
+
 **Response:**
 
 ```json
@@ -493,6 +527,8 @@ python3 gprofiler/main.py \
 
 ### 1. Create Profiling Request
 
+Basic request (defaults):
+
 ```bash
 curl -X POST http://localhost:8000/api/metrics/profile_request \
   -H "Content-Type: application/json" \
@@ -502,6 +538,42 @@ curl -X POST http://localhost:8000/api/metrics/profile_request \
     "duration": 120,
     "target_hosts": {"web-01": null, "web-02": null},
     "profiling_mode": "cpu"
+  }'
+```
+
+With explicit async-profiler mode (wall-clock):
+
+```bash
+curl -X POST http://localhost:8000/api/metrics/profile_request \
+  -H "Content-Type: application/json" \
+  -d '{
+    "service_name": "web-service",
+    "request_type": "start",
+    "duration": 120,
+    "target_hosts": {"web-01": null},
+    "additional_args": {
+      "profiler_configs": {
+        "async_profiler": { "enabled": true, "time": "wall" }
+      }
+    }
+  }'
+```
+
+Allocation profiling:
+
+```bash
+curl -X POST http://localhost:8000/api/metrics/profile_request \
+  -H "Content-Type: application/json" \
+  -d '{
+    "service_name": "web-service",
+    "request_type": "start",
+    "duration": 60,
+    "target_hosts": {"web-01": null},
+    "additional_args": {
+      "profiler_configs": {
+        "async_profiler": { "enabled": true, "time": "alloc", "alloc_interval": "2mb" }
+      }
+    }
   }'
 ```
 
