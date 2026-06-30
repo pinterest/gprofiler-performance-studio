@@ -171,7 +171,8 @@ const ProfilingStatusPage = () => {
         },
         async_profiler: {
             enabled: true,
-            time: 'cpu' // 'cpu' or 'wall'
+            time: 'cpu', // 'cpu', 'itimer', 'wall', 'auto', 'alloc'
+            alloc_interval: '2mb' // used only when time === 'alloc'
         },
         pyperf: 'enabled', // 'enabled', 'disabled'
         pyspy: 'enabled_fallback', // 'enabled_fallback', 'enabled', 'disabled'
@@ -717,7 +718,13 @@ const ProfilingStatusPage = () => {
                                     }</Typography>
                                     <Typography variant="body2">• Java Async Profiler: {
                                         profilerConfigs.async_profiler?.enabled 
-                                            ? `Enabled (${profilerConfigs.async_profiler.time === 'wall' ? 'Wall Time' : 'CPU Time'})`
+                                            ? `Enabled (${
+                                                profilerConfigs.async_profiler.time === 'wall' ? 'Wall Time' :
+                                                profilerConfigs.async_profiler.time === 'itimer' ? 'ITimer' :
+                                                profilerConfigs.async_profiler.time === 'auto' ? 'Auto' :
+                                                profilerConfigs.async_profiler.time === 'alloc' ? `Allocation (${profilerConfigs.async_profiler.alloc_interval || '2mb'})` :
+                                                'CPU Time'
+                                            })`
                                             : 'Disabled'
                                     }</Typography>
                                     <Typography variant="body2">• Pyperf (Python): {profilerConfigs.pyperf === 'enabled' ? 'Enabled' : 'Disabled'}</Typography>
