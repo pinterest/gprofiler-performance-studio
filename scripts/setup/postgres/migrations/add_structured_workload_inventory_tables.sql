@@ -17,11 +17,10 @@
 -- Normalized workload inventory tables.
 --
 -- These replace the per-host HostHeartbeats.containers JSONB snapshot with a
--- structured, queryable model. During the transition the agent heartbeat path
--- dual-writes both the JSONB column and these tables; reads prefer the tables
--- and fall back to the JSONB snapshot for hosts that have not yet re-heartbeated.
--- The JSONB column can be dropped in a follow-up migration once the structured
--- path is proven.
+-- structured, queryable model. The heartbeat path writes the inventory into
+-- these tables, and inventory reads (target resolution and workload status)
+-- join/aggregate over them directly in SQL. The legacy JSONB column is removed
+-- by drop_containers_jsonb_from_hostheartbeats.sql.
 
 CREATE TABLE IF NOT EXISTS HeartbeatContainers (
     id bigserial PRIMARY KEY,
