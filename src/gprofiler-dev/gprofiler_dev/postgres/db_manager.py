@@ -19,6 +19,7 @@ import json
 import threading
 import time
 import uuid
+import psycopg2.extras
 from collections import defaultdict
 from datetime import datetime, timedelta
 from secrets import token_urlsafe
@@ -881,14 +882,18 @@ class DBManager(metaclass=Singleton):
         if heartbeat_timestamp is None:
             heartbeat_timestamp = datetime.now()
 
+        # Container/process inventory lives entirely in the normalized
+        # HeartbeatContainers/HeartbeatProcesses tables (synced below). ``RETURNING ID``
+        # gives us the stable host row id (the upsert key is (hostname, service_name))
+        # used to attach those child rows.
         query = """
         INSERT INTO HostHeartbeats (
-            hostname, ip_address, service_name, agent_version, run_mode, namespace, pod_name, containers, last_command_id,
+            hostname, ip_address, service_name, agent_version, run_mode, namespace, pod_name, last_command_id,
             received_command_ids, executed_command_ids,
             status, heartbeat_timestamp, supported_perf_events, created_at, updated_at
         ) VALUES (
             %(hostname)s, %(ip_address)s::inet, %(service_name)s, %(agent_version)s, %(run_mode)s,
-            %(namespace)s, %(pod_name)s, %(containers)s::jsonb,
+            %(namespace)s, %(pod_name)s,
             %(last_command_id)s::uuid, %(received_command_ids)s::uuid[],
             %(executed_command_ids)s::uuid[],
             %(status)s::HostStatus,
@@ -901,7 +906,6 @@ class DBManager(metaclass=Singleton):
             run_mode = EXCLUDED.run_mode,
             namespace = EXCLUDED.namespace,
             pod_name = EXCLUDED.pod_name,
-            containers = EXCLUDED.containers,
             last_command_id = EXCLUDED.last_command_id,
             received_command_ids = EXCLUDED.received_command_ids,
             executed_command_ids = EXCLUDED.executed_command_ids,
@@ -909,6 +913,7 @@ class DBManager(metaclass=Singleton):
             heartbeat_timestamp = EXCLUDED.heartbeat_timestamp,
             supported_perf_events = EXCLUDED.supported_perf_events,
             updated_at = CURRENT_TIMESTAMP
+        RETURNING ID
         """
 
         values = {
@@ -919,7 +924,6 @@ class DBManager(metaclass=Singleton):
             "run_mode": run_mode,
             "namespace": namespace,
             "pod_name": pod_name,
-            "containers": json.dumps(containers or []),
             "last_command_id": last_command_id,
             "received_command_ids": received_command_ids,
             "executed_command_ids": executed_command_ids,
@@ -928,8 +932,84 @@ class DBManager(metaclass=Singleton):
             "supported_perf_events": supported_perf_events,
         }
 
-        self.db.execute(query, values, has_value=False)
+        # Host upsert and the normalized inventory sync share one transaction so a
+        # reader never observes a host whose structured inventory is half-written.
+        with self.db.transaction() as cursor:
+            cursor.execute(query, values)
+            row = cursor.fetchone()
+            host_id = row[0] if row else None
+            if host_id is not None:
+                self._sync_host_inventory(cursor, host_id, containers or [])
         return True
+
+    def _sync_host_inventory(self, cursor, host_id: int, containers: List[Dict[str, Any]]) -> None:
+        """Replace the normalized inventory for a host with the latest heartbeat snapshot.
+
+        Runs inside the caller's transaction. Uses delete-then-insert (the cascade on
+        HeartbeatContainers clears child processes) which keeps the logic simple and
+        guarantees the stored set exactly matches the heartbeat. A future optimization
+        is to diff against existing rows to reduce write churn on stable inventories.
+        """
+        cursor.execute("DELETE FROM HeartbeatContainers WHERE host_id = %s", (host_id,))
+
+        if not containers:
+            return
+
+        seen_container_ids: Set[str] = set()
+        for container in containers:
+            if not isinstance(container, dict):
+                continue
+
+            # Guard against duplicate non-null container_ids in a single payload,
+            # which would violate UNIQUE (host_id, container_id). NULL ids are allowed
+            # to repeat (Postgres treats NULLs as distinct).
+            container_id = container.get("container_id")
+            if container_id is not None:
+                if container_id in seen_container_ids:
+                    continue
+                seen_container_ids.add(container_id)
+
+            cursor.execute(
+                """
+                INSERT INTO HeartbeatContainers (
+                    host_id, container_id, container_name, runtime, namespace,
+                    pod_name, workload_name, workload_kind, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                RETURNING id
+                """,
+                (
+                    host_id,
+                    container_id,
+                    container.get("container_name"),
+                    container.get("runtime"),
+                    container.get("namespace"),
+                    container.get("pod_name"),
+                    container.get("workload_name"),
+                    container.get("workload_kind"),
+                ),
+            )
+            container_row_id = cursor.fetchone()[0]
+
+            process_rows = []
+            seen_pids: Set[int] = set()
+            for process in container.get("processes") or []:
+                if not isinstance(process, dict):
+                    continue
+                pid = process.get("pid")
+                if pid is None or not str(pid).isdigit():
+                    continue
+                pid = int(pid)
+                if pid in seen_pids:  # satisfy UNIQUE (container_row_id, pid)
+                    continue
+                seen_pids.add(pid)
+                process_rows.append((container_row_id, pid, process.get("process_name")))
+
+            if process_rows:
+                psycopg2.extras.execute_values(
+                    cursor,
+                    "INSERT INTO HeartbeatProcesses (container_row_id, pid, process_name) VALUES %s",
+                    process_rows,
+                )
 
     def get_host_heartbeat(self, hostname: str) -> Optional[Dict]:
         """Get the latest heartbeat information for a host"""
@@ -1752,7 +1832,6 @@ class DBManager(metaclass=Singleton):
             h.run_mode,
             h.namespace,
             h.pod_name,
-            h.containers,
             h.heartbeat_timestamp,
             c.command_type,
             c.status,
@@ -1779,8 +1858,47 @@ class DBManager(metaclass=Singleton):
         query += " ORDER BY h.heartbeat_timestamp DESC"
         return self.db.execute(query, values, one_value=False, return_dict=True, fetch_all=True)
 
+    def _get_structured_inventory_by_host(self, host_ids: List[int]) -> Dict[int, List[Dict[str, Any]]]:
+        """Fetch the normalized container/process inventory for the given host rows.
+
+        Returns a map of host_id -> flattened rows. Each row is one (container, process)
+        pair; a container with no processes yields a single row with a NULL pid. This
+        mirrors the shape produced by flattening the JSONB snapshot, so callers can use
+        either source interchangeably.
+        """
+        if not host_ids:
+            return {}
+
+        query = """
+        SELECT
+            hc.host_id,
+            hc.container_id,
+            hc.container_name,
+            hc.namespace,
+            hc.pod_name,
+            hc.workload_name,
+            hc.workload_kind,
+            hp.pid,
+            hp.process_name
+        FROM HeartbeatContainers hc
+        LEFT JOIN HeartbeatProcesses hp ON hp.container_row_id = hc.id
+        WHERE hc.host_id = ANY(%(host_ids)s)
+        ORDER BY hc.id, hp.pid
+        """
+        rows = self.db.execute(
+            query, {"host_ids": host_ids}, one_value=False, return_dict=True, fetch_all=True
+        )
+
+        grouped: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+        for row in rows or []:
+            grouped[row["host_id"]].append(row)
+        return grouped
+
     def _build_inventory_records(self, heartbeat_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         records: List[Dict[str, Any]] = []
+
+        host_ids = [row.get("id") for row in heartbeat_rows if row.get("id") is not None]
+        structured_by_host = self._get_structured_inventory_by_host(host_ids)
 
         for row in heartbeat_rows:
             command_metadata = self._extract_command_metadata(
@@ -1801,44 +1919,43 @@ class DBManager(metaclass=Singleton):
                 **command_metadata,
             }
 
-            containers = self._parse_json_field(row.get("containers"), []) or []
-            if not containers:
+            # Inventory comes from the normalized HeartbeatContainers/HeartbeatProcesses
+            # tables. Hosts with no container inventory (plain hosts, or workloads that
+            # report none) contribute a single host-level record.
+            structured_rows = structured_by_host.get(row.get("id"))
+            if structured_rows:
+                records.extend(self._records_from_structured(base_record, structured_rows))
+            else:
                 records.append(base_record.copy())
-                continue
 
-            for container in containers:
-                if not isinstance(container, dict):
-                    continue
+        return records
 
-                container_record = {
-                    **base_record,
-                    "container_id": container.get("container_id"),
-                    "container_name": container.get("container_name"),
-                    "namespace": container.get("namespace"),
-                    "pod_name": container.get("pod_name"),
-                    "workload_name": container.get("workload_name"),
-                    "workload_kind": container.get("workload_kind"),
-                }
-                processes = container.get("processes", []) or []
-                if not processes:
-                    records.append(container_record)
-                    continue
-
-                for process in processes:
-                    if not isinstance(process, dict):
-                        continue
-
-                    pid = process.get("pid")
-                    if not str(pid).isdigit():
-                        continue
-                    records.append(
-                        {
-                            **container_record,
-                            "pid": int(pid),
-                            "process_name": process.get("process_name"),
-                        }
-                    )
-
+    @staticmethod
+    def _records_from_structured(
+        base_record: Dict[str, Any], structured_rows: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        records: List[Dict[str, Any]] = []
+        for srow in structured_rows:
+            container_record = {
+                **base_record,
+                "container_id": srow.get("container_id"),
+                "container_name": srow.get("container_name"),
+                "namespace": srow.get("namespace"),
+                "pod_name": srow.get("pod_name"),
+                "workload_name": srow.get("workload_name"),
+                "workload_kind": srow.get("workload_kind"),
+            }
+            pid = srow.get("pid")
+            if pid is None:
+                records.append(container_record)
+            else:
+                records.append(
+                    {
+                        **container_record,
+                        "pid": int(pid),
+                        "process_name": srow.get("process_name"),
+                    }
+                )
         return records
 
     def _inventory_record_matches_filters(
