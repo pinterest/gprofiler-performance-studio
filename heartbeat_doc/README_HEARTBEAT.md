@@ -196,7 +196,7 @@ The `profiler_configs` key inside `additional_args` controls which profilers are
   "async_profiler": {
     "enabled": true,
     "time": "cpu",
-    "alloc_interval": "2mb"
+    "alloc_interval": "2MB"
   }
 }
 ```
@@ -205,7 +205,7 @@ The `profiler_configs` key inside `additional_args` controls which profilers are
 |---|---|---|---|
 | `enabled` | `true` | `true` / `false` | Set `false` to disable Java profiling entirely |
 | `time` | `"cpu"` | `"cpu"`, `"itimer"`, `"wall"`, `"auto"`, `"alloc"` | Profiling mode for async-profiler (see table below) |
-| `alloc_interval` | `"2mb"` | non-empty string e.g. `"2mb"`, `"512kb"` | Allocation interval; **required** when `time` is `"alloc"` |
+| `alloc_interval` | `"2MB"` | valid size string using bitmath notation e.g. `"2MB"`, `"512KiB"`, `"1GiB"` | Allocation interval; **required** when `time` is `"alloc"` |
 
 | `time` value | Description |
 |---|---|
@@ -215,7 +215,7 @@ The `profiler_configs` key inside `additional_args` controls which profilers are
 | `"auto"` | Auto-select between `cpu` and `itimer` at runtime based on host capabilities |
 | `"alloc"` | Allocation profiling — samples on heap allocations instead of time; `alloc_interval` controls the sampling granularity |
 
-> **Validation:** The server rejects any `time` value outside the five listed above with HTTP 422. For `"alloc"` mode, an empty or absent `alloc_interval` is also rejected.
+> **Validation:** The server rejects any `time` value outside the five listed above with HTTP 422. For `"alloc"` mode, `alloc_interval` must be a non-empty, parseable size string in bitmath notation (e.g. `"2MB"`, `"512KiB"`, `"1GiB"`); absent, empty, or malformed values (e.g. `"2 bananas"`, `"2mb"`) are rejected with HTTP 422.
 
 **Other profilers** (`perf`, `pyperf`, `pyspy`, `phpspy`, `rbspy`, `dotnet_trace`, `nodejs_perf`) are unchanged and described in the Agent Integration section.
 
@@ -571,7 +571,7 @@ curl -X POST http://localhost:8000/api/metrics/profile_request \
     "target_hosts": {"web-01": null},
     "additional_args": {
       "profiler_configs": {
-        "async_profiler": { "enabled": true, "time": "alloc", "alloc_interval": "2mb" }
+        "async_profiler": { "enabled": true, "time": "alloc", "alloc_interval": "2MB" }
       }
     }
   }'

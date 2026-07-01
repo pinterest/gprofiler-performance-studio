@@ -16,6 +16,8 @@
 
 from typing import List, Optional
 
+import bitmath
+
 from backend.config import MAX_SIMULTANEOUS_PROFILING_HOSTS_PERCENT, MAX_PROFILING_REQUEST_HOSTS
 from backend.models.metrics_models import BulkProfilingRequest
 
@@ -214,11 +216,20 @@ def validate_async_profiler_config(bulk_profiling_request: BulkProfilingRequest)
 
         if time_mode == "alloc":
             alloc_interval = async_profiler_config.get("alloc_interval", "")
-            if not isinstance(alloc_interval, str) or not alloc_interval.strip():
+            if not isinstance(alloc_interval, str) or not alloc_interval:
                 errors.append(
                     f"Service '{profiling_request.service_name}': "
-                    "alloc_interval must be a non-empty string (e.g. '2mb', '512kb') "
-                    "when async_profiler time mode is 'alloc'."
+                    f"Invalid alloc_interval value {alloc_interval!r}: "
+                    "must be a non-empty string (e.g. '2MB', '512KiB')"
+                )
+                continue
+            try:
+                bitmath.parse_string(alloc_interval)
+            except ValueError:
+                errors.append(
+                    f"Service '{profiling_request.service_name}': "
+                    f"Could not parse alloc_interval {alloc_interval!r}: "
+                    "must be a number followed by a size unit (e.g. '2MB', '512KiB')"
                 )
 
     if errors:

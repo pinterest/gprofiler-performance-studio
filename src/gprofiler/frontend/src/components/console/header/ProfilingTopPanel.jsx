@@ -626,15 +626,15 @@ const ProfilingTopPanel = ({
                                                     Allocation Interval:
                                                 </Typography>
                                                 <Tooltip
-                                                    title="Memory allocation interval between samples (e.g. '2mb', '512kb')"
+                                                    title="Allocation interval between heap samples. Use bitmath unit notation: MB, KiB, GiB, etc. (e.g. '2MB', '512KiB')"
                                                     placement="right"
                                                     arrow
                                                 >
                                                     <input
                                                         type="text"
-                                                        value={profilerConfigs.async_profiler?.alloc_interval || '2mb'}
+                                                        value={profilerConfigs.async_profiler?.alloc_interval ?? ''}
                                                         onChange={(e) => handleAsyncProfilerConfigChange('alloc_interval', e.target.value)}
-                                                        placeholder="e.g. 2mb, 512kb"
+                                                        placeholder="e.g. 2MB, 512KiB"
                                                         style={{
                                                             fontSize: '0.75rem',
                                                             padding: '4px 8px',
