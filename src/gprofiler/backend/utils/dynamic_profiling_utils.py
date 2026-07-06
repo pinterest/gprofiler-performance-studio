@@ -16,6 +16,8 @@
 
 from typing import List, Optional
 
+import bitmath
+
 from backend.config import MAX_SIMULTANEOUS_PROFILING_HOSTS_PERCENT, MAX_PROFILING_REQUEST_HOSTS
 from backend.models.metrics_models import BulkProfilingRequest
 
@@ -172,4 +174,65 @@ def validate_pmu_events(
         combined_error = "\n\n".join(pmu_validation_errors)
         return False, combined_error
     
+    return True, None
+
+
+_VALID_AP_TIME_MODES = frozenset({"cpu", "itimer", "wall", "auto", "alloc"})
+
+
+def validate_async_profiler_config(bulk_profiling_request: BulkProfilingRequest) -> tuple[bool, Optional[str]]:
+    """
+    Validate the async_profiler config in each profiling request's additional_args.
+
+    Checks that:
+    - async_profiler.time is one of the supported modes
+    - alloc_interval is a non-empty string when time == 'alloc'
+
+    Returns:
+        tuple: (is_valid: bool, error_message: Optional[str])
+    """
+    errors = []
+
+    for profiling_request in bulk_profiling_request.requests:
+        if profiling_request.request_type != "start" or not profiling_request.additional_args:
+            continue
+
+        profiler_configs = profiling_request.additional_args.get("profiler_configs", {})
+        async_profiler_config = profiler_configs.get("async_profiler")
+        if not isinstance(async_profiler_config, dict):
+            continue
+
+        if not async_profiler_config.get("enabled", True):
+            continue
+
+        time_mode = async_profiler_config.get("time", "cpu")
+        if time_mode not in _VALID_AP_TIME_MODES:
+            errors.append(
+                f"Service '{profiling_request.service_name}': "
+                f"Invalid async_profiler time mode {time_mode!r}. "
+                f"Valid modes: {sorted(_VALID_AP_TIME_MODES)}"
+            )
+            continue
+
+        if time_mode == "alloc":
+            alloc_interval = async_profiler_config.get("alloc_interval", "")
+            if not isinstance(alloc_interval, str) or not alloc_interval:
+                errors.append(
+                    f"Service '{profiling_request.service_name}': "
+                    f"Invalid alloc_interval value {alloc_interval!r}: "
+                    "must be a non-empty string (e.g. '2MB', '512KiB')"
+                )
+                continue
+            try:
+                bitmath.parse_string(alloc_interval)
+            except ValueError:
+                errors.append(
+                    f"Service '{profiling_request.service_name}': "
+                    f"Could not parse alloc_interval {alloc_interval!r}: "
+                    "must be a number followed by a size unit (e.g. '2MB', '512KiB')"
+                )
+
+    if errors:
+        return False, "\n\n".join(errors)
+
     return True, None

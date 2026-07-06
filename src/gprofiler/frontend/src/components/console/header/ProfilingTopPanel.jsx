@@ -556,6 +556,22 @@ const ProfilingTopPanel = ({
                                                 />
                                             </Tooltip>
                                             <Tooltip 
+                                                title="Interval timer profiling - uses OS timer, lower overhead than CPU mode" 
+                                                placement="right"
+                                                arrow
+                                            >
+                                                <FormControlLabel
+                                                    value="itimer"
+                                                    control={<Radio size="small" />}
+                                                    label={
+                                                        <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
+                                                            ITimer
+                                                        </Typography>
+                                                    }
+                                                    sx={{ mb: 0.5 }}
+                                                />
+                                            </Tooltip>
+                                            <Tooltip 
                                                 title="Wall clock time profiling - includes waiting/blocking time" 
                                                 placement="right"
                                                 arrow
@@ -571,7 +587,65 @@ const ProfilingTopPanel = ({
                                                     sx={{ mb: 0.5 }}
                                                 />
                                             </Tooltip>
+                                            <Tooltip 
+                                                title="Auto mode - resolves to CPU or ITimer at runtime based on host capabilities" 
+                                                placement="right"
+                                                arrow
+                                            >
+                                                <FormControlLabel
+                                                    value="auto"
+                                                    control={<Radio size="small" />}
+                                                    label={
+                                                        <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
+                                                            Auto
+                                                        </Typography>
+                                                    }
+                                                    sx={{ mb: 0.5 }}
+                                                />
+                                            </Tooltip>
+                                            <Tooltip 
+                                                title="Allocation profiling - samples on memory allocations instead of time" 
+                                                placement="right"
+                                                arrow
+                                            >
+                                                <FormControlLabel
+                                                    value="alloc"
+                                                    control={<Radio size="small" />}
+                                                    label={
+                                                        <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
+                                                            Allocation
+                                                        </Typography>
+                                                    }
+                                                    sx={{ mb: 0.5 }}
+                                                />
+                                            </Tooltip>
                                         </RadioGroup>
+                                        {profilerConfigs.async_profiler?.time === 'alloc' && (
+                                            <Box sx={{ mt: 1 }}>
+                                                <Typography variant="body2" sx={{ fontSize: '0.75rem', fontWeight: 500, mb: 0.5 }}>
+                                                    Allocation Interval:
+                                                </Typography>
+                                                <Tooltip
+                                                    title="Allocation interval between heap samples. Use bitmath unit notation: MB, KiB, GiB, etc. (e.g. '2MB', '512KiB')"
+                                                    placement="right"
+                                                    arrow
+                                                >
+                                                    <input
+                                                        type="text"
+                                                        value={profilerConfigs.async_profiler?.alloc_interval ?? ''}
+                                                        onChange={(e) => handleAsyncProfilerConfigChange('alloc_interval', e.target.value)}
+                                                        placeholder="e.g. 2MB, 512KiB"
+                                                        style={{
+                                                            fontSize: '0.75rem',
+                                                            padding: '4px 8px',
+                                                            border: '1px solid #ccc',
+                                                            borderRadius: '4px',
+                                                            width: '120px',
+                                                        }}
+                                                    />
+                                                </Tooltip>
+                                            </Box>
+                                        )}
                                     </Box>
                                 )}
                             </Box>
