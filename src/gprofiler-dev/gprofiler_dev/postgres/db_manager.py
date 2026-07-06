@@ -1907,7 +1907,24 @@ class DBManager(metaclass=Singleton):
                 c.combined_config AS combined_config,
                 CASE
                     WHEN c.status IS NULL THEN 'stopped'
-                    WHEN c.command_type = 'start' AND c.status IN ('pending', 'sent', 'completed') THEN 'active'
+                    WHEN c.command_type = 'start' AND c.status IN ('pending', 'sent', 'completed') THEN
+                        -- PID-aware: an active "start" command may target only a subset of
+                        -- PIDs on the host (e.g. a single container/pod). A row is only
+                        -- "active" when the command targets all PIDs on the host (no/empty
+                        -- "pids" list == whole host) OR this row's PID is in the target set.
+                        CASE
+                            WHEN c.combined_config IS NULL
+                                 OR (c.combined_config -> 'pids') IS NULL
+                                 OR jsonb_typeof(c.combined_config -> 'pids') <> 'array'
+                                 OR jsonb_array_length(c.combined_config -> 'pids') = 0
+                                THEN 'active'
+                            WHEN hp.pid IS NOT NULL AND EXISTS (
+                                SELECT 1
+                                FROM jsonb_array_elements_text(c.combined_config -> 'pids') AS target(pid)
+                                WHERE target.pid = hp.pid::text
+                            ) THEN 'active'
+                            ELSE 'stopped'
+                        END
                     ELSE c.status::text
                 END AS profiling_status
             FROM HostHeartbeats h
@@ -1951,6 +1968,8 @@ class DBManager(metaclass=Singleton):
             (array_agg(command_type ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_command_type,
             (array_agg(command_status ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_command_status,
             (array_agg(combined_config ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_combined_config,
+            bool_or(profiling_status = 'active') AS any_active,
+            (array_agg(profiling_status ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_profiling_status,
             (array_agg(agent_version ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_agent_version,
             (array_agg(run_mode ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_run_mode,
             MAX(heartbeat_timestamp) AS l_heartbeat_timestamp
@@ -1969,6 +1988,16 @@ class DBManager(metaclass=Singleton):
                 db_row.get("l_command_type"),
                 db_row.get("l_command_status"),
             )
+            # Prefer the PID-aware, row-level status computed in SQL over the host-level
+            # command status. A group is "active" when any of its rows are actively
+            # targeted (whole-host command or a matching PID); otherwise fall back to the
+            # latest row status so entities on a host that is only partially profiled
+            # (e.g. one container) are not incorrectly shown as active.
+            profiling_status = (
+                "active" if db_row.get("any_active") else db_row.get("l_profiling_status")
+            )
+            if not profiling_status:
+                profiling_status = command_metadata.get("profiling_status")
             host_count = db_row.get("host_count") or 0
             rows.append(
                 {
@@ -1992,7 +2021,7 @@ class DBManager(metaclass=Singleton):
                     "container_count": db_row.get("container_count") or 0,
                     "process_count": db_row.get("process_count") or 0,
                     "command_type": command_metadata.get("command_type"),
-                    "profiling_status": command_metadata.get("profiling_status"),
+                    "profiling_status": profiling_status,
                     "profiling_mode": command_metadata.get("profiling_mode"),
                     "frequency": command_metadata.get("frequency"),
                     "profiler_summary": command_metadata.get("profiler_summary"),

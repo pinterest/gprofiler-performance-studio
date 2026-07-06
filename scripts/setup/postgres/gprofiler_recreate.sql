@@ -299,10 +299,11 @@ CREATE INDEX idx_hostheartbeats_heartbeat_timestamp ON HostHeartbeats (heartbeat
 CREATE INDEX idx_hostheartbeats_namespace ON HostHeartbeats (namespace);
 CREATE INDEX idx_hostheartbeats_pod_name ON HostHeartbeats (pod_name);
 
--- Structured workload inventory (normalized form of HostHeartbeats.containers).
--- Populated alongside the JSONB column during the transition; reads prefer these
--- tables and fall back to the JSONB snapshot for hosts that have not yet
--- re-heartbeated after a deploy.
+-- Structured workload inventory (normalized form of the container/process data
+-- reported in each heartbeat). Every process is scoped to a container, so this
+-- currently models containerized workloads only; non-containerized (e.g.
+-- systemd/bare-metal) processes are not represented here and are covered by
+-- host-scope profiling instead.
 CREATE TABLE HeartbeatContainers (
     id bigserial PRIMARY KEY,
     host_id bigint NOT NULL REFERENCES HostHeartbeats (ID) ON DELETE CASCADE,
