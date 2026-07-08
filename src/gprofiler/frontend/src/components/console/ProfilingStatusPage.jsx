@@ -137,9 +137,9 @@ const getScopeColumns = (scope) => {
 
     if (scope === 'host') {
         return [
+            { field: 'host', headerName: 'host name', flex: 1.1, sortable: true },
             { field: 'service', headerName: 'service name', flex: 1, sortable: true },
             { field: 'namespace', headerName: 'namespace', flex: 0.9, sortable: true },
-            { field: 'host', headerName: 'host name', flex: 1.1, sortable: true },
             { field: 'pids', headerName: 'pids (if profiled)', flex: 1, sortable: false },
             { field: 'ip', headerName: 'IP', flex: 0.9, sortable: true },
             { field: 'commandType', headerName: 'command type', flex: 0.8, sortable: true },
