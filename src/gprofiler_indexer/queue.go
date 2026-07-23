@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/sqs"
@@ -33,6 +34,7 @@ type SQSMessage struct {
 	ServiceId     int    `json:"service_id"`
 	MessageHandle string
 	QueueURL      string
+	SentTimestamp int64  // Unix timestamp in milliseconds when message was sent to SQS
 }
 
 func getQueueURL(sess *session.Session, queue string) (*sqs.GetQueueUrlOutput, error) {
@@ -89,6 +91,7 @@ func ListenSqs(ctx context.Context, args *CLIArgs, ch chan<- SQSMessage, wg *syn
 				QueueUrl:            urlResult.QueueUrl,
 				MaxNumberOfMessages: aws.Int64(1),
 				WaitTimeSeconds:     aws.Int64(10),
+				AttributeNames:      []*string{aws.String("SentTimestamp")},
 			})
 			if recvErr != nil {
 				logger.Error(recvErr)
@@ -150,6 +153,19 @@ func ListenSqs(ctx context.Context, args *CLIArgs, ch chan<- SQSMessage, wg *syn
 				}
 				sqsMessage.QueueURL = *urlResult.QueueUrl
 				sqsMessage.MessageHandle = *message.ReceiptHandle
+				
+				// Extract SentTimestamp from message attributes
+				if message.Attributes != nil {
+					if sentTs, ok := message.Attributes["SentTimestamp"]; ok && sentTs != nil {
+						var parsedTs int64
+						if _, err := fmt.Sscanf(*sentTs, "%d", &parsedTs); err == nil {
+							sqsMessage.SentTimestamp = parsedTs
+						} else {
+							logger.Warnf("Failed to parse SentTimestamp: %v", err)
+						}
+					}
+				}
+				
 				ch <- sqsMessage
 			}
 		}
