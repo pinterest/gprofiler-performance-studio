@@ -453,7 +453,7 @@ class DBManager(metaclass=Singleton):
         end_time: datetime,
         ignore_zeros: bool,
         hostname: Optional[str],
-    ) -> Dict:
+    ) -> Dict[str, Optional[float]]:
         total_seconds = (end_time - start_time).total_seconds()
         values = {"service_id": service_id, "start_time": start_time, "end_time": end_time}
         if ignore_zeros:
@@ -465,9 +465,11 @@ class DBManager(metaclass=Singleton):
                 fetch_all=True,
             )
             if not res:
-                return res
+                return {"avg_cores": None, "avg_nodes": None}
             intervals = [(elem["first_seen"], elem["last_seen"]) for elem in res]
             total_seconds = get_total_seconds_from_intervals(intervals)
+            if total_seconds == 0:
+                return {"avg_cores": None, "avg_nodes": None}
 
         values["total_seconds"] = total_seconds
         if hostname:
