@@ -95,6 +95,12 @@ htpasswd -B -C 12 -c .htpasswd admin      # set the password to 'admin' to match
 The harness assumes web creds `admin` / `admin` (override with `AUTH=` on the
 Make targets and the `E2E_BASIC_AUTH_*` env vars).
 
+> **Note:** The `htpasswd` command above uses `-c` which *creates* (or overwrites)
+> `.htpasswd`. If you already have a `.htpasswd` with a different username, the
+> `admin` entry won't be present and every `make` target that calls the nginx API
+> will get a `401`. Either recreate the file with `-c`, or add the entry without
+> overwriting: `htpasswd -B -C 12 -b .htpasswd admin admin`.
+
 ## Quick start
 
 ```bash
@@ -239,6 +245,18 @@ gives the agent visibility into all host containers.
 
 - `e2e-down` removes only the harness containers (agent, sample app, test/UI
   runners); use `e2e-down-all` to tear down the entire studio stack (destructive).
+- **Token minting on cold builds.** `e2e-up` polls the studio API for up to 60 s
+  (30 × 2 s) before minting the agent token. On a cold build the webapp can take
+  longer, leaving the agent container with an empty `GPROFILER_TOKEN` and causing
+  it to crash-loop. If this happens the rest of the stack is still healthy — just
+  re-run the mint + recreate step manually:
+  ```bash
+  tok=$(curl -sk https://localhost:4433/api/api_key -u admin:admin \
+    | python3 -c "import sys,json;print(json.load(sys.stdin)['apiKey'])")
+  GPROFILER_TOKEN="$tok" GPROFILER_IMAGE=gprofiler-e2e-agent:src \
+    docker compose -f docker-compose.yml -f docker-compose.e2e.yml \
+    --profile with-clickhouse up -d --force-recreate gprofiler-agent
+  ```
 - The compose project name defaults to the directory (`deploy`), so the network
   is `deploy_default`. Helper targets read `$(NETWORK)`; override with
   `NETWORK=<project>_default` if you set `COMPOSE_PROJECT_NAME`.
