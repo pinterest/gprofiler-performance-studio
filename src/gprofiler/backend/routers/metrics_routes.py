@@ -47,7 +47,7 @@ from backend.models.metrics_models import (
     ProfilingResponse,
     SampleCount,
 )
-from backend.utils.dynamic_profiling_utils import validate_profiling_capacity, validate_pmu_events
+from backend.utils.dynamic_profiling_utils import validate_profiling_capacity, validate_pmu_events, validate_async_profiler_config
 from backend.utils.filters_utils import get_rql_first_eq_key, get_rql_only_for_one_key, get_rql_all_eq_values
 from backend.utils.notifications import SlackNotifier
 from backend.utils.request_utils import flamegraph_base_request_params, get_metrics_response, get_query_response
@@ -586,6 +586,28 @@ def create_bulk_profiling_requests(bulk_request: BulkProfilingRequest) -> BulkPr
                 f"Bulk profiling capacity validation failed: {error_message}"
             )
             # Return structured error response
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "detail": [
+                        {
+                            "loc": ["body", "requests"],
+                            "msg": error_message,
+                            "type": "value_error"
+                        }
+                    ]
+                }
+            )
+
+        # Validate async profiler config across all requests
+        is_valid, error_message = validate_async_profiler_config(
+            bulk_profiling_request=bulk_request
+        )
+
+        if not is_valid:
+            logger.warning(
+                f"Async profiler config validation failed: {error_message}"
+            )
             return JSONResponse(
                 status_code=422,
                 content={
