@@ -1,31 +1,84 @@
-import { 
-    Box, 
-    Typography, 
-    Dialog, 
-    DialogTitle, 
-    DialogContent, 
-    DialogActions, 
-    Button, 
-    Divider, 
-    Chip 
+import {
+    Alert,
+    Box,
+    Button,
+    Chip,
+    Dialog,
+    DialogActions,
+    DialogContent,
+    DialogTitle,
+    Divider,
+    Snackbar,
+    Tab,
+    Tabs,
+    Typography,
 } from '@mui/material';
 import queryString from 'query-string';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useHistory, useLocation } from 'react-router-dom';
 
 import { DATA_URLS } from '../../api/urls';
 import { PAGES } from '../../utils/consts';
+import Icon from '../common/icon/Icon';
+import { ICONS_NAMES } from '../common/icon/iconsData';
 import MuiTable from '../common/dataDisplay/table/MuiTable';
-import PageHeader from '../common/layout/PageHeader';
 import ProfilingHeader from './header/ProfilingHeader';
 import ProfilingTopPanel from './header/ProfilingTopPanel';
+import { buildProfilingRequests } from './profilingRequestBuilder.mjs';
 
-// Constants
 const DEFAULT_PROFILING_FREQUENCY = 11;
 const DEFAULT_MAX_PROCESSES = 10;
 const DEFAULT_DURATION = 60;
+const CONFIG_STORAGE_KEY = 'gprofiler.adhocProfilingConfig';
 
-// Helper function to build profile URL
+const SCOPES = [
+    { id: 'service', label: 'Services' },
+    { id: 'namespace', label: 'Namespaces' },
+    { id: 'host', label: 'Hosts' },
+    { id: 'pod', label: 'Pods' },
+    { id: 'container', label: 'Containers' },
+    { id: 'process', label: 'Processes' },
+];
+
+const EMPTY_FILTERS = {
+    service: '',
+    hostname: '',
+    pids: '',
+    ip: '',
+    namespace: '',
+    podName: '',
+    containerName: '',
+    processName: '',
+    commandType: '',
+    status: '',
+};
+
+const readField = (row, camelKey, snakeKey = camelKey) => row[camelKey] ?? row[snakeKey];
+
+const formatHeartbeat = (value) => {
+    if (!value) {
+        return 'N/A';
+    }
+
+    try {
+        let utcTimestamp = value;
+        if (!utcTimestamp.endsWith('Z') && !utcTimestamp.includes('+') && !utcTimestamp.includes('-', 10)) {
+            utcTimestamp += 'Z';
+        }
+        return new Date(utcTimestamp).toLocaleString(navigator.language, {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: true,
+        });
+    } catch (error) {
+        return 'Invalid date';
+    }
+};
+
 const buildProfileUrl = (host, service, view) => {
     const baseUrl = `${window.location.protocol}//${window.location.host}`;
     const params = {
@@ -33,137 +86,198 @@ const buildProfileUrl = (host, service, view) => {
         gtab: '1',
         pm: '1',
         rtms: '1',
-        service: service,
+        service,
         time: '1h',
-        view: view,
-        wp: '100'
+        view,
+        wp: '100',
     };
-    const queryParams = new URLSearchParams(params).toString();
-    return `${baseUrl}${PAGES.profiles.to}?${queryParams}`;
+    return `${baseUrl}${PAGES.profiles.to}?${new URLSearchParams(params).toString()}`;
 };
 
-const columns = [
-    { field: 'service', headerName: 'service name', flex: 1, sortable: true },
-    { field: 'host', headerName: 'host name', flex: 1, sortable: true },
-    { field: 'pids', headerName: 'pids (if profiled)', flex: 1, sortable: true },
-    { field: 'ip', headerName: 'IP', flex: 1, sortable: true },
-    { field: 'commandType', headerName: 'command type', flex: 1, sortable: true },
-    { field: 'status', headerName: 'profiling status', flex: 1, sortable: true },
-    {
-        field: 'heartbeat_timestamp',
+const getScopeColumns = (scope) => {
+    const sharedTimestampColumn = {
+        field: 'heartbeatTimestamp',
         headerName: 'last heartbeat',
         flex: 1,
         sortable: true,
-        renderCell: (params) => {
-            if (!params.value) return 'N/A';
-            try {
-                // The backend sends UTC timestamp without 'Z' suffix, so we need to explicitly treat it as UTC
-                let utcTimestamp = params.value;
-                if (!utcTimestamp.endsWith('Z') && !utcTimestamp.includes('+') && !utcTimestamp.includes('-', 10)) {
-                    utcTimestamp += 'Z';
-                }
+        renderCell: (params) => formatHeartbeat(params.value),
+    };
+    const sharedStatusColumns = [
+        { field: 'profilingStatus', headerName: 'profiling', flex: 1, sortable: true },
+        { field: 'profilingMode', headerName: 'mode', flex: 1, sortable: true },
+        { field: 'profilerSummary', headerName: 'profilers', flex: 1.3, sortable: false },
+        { field: 'frequency', headerName: 'frequency', flex: 0.8, sortable: true },
+    ];
 
-                const utcDate = new Date(utcTimestamp);
-                // Convert to user's local timezone
-                const localDateTimeString = utcDate.toLocaleString(navigator.language, {
-                    day: '2-digit',
-                    month: '2-digit',
-                    year: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit',
-                    hour12: true,
-                });
-                return localDateTimeString;
-            } catch (error) {
-                return 'Invalid date';
-            }
-        },
-    },
-    {
-        field: 'profile',
-        headerName: 'profile',
-        flex: 1,
-        renderCell: (params) => {
-            const { host, service, commandType, status } = params.row;
-            
-            // Only show profile link for rows with commandType="start" and status="completed"
-            if (commandType !== 'start' || status !== 'completed') {
-                return '';
-            }
-            
-            if (!host || !service) return '';
-            
-            const continuousProfileUrl = buildProfileUrl(host, service, 'flamegraph');
-            const adhocProfileUrl = buildProfileUrl(host, service, 'adhoc');
-            
-            return (
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-                <a
-                        href={continuousProfileUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ color: '#1976d2', textDecoration: 'none', fontSize: '0.875rem' }}
-                        onMouseOver={(e) => e.target.style.textDecoration = 'underline'}
-                        onMouseOut={(e) => e.target.style.textDecoration = 'none'}
-                    >
-                        View Continuous Profile
-                    </a>
-                    <a
-                        href={adhocProfileUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                        style={{ color: '#1976d2', textDecoration: 'none', fontSize: '0.875rem' }}
-                    onMouseOver={(e) => e.target.style.textDecoration = 'underline'}
-                    onMouseOut={(e) => e.target.style.textDecoration = 'none'}
-                >
-                        View Adhoc Profile
-                </a>
-                </Box>
-            );
-        },
-    },
-];
+    if (scope === 'service') {
+        return [
+            { field: 'service', headerName: 'service name', flex: 1.4, sortable: true },
+            { field: 'namespaceCount', headerName: 'namespaces', flex: 0.8, sortable: true },
+            { field: 'hostCount', headerName: 'hosts', flex: 0.7, sortable: true },
+            { field: 'podCount', headerName: 'pods', flex: 0.7, sortable: true },
+            { field: 'containerCount', headerName: 'containers', flex: 0.8, sortable: true },
+            { field: 'processCount', headerName: 'processes', flex: 0.8, sortable: true },
+            ...sharedStatusColumns,
+            sharedTimestampColumn,
+            { field: 'agentVersion', headerName: 'version', flex: 0.8, sortable: true },
+        ];
+    }
+
+    if (scope === 'namespace') {
+        return [
+            { field: 'namespace', headerName: 'namespace', flex: 1, sortable: true },
+            { field: 'service', headerName: 'service name', flex: 1.2, sortable: true },
+            { field: 'hostCount', headerName: 'hosts', flex: 0.7, sortable: true },
+            { field: 'podCount', headerName: 'pods', flex: 0.7, sortable: true },
+            { field: 'containerCount', headerName: 'containers', flex: 0.8, sortable: true },
+            { field: 'processCount', headerName: 'processes', flex: 0.8, sortable: true },
+            ...sharedStatusColumns,
+            sharedTimestampColumn,
+        ];
+    }
+
+    if (scope === 'host') {
+        return [
+            { field: 'host', headerName: 'host name', flex: 1.1, sortable: true },
+            { field: 'service', headerName: 'service name', flex: 1, sortable: true },
+            { field: 'namespace', headerName: 'namespace', flex: 0.9, sortable: true },
+            { field: 'pids', headerName: 'pids (if profiled)', flex: 1, sortable: false },
+            { field: 'ip', headerName: 'IP', flex: 0.9, sortable: true },
+            { field: 'commandType', headerName: 'command type', flex: 0.8, sortable: true },
+            { field: 'profilingStatus', headerName: 'profiling status', flex: 0.9, sortable: true },
+            sharedTimestampColumn,
+            {
+                field: 'profile',
+                headerName: 'profile',
+                flex: 1.2,
+                sortable: false,
+                renderCell: (params) => {
+                    const { host, service, commandType, profilingStatus } = params.row;
+                    if (commandType !== 'start' || profilingStatus !== 'active' || !host || !service) {
+                        return '';
+                    }
+
+                    return (
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                            <a href={buildProfileUrl(host, service, 'flamegraph')} target="_blank" rel="noopener noreferrer">
+                                View Continuous Profile
+                            </a>
+                            <a href={buildProfileUrl(host, service, 'adhoc')} target="_blank" rel="noopener noreferrer">
+                                View Adhoc Profile
+                            </a>
+                        </Box>
+                    );
+                },
+            },
+        ];
+    }
+
+    if (scope === 'pod') {
+        return [
+            { field: 'podName', headerName: 'pod', flex: 1.2, sortable: true },
+            { field: 'namespace', headerName: 'namespace', flex: 0.9, sortable: true },
+            { field: 'service', headerName: 'service name', flex: 1, sortable: true },
+            { field: 'hostCount', headerName: 'hosts', flex: 0.7, sortable: true },
+            { field: 'containerCount', headerName: 'containers', flex: 0.8, sortable: true },
+            { field: 'processCount', headerName: 'processes', flex: 0.8, sortable: true },
+            ...sharedStatusColumns,
+            sharedTimestampColumn,
+        ];
+    }
+
+    if (scope === 'container') {
+        return [
+            { field: 'containerName', headerName: 'container', flex: 1.1, sortable: true },
+            { field: 'podName', headerName: 'pod', flex: 1, sortable: true },
+            { field: 'namespace', headerName: 'namespace', flex: 0.9, sortable: true },
+            { field: 'host', headerName: 'host', flex: 1, sortable: true },
+            { field: 'processCount', headerName: 'processes', flex: 0.8, sortable: true },
+            ...sharedStatusColumns,
+            sharedTimestampColumn,
+        ];
+    }
+
+    return [
+        { field: 'processName', headerName: 'process', flex: 1.1, sortable: true },
+        { field: 'pid', headerName: 'pid', flex: 0.6, sortable: true },
+        { field: 'containerName', headerName: 'container', flex: 1, sortable: true },
+        { field: 'podName', headerName: 'pod', flex: 1, sortable: true },
+        { field: 'namespace', headerName: 'namespace', flex: 0.9, sortable: true },
+        { field: 'host', headerName: 'host', flex: 1, sortable: true },
+        ...sharedStatusColumns,
+        sharedTimestampColumn,
+    ];
+};
+
+const formatRowForScope = (row, scope) => ({
+    id: readField(row, 'id'),
+    scope,
+    service: readField(row, 'serviceName', 'service_name'),
+    namespace: readField(row, 'namespace'),
+    host: readField(row, 'hostname'),
+    ip: readField(row, 'ipAddress', 'ip_address'),
+    podName: readField(row, 'podName', 'pod_name'),
+    containerName: readField(row, 'containerName', 'container_name'),
+    workloadName: readField(row, 'workloadName', 'workload_name'),
+    workloadKind: readField(row, 'workloadKind', 'workload_kind'),
+    processName: readField(row, 'processName', 'process_name'),
+    pid: readField(row, 'pid'),
+    pids: readField(row, 'pids', 'pids') || [],
+    activeHosts: readField(row, 'activeHosts', 'active_hosts'),
+    hostCount: readField(row, 'hostCount', 'host_count'),
+    namespaceCount: readField(row, 'namespaceCount', 'namespace_count'),
+    podCount: readField(row, 'podCount', 'pod_count'),
+    containerCount: readField(row, 'containerCount', 'container_count'),
+    processCount: readField(row, 'processCount', 'process_count'),
+    commandType: readField(row, 'commandType', 'command_type') || 'N/A',
+    profilingStatus: readField(row, 'profilingStatus', 'profiling_status') || 'stopped',
+    profilingMode: readField(row, 'profilingMode', 'profiling_mode') || 'N/A',
+    frequency: readField(row, 'frequency'),
+    profilerSummary: readField(row, 'profilerSummary', 'profiler_summary') || 'N/A',
+    heartbeatTimestamp: readField(row, 'heartbeatTimestamp', 'heartbeat_timestamp'),
+    agentVersion: readField(row, 'agentVersion', 'agent_version'),
+    runMode: readField(row, 'runMode', 'run_mode'),
+});
+
+const scopeEntityLabel = (scope) => {
+    const lookup = {
+        service: 'services',
+        namespace: 'namespaces',
+        host: 'hosts',
+        pod: 'pods',
+        container: 'containers',
+        process: 'processes',
+    };
+    return lookup[scope] || 'entities';
+};
+
+const rowDisplayName = (row, scope) => {
+    if (scope === 'service') return row.service;
+    if (scope === 'namespace') return `${row.namespace}`;
+    if (scope === 'host') return row.host;
+    if (scope === 'pod') return `${row.namespace}/${row.podName}`;
+    if (scope === 'container') return `${row.namespace}/${row.podName}/${row.containerName}`;
+    return `${row.processName} (${row.pid})`;
+};
 
 const ProfilingStatusPage = () => {
+    const history = useHistory();
+    const location = useLocation();
+
+    const [activeScope, setActiveScope] = useState('service');
     const [rows, setRows] = useState([]);
+    const [scopeCounts, setScopeCounts] = useState({});
     const [loading, setLoading] = useState(false);
     const [selectionModel, setSelectionModel] = useState([]);
     const [activeCount, setActiveCount] = useState(0);
     const [totalCount, setTotalCount] = useState(0);
-    const [filters, setFilters] = useState({
-        service: '',
-        hostname: '',
-        pids: '',
-        ip: '',
-        commandType: '',
-        status: '',
-    });
-    const [appliedFilters, setAppliedFilters] = useState({
-        service: '',
-        hostname: '',
-        pids: '',
-        ip: '',
-        commandType: '',
-        status: '',
-    });
-    
-    // PerfSpect state
+    const [filters, setFilters] = useState(EMPTY_FILTERS);
+    const [appliedFilters, setAppliedFilters] = useState(EMPTY_FILTERS);
     const [enablePerfSpect, setEnablePerfSpect] = useState(false);
-    
-    // Profiling frequency state
     const [profilingFrequency, setProfilingFrequency] = useState(DEFAULT_PROFILING_FREQUENCY);
-    
-    // Max processes state
     const [maxProcesses, setMaxProcesses] = useState(DEFAULT_MAX_PROCESSES);
-    
-    // Profiling mode state (Ad Hoc vs Continuous)
-    const [profilingMode, setProfilingMode] = useState('continuous'); // 'adhoc' or 'continuous'
-    
-    // Duration state
+    const [profilingMode, setProfilingMode] = useState('continuous');
     const [duration, setDuration] = useState(DEFAULT_DURATION);
-    
-    // Profiler configurations state
     const [profilerConfigs, setProfilerConfigs] = useState({
         perf: {
             mode: 'enabled_restricted', // 'enabled_restricted', 'enabled_aggressive', 'disabled'
@@ -181,400 +295,309 @@ const ProfilingStatusPage = () => {
         dotnet_trace: 'disabled', // 'enabled', 'disabled'
         nodejs_perf: 'enabled', // 'enabled', 'disabled'
     });
-
-    // Confirmation dialog state
     const [confirmationDialog, setConfirmationDialog] = useState({
         open: false,
         action: null,
         selectedRows: [],
         serviceGroups: {},
     });
-    
-    // Dry-run validation state
     const [dryRunValidation, setDryRunValidation] = useState({
         isValidating: false,
         isValid: false,
         errors: [],
     });
-    
-    const history = useHistory();
-    const location = useLocation();
+    const [snackbar, setSnackbar] = useState({ open: false, message: '' });
 
-    const fetchProfilingStatus = useCallback((filterParams) => {
+    const columns = useMemo(() => getScopeColumns(activeScope), [activeScope]);
+
+    useEffect(() => {
+        try {
+            const saved = JSON.parse(localStorage.getItem(CONFIG_STORAGE_KEY));
+            if (saved) {
+                if (typeof saved.enablePerfSpect === 'boolean') setEnablePerfSpect(saved.enablePerfSpect);
+                if (saved.profilingFrequency) setProfilingFrequency(saved.profilingFrequency);
+                if (saved.maxProcesses != null) setMaxProcesses(saved.maxProcesses);
+                if (saved.profilingMode) setProfilingMode(saved.profilingMode);
+                if (saved.duration) setDuration(saved.duration);
+                if (saved.profilerConfigs) setProfilerConfigs(saved.profilerConfigs);
+            }
+        } catch (error) {
+            // ignore malformed persisted config
+        }
+    }, []);
+
+    const handleSaveConfiguration = useCallback(() => {
+        const config = {
+            enablePerfSpect,
+            profilingFrequency,
+            maxProcesses,
+            profilingMode,
+            duration,
+            profilerConfigs,
+        };
+        try {
+            localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(config));
+            setSnackbar({ open: true, message: 'Configuration saved' });
+        } catch (error) {
+            setSnackbar({ open: true, message: 'Failed to save configuration' });
+        }
+    }, [duration, enablePerfSpect, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
+
+    const fetchProfilingStatus = useCallback((filterParams, scope = activeScope) => {
         setLoading(true);
-
-        // Build query parameters
         const params = new URLSearchParams();
+        params.append('scope', scope);
 
-        if (filterParams.service) {
-            params.append('service_name', filterParams.service);
-        }
-        if (filterParams.hostname) {
-            params.append('hostname', filterParams.hostname);
-        }
-        if (filterParams.pids) {
-            params.append('pids', filterParams.pids);
-        }
-        if (filterParams.ip) {
-            params.append('ip_address', filterParams.ip);
-        }
-        if (filterParams.commandType) {
-            params.append('command_type', filterParams.commandType);
-        }
-        if (filterParams.status) {
-            params.append('profiling_status', filterParams.status);
-        }
+        if (filterParams.service) params.append('service_name', filterParams.service);
+        if (filterParams.hostname) params.append('hostname', filterParams.hostname);
+        if (filterParams.pids) params.append('pids', filterParams.pids);
+        if (filterParams.ip) params.append('ip_address', filterParams.ip);
+        if (filterParams.namespace) params.append('namespace', filterParams.namespace);
+        if (filterParams.podName) params.append('pod_name', filterParams.podName);
+        if (filterParams.containerName) params.append('container_name', filterParams.containerName);
+        if (filterParams.processName) params.append('process_name', filterParams.processName);
+        if (filterParams.commandType) params.append('command_type', filterParams.commandType);
+        if (filterParams.status) params.append('profiling_status', filterParams.status);
 
-        const url = params.toString()
-            ? `${DATA_URLS.GET_PROFILING_HOST_STATUS}?${params.toString()}`
-            : DATA_URLS.GET_PROFILING_HOST_STATUS;
-
-        fetch(url)
+        fetch(`${DATA_URLS.GET_PROFILING_WORKLOAD_STATUS}?${params.toString()}`)
             .then((res) => res.json())
             .then((data) => {
-                // Handle new response structure with hosts, active_count, and total_count
-                const hosts = data.hosts || data; // Fallback to data if old format
-                const active = data.active_count || hosts.length;
-                const total = data.total_count || hosts.length;
-                
-                setRows(
-                    hosts.map((row) => ({
-                        id: row.id,
-                        service: row.service_name,
-                        host: row.hostname,
-                        pids: row.pids,
-                        ip: row.ip_address,
-                        commandType: row.command_type || 'N/A',
-                        status: row.profiling_status,
-                        heartbeat_timestamp: row.heartbeat_timestamp,
-                    }))
-                );
-                setActiveCount(active);
-                setTotalCount(total);
+                const normalizedRows = (data.rows || []).map((row) => formatRowForScope(row, scope));
+                setRows(normalizedRows);
+                setScopeCounts(data.tabCounts || data.tab_counts || {});
+                setActiveCount(data.activeHosts || data.active_hosts || 0);
+                setTotalCount(data.totalCount || data.total_count || normalizedRows.length);
                 setLoading(false);
             })
             .catch(() => setLoading(false));
-    }, []); // No dependencies needed since it takes filterParams as argument
+    }, [activeScope]);
 
-    // Initialize filters from URL parameters for direct URL visits (shareable links)
-    useEffect(() => {
-        const searchParams = queryString.parse(location.search);
-        const hasFilterParams = ['service', 'hostname', 'pids', 'ip', 'commandType', 'status'].some(
-            param => searchParams[param]
-        );
-        
-        // Only initialize from URL if there are actual filter parameters
-        if (hasFilterParams) {
-            const urlFilters = {
-                service: searchParams.service || '',
-                hostname: searchParams.hostname || '',
-                pids: searchParams.pids || '',
-                ip: searchParams.ip || '',
-                commandType: searchParams.commandType || '',
-                status: searchParams.status || '',
-            };
-            setFilters(urlFilters);
-            setAppliedFilters(urlFilters);
-            // Automatically fetch data with URL filters on page load
-            fetchProfilingStatus(urlFilters);
-        } else {
-            // No URL params, fetch all data
-            const emptyFilters = {
-                service: '',
-                hostname: '',
-                pids: '',
-                ip: '',
-                commandType: '',
-                status: '',
-            };
-            fetchProfilingStatus(emptyFilters);
-        }
-        
-        // Clean up profile-specific parameters if they exist (mixed URLs)
-        const profileParams = ['gtab', 'view', 'time', 'startTime', 'endTime', 'filter', 'rt', 'rtms', 'p', 'pm', 'wt', 'wp', 'search', 'fullscreen'];
-        const hasProfileParams = profileParams.some(param => searchParams[param]);
-        
-        if (hasProfileParams) {
-            // Remove only profile params, keep filter params
-            const cleanedParams = { ...searchParams };
-            profileParams.forEach(param => {
-                delete cleanedParams[param];
-            });
-            history.replace({ search: queryString.stringify(cleanedParams) });
-        }
-    }, [fetchProfilingStatus, history, location.search]); // Add dependencies
-
-    // Auto-refresh every 30 seconds for dynamic profiling
-    useEffect(() => {
-        const refreshInterval = setInterval(() => {
-            // Refresh with current applied filters
-            fetchProfilingStatus(appliedFilters);
-        }, 30000); // 30 seconds
-
-        // Cleanup interval on component unmount
-        return () => clearInterval(refreshInterval);
-    }, [appliedFilters, fetchProfilingStatus]); // Re-create interval when filters change
-
-    // Update URL when filters change (with focus preservation)
-    const updateURL = useCallback(
-        (newFilters) => {
-            // Use replace instead of push to avoid navigation history buildup
-            // and reduce re-render impact on focus
-            const searchParams = {};
-
-            // Add new filter parameters
-            Object.keys(newFilters).forEach((key) => {
-                if (newFilters[key]) {
-                    searchParams[key] = newFilters[key];
-                }
-            });
-
-            const newSearch = queryString.stringify(searchParams);
-            
-            // Use replace instead of push to minimize focus disruption
-            if (newSearch === '') {
-                history.replace('/profiling');
-            } else {
-                history.replace({ pathname: '/profiling', search: newSearch });
+    const updateURL = useCallback((scope, nextFilters) => {
+        const searchParams = { scope };
+        Object.keys(nextFilters).forEach((key) => {
+            if (nextFilters[key]) {
+                searchParams[key] = nextFilters[key];
             }
-        },
-        [history]
-    );
+        });
+        history.replace({ pathname: '/profiling', search: queryString.stringify(searchParams) });
+    }, [history]);
 
-    // Function to update individual filter (optimized for focus preservation)
-    const updateFilter = useCallback((field, value) => {
-        setFilters(prev => ({ ...prev, [field]: value }));
-    }, []); // Stable function reference
-
-    // Apply filters function
     const applyFilters = useCallback(() => {
         setAppliedFilters(filters);
-        fetchProfilingStatus(filters);
-        updateURL(filters);
-    }, [filters, fetchProfilingStatus, updateURL]);
+        setSelectionModel([]);
+        fetchProfilingStatus(filters, activeScope);
+        updateURL(activeScope, filters);
+    }, [activeScope, fetchProfilingStatus, filters, updateURL]);
 
-    // Clear all filters function
     const clearAllFilters = useCallback(() => {
-        const emptyFilters = {
-            service: '',
-            hostname: '',
-            pids: '',
-            ip: '',
-            commandType: '',
-            status: '',
+        setFilters(EMPTY_FILTERS);
+        setAppliedFilters(EMPTY_FILTERS);
+        setSelectionModel([]);
+        fetchProfilingStatus(EMPTY_FILTERS, activeScope);
+        updateURL(activeScope, EMPTY_FILTERS);
+    }, [activeScope, fetchProfilingStatus, updateURL]);
+
+    const updateFilter = useCallback((field, value) => {
+        setFilters((prev) => ({ ...prev, [field]: value }));
+    }, []);
+
+    useEffect(() => {
+        const searchParams = queryString.parse(location.search);
+        const scope = searchParams.scope || 'service';
+        const urlFilters = {
+            service: searchParams.service || '',
+            hostname: searchParams.hostname || '',
+            pids: searchParams.pids || '',
+            ip: searchParams.ip || '',
+            namespace: searchParams.namespace || '',
+            podName: searchParams.podName || '',
+            containerName: searchParams.containerName || '',
+            processName: searchParams.processName || '',
+            commandType: searchParams.commandType || '',
+            status: searchParams.status || '',
         };
-        setFilters(emptyFilters);
-        setAppliedFilters(emptyFilters);
-        fetchProfilingStatus(emptyFilters);
-        updateURL(emptyFilters);
-    }, [fetchProfilingStatus, updateURL]);
+        setActiveScope(scope);
+        setFilters(urlFilters);
+        setAppliedFilters(urlFilters);
+        fetchProfilingStatus(urlFilters, scope);
+    }, [fetchProfilingStatus, location.search]);
 
-    // Bulk Start/Stop handlers
-    function handleBulkAction(action) {
-        const selectedRows = rows.filter((row) => selectionModel.includes(row.id));
+    useEffect(() => {
+        const refreshInterval = setInterval(() => {
+            fetchProfilingStatus(appliedFilters, activeScope);
+        }, 30000);
+        return () => clearInterval(refreshInterval);
+    }, [activeScope, appliedFilters, fetchProfilingStatus]);
 
-        // Group selected rows by service name
-        const serviceGroups = selectedRows.reduce((groups, row) => {
-            if (!groups[row.service]) {
-                groups[row.service] = [];
-            }
-            groups[row.service].push(row.host);
-            return groups;
-        }, {});
+    const handleScopeChange = (_, nextScope) => {
+        setActiveScope(nextScope);
+        setSelectionModel([]);
+        fetchProfilingStatus(appliedFilters, nextScope);
+        updateURL(nextScope, appliedFilters);
+    };
 
-        // Show confirmation dialog
-        setConfirmationDialog({
-            open: true,
-            action,
-            selectedRows,
-            serviceGroups,
-        });
+    const buildRequests = useCallback((action, selectedRows) => buildProfilingRequests(action, selectedRows, {
+        scope: activeScope,
+        profilingMode,
+        duration,
+        profilingFrequency,
+        enablePerfSpect,
+        profilerConfigs,
+        maxProcesses,
+    }), [activeScope, duration, enablePerfSpect, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
 
-        // Trigger dry-run validation when dialog opens
-        executeDryRun(action, serviceGroups);
-    }
-
-    // Execute dry-run validation
-    function executeDryRun(action, serviceGroups) {
-        setDryRunValidation({
-            isValidating: true,
-            isValid: false,
-            errors: [],
-        });
-
-        // Create bulk request with all services
-        const requests = Object.entries(serviceGroups).map(([serviceName, hosts]) => {
-            const target_host = hosts.reduce((hostObj, host) => {
-                hostObj[host] = null;
-                return hostObj;
-            }, {});
-
-            const request = {
-                service_name: serviceName,
-                request_type: action,
-                continuous: profilingMode === 'continuous',
-                duration: profilingMode === 'continuous' ? 60 : duration,
-                frequency: profilingFrequency,
-                profiling_mode: 'cpu',
-                target_hosts: target_host,
-                additional_args: {
-                    enable_perfspect: enablePerfSpect,
-                    profiler_configs: profilerConfigs,
-                    max_processes: maxProcesses,
-                },
-            };
-
-            if (action === 'stop') {
-                request.stop_level = 'host';
-            }
-
-            return request;
-        });
-
-        // Use bulk endpoint with dry_run
-        const bulkRequest = {
-            requests: requests,
-            dry_run: true,
-        };
+    const executeDryRun = useCallback((action, selectedRows) => {
+        const { requests } = buildRequests(action, selectedRows);
+        setDryRunValidation({ isValidating: true, isValid: false, errors: [] });
 
         fetch(DATA_URLS.POST_PROFILING_REQUEST_BULK, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(bulkRequest),
+            body: JSON.stringify({ requests, dry_run: true }),
         })
-            .then(res => {
+            .then((res) => {
                 if (!res.ok) {
-                    return res.json().then(errData => {
-                        // Extract detailed validation messages
+                    return res.json().then((errData) => {
                         if (errData.detail && Array.isArray(errData.detail)) {
-                            const messages = errData.detail.map(err => err.msg || JSON.stringify(err)).join('; ');
-                            throw new Error(messages);
-                        } else if (typeof errData.detail === 'string') {
-                            throw new Error(errData.detail);
-                        } else {
-                            throw new Error(`Validation failed`);
+                            throw new Error(errData.detail.map((err) => err.msg || JSON.stringify(err)).join('; '));
                         }
-                    }).catch(err => {
-                        // If error is already thrown from above, re-throw it
-                        if (err.message) throw err;
-                        throw new Error(`Validation failed with status ${res.status}`);
+                        throw new Error(errData.detail || `Validation failed with status ${res.status}`);
                     });
                 }
                 return res.json();
             })
             .then((bulkResponse) => {
-                // Process bulk response to extract errors
-                const errors = [];
-
-                bulkResponse.results.forEach(result => {
-                    if (!result.success) {
-                        errors.push(`${result.service_name}: ${result.error}`);
-                    }
-                });
-
+                const errors = (bulkResponse.results || [])
+                    .filter((result) => !result.success)
+                    .map((result) => `${result.service_name}: ${result.error}`);
                 setDryRunValidation({
                     isValidating: false,
-                    isValid: bulkResponse.failed_count === 0,
-                    errors: errors,
+                    isValid: (bulkResponse.failed_count || 0) === 0,
+                    errors,
                 });
             })
-            .catch(error => {
-                // Handle global validation errors (e.g., capacity exceeded)
+            .catch((error) => {
                 setDryRunValidation({
                     isValidating: false,
                     isValid: false,
                     errors: [error.message],
                 });
             });
-    }
+    }, [buildRequests]);
 
-    // Execute the actual profiling action after confirmation
-    function executeProfilingAction() {
-        const { action, serviceGroups } = confirmationDialog;
-
-        // Create bulk request with all services
-        const requests = Object.entries(serviceGroups).map(([serviceName, hosts]) => {
-            const target_host = hosts.reduce((hostObj, host) => {
-                hostObj[host] = null;
-                return hostObj;
-            }, {});
-
-            const request = {
-                service_name: serviceName,
-                request_type: action,
-                continuous: profilingMode === 'continuous',
-                duration: profilingMode === 'continuous' ? 60 : duration,
-                frequency: profilingFrequency, // Use frequency from UI
-                profiling_mode: 'cpu', // Default profiling mode, can't be adjusted yet
-                target_hosts: target_host,
-                additional_args: {
-                    enable_perfspect: enablePerfSpect, // Include PerfSpect setting
-                    profiler_configs: profilerConfigs, // Include all profiler configurations
-                    max_processes: maxProcesses, // Include max processes setting
-                },
-            };
-
-            // append 'stop_level: host' when action is 'stop'
-            if (action === 'stop') {
-                request.stop_level = 'host';
-            }
-
-            return request;
+    const handleBulkAction = (action) => {
+        const selectedRows = rows.filter((row) => selectionModel.includes(row.id));
+        const { grouped } = buildRequests(action, selectedRows);
+        setConfirmationDialog({
+            open: true,
+            action,
+            selectedRows,
+            serviceGroups: grouped,
         });
+        executeDryRun(action, selectedRows);
+    };
 
-        // Use bulk endpoint
-        const bulkRequest = {
-            requests: requests,
-            dry_run: false,
-        };
+    const executeProfilingAction = () => {
+        const { action, selectedRows } = confirmationDialog;
+        const { requests } = buildRequests(action, selectedRows);
 
-        // Close dialog and execute bulk request
         setConfirmationDialog({ open: false, action: null, selectedRows: [], serviceGroups: {} });
-        setDryRunValidation({ isValidating: false, isValid: false, errors: [] }); // Reset dry-run state
-        
+        setDryRunValidation({ isValidating: false, isValid: false, errors: [] });
+
         fetch(DATA_URLS.POST_PROFILING_REQUEST_BULK, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(bulkRequest),
+            body: JSON.stringify({ requests, dry_run: false }),
         }).then(() => {
-            // Maintain current filter state when refreshing
-            fetchProfilingStatus(appliedFilters);
-            setSelectionModel([]); // Clear all checkboxes after API requests complete
-            setEnablePerfSpect(false); // Reset PerfSpect checkbox after action completes
-            // Note: Keep profiling frequency as is - user may want to reuse the same frequency
+            fetchProfilingStatus(appliedFilters, activeScope);
+            setSelectionModel([]);
+            setEnablePerfSpect(false);
         });
-    }
+    };
 
-    // Close confirmation dialog without action
-    function handleDialogClose() {
+    const handleDialogClose = () => {
         setConfirmationDialog({ open: false, action: null, selectedRows: [], serviceGroups: {} });
-        setDryRunValidation({ isValidating: false, isValid: false, errors: [] }); // Reset dry-run state
-    }
+        setDryRunValidation({ isValidating: false, isValid: false, errors: [] });
+    };
 
     return (
         <Box sx={{ backgroundColor: 'white.main', height: '100%' }}>
-            <ProfilingHeader 
-                filters={filters} 
-                updateFilter={updateFilter} 
+            <Box
+                sx={{
+                    px: 4,
+                    pt: 3,
+                    pb: 1,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'flex-start',
+                    gap: 2,
+                }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                    <Icon name={ICONS_NAMES.Crosshairs} size={28} color="#583FFD" />
+                    <Box>
+                        <Typography variant="h5" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+                            Adhoc Profile Configuration
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                            Select workloads and configure profiling parameters
+                        </Typography>
+                    </Box>
+                </Box>
+                <Box sx={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                        Active Hosts
+                    </Typography>
+                    <Typography variant="subtitle1" sx={{ fontWeight: 700, color: '#16a34a' }}>
+                        {(activeCount || 0).toLocaleString()} of {(totalCount || 0).toLocaleString()}
+                    </Typography>
+                </Box>
+            </Box>
+
+            <ProfilingHeader
+                filters={filters}
+                updateFilter={updateFilter}
                 isLoading={loading}
                 onApplyFilters={applyFilters}
                 onClearFilters={clearAllFilters}
             />
 
-            <Box
-                sx={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                }}>
+            <Box sx={{ px: 4, pt: 2 }}>
+                <Tabs value={activeScope} onChange={handleScopeChange} variant="scrollable" scrollButtons="auto">
+                    {SCOPES.map((scope) => (
+                        <Tab
+                            key={scope.id}
+                            value={scope.id}
+                            label={`${scope.label} ${scopeCounts[scope.id] ? scopeCounts[scope.id] : ''}`.trim()}
+                        />
+                    ))}
+                </Tabs>
+            </Box>
+
+            <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                <Box sx={{ px: 4, pt: 3, pb: 1, '& .MuiDataGrid-root': { border: 'none' } }}>
+                    <MuiTable
+                        columns={columns}
+                        data={rows}
+                        isLoading={loading}
+                        pageSize={50}
+                        rowHeight={50}
+                        autoPageSize
+                        checkboxSelection
+                        onSelectionModelChange={setSelectionModel}
+                        selectionModel={selectionModel}
+                    />
+                    <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                        Showing {rows.length} {scopeEntityLabel(activeScope)}
+                        {selectionModel.length ? ` \u00b7 ${selectionModel.length} selected` : ''}
+                    </Typography>
+                </Box>
+
                 <ProfilingTopPanel
                     selectionModel={selectionModel}
                     handleBulkAction={handleBulkAction}
-                    fetchProfilingStatus={fetchProfilingStatus}
+                    fetchProfilingStatus={(scopeFilters) => fetchProfilingStatus(scopeFilters, activeScope)}
                     filters={appliedFilters}
                     loading={loading}
-                    activeCount={activeCount}
-                    totalCount={totalCount}
-                    clearAllFilters={clearAllFilters}
                     enablePerfSpect={enablePerfSpect}
                     onPerfSpectChange={setEnablePerfSpect}
                     profilingFrequency={profilingFrequency}
@@ -587,43 +610,17 @@ const ProfilingStatusPage = () => {
                     onDurationChange={setDuration}
                     profilerConfigs={profilerConfigs}
                     onProfilerConfigsChange={setProfilerConfigs}
+                    onSaveConfiguration={handleSaveConfiguration}
                 />
-
-                {/* Data Table */}
-                <Box sx={{ p: 4, '& .MuiDataGrid-root': { border: 'none' } }}>
-                    <MuiTable
-                        columns={columns}
-                        data={rows}
-                        isLoading={loading}
-                        pageSize={50}
-                        rowHeight={50}
-                        autoPageSize
-                        checkboxSelection
-                        onSelectionModelChange={setSelectionModel}
-                        selectionModel={selectionModel}
-                        initialState={{
-                            sorting: {
-                                sortModel: [{ field: 'host', sort: 'asc' }],
-                            },
-                        }}
-                    />
-                </Box>
             </Box>
 
-            {/* Confirmation Dialog */}
-            <Dialog
-                open={confirmationDialog.open}
-                onClose={handleDialogClose}
-                maxWidth="md"
-                fullWidth
-            >
+            <Dialog open={confirmationDialog.open} onClose={handleDialogClose} maxWidth="md" fullWidth>
                 <DialogTitle>
-                    <Typography variant="h6" component="div">
+                    <Typography variant="h6">
                         Confirm {confirmationDialog.action === 'start' ? 'Start' : 'Stop'} Profiling
                     </Typography>
                 </DialogTitle>
                 <DialogContent>
-                    {/* Validation Status */}
                     {dryRunValidation.isValidating && (
                         <Box sx={{ mb: 2, p: 2, backgroundColor: '#f5f5f5', borderRadius: 1 }}>
                             <Typography variant="body2" color="text.secondary">
@@ -631,7 +628,6 @@ const ProfilingStatusPage = () => {
                             </Typography>
                         </Box>
                     )}
-                    
                     {!dryRunValidation.isValidating && dryRunValidation.isValid && (
                         <Box sx={{ mb: 2, p: 2, backgroundColor: '#e8f5e9', borderRadius: 1 }}>
                             <Typography variant="body2" color="success.dark">
@@ -639,7 +635,6 @@ const ProfilingStatusPage = () => {
                             </Typography>
                         </Box>
                     )}
-                    
                     {!dryRunValidation.isValidating && !dryRunValidation.isValid && dryRunValidation.errors.length > 0 && (
                         <Box sx={{ mb: 2, p: 2, backgroundColor: '#ffebee', borderRadius: 1 }}>
                             <Typography variant="body2" color="error.dark" sx={{ fontWeight: 600, mb: 1 }}>
@@ -654,24 +649,23 @@ const ProfilingStatusPage = () => {
                     )}
 
                     <Typography variant="body1" sx={{ mb: 2 }}>
-                        Are you sure you want to <strong>{confirmationDialog.action}</strong> profiling for the following hosts?
+                        Are you sure you want to <strong>{confirmationDialog.action}</strong> profiling for the selected {scopeEntityLabel(activeScope)}?
                     </Typography>
-                    
-                    {/* Selected Hosts Summary */}
+
                     <Box sx={{ mb: 3 }}>
                         <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
-                            Selected Hosts ({confirmationDialog.selectedRows.length}):
+                            Selected {scopeEntityLabel(activeScope)} ({confirmationDialog.selectedRows.length}):
                         </Typography>
-                        {Object.entries(confirmationDialog.serviceGroups).map(([serviceName, hosts]) => (
+                        {Object.entries(confirmationDialog.serviceGroups).map(([serviceName, serviceRows]) => (
                             <Box key={serviceName} sx={{ mb: 2 }}>
                                 <Typography variant="body2" sx={{ fontWeight: 500, mb: 0.5 }}>
                                     {serviceName}:
                                 </Typography>
                                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                                    {hosts.map((host) => (
+                                    {serviceRows.map((row) => (
                                         <Chip
-                                            key={host}
-                                            label={host}
+                                            key={row.id}
+                                            label={rowDisplayName(row, activeScope)}
                                             size="small"
                                             variant="outlined"
                                             sx={{
@@ -685,16 +679,13 @@ const ProfilingStatusPage = () => {
                         ))}
                     </Box>
 
-                    {/* Configuration Summary (only for start action) */}
                     {confirmationDialog.action === 'start' && (
                         <>
                             <Divider sx={{ my: 2 }} />
                             <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600 }}>
                                 Profiling Configuration:
                             </Typography>
-                            
                             <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2 }}>
-                                {/* Basic Settings */}
                                 <Box>
                                     <Typography variant="body2" sx={{ fontWeight: 500, mb: 1 }}>
                                         Basic Settings:
@@ -706,8 +697,6 @@ const ProfilingStatusPage = () => {
                                     <Typography variant="body2">• Duration: {profilingMode === 'continuous' ? 60 : duration} seconds</Typography>
                                     <Typography variant="body2">• Mode: CPU profiling</Typography>
                                 </Box>
-
-                                {/* Profiler Settings */}
                                 <Box>
                                     <Typography variant="body2" sx={{ fontWeight: 500, mb: 1 }}>
                                         Profiler Settings:
@@ -717,7 +706,7 @@ const ProfilingStatusPage = () => {
                                         profilerConfigs.perf?.mode === 'enabled_aggressive' ? 'Enabled (Aggressive)' : 'Disabled'
                                     }</Typography>
                                     <Typography variant="body2">• Java Async Profiler: {
-                                        profilerConfigs.async_profiler?.enabled 
+                                        profilerConfigs.async_profiler?.enabled
                                             ? `Enabled (${
                                                 profilerConfigs.async_profiler.time === 'wall' ? 'Wall Time' :
                                                 profilerConfigs.async_profiler.time === 'itimer' ? 'ITimer' :
@@ -742,11 +731,9 @@ const ProfilingStatusPage = () => {
                     )}
                 </DialogContent>
                 <DialogActions>
-                    <Button onClick={handleDialogClose} color="primary">
-                        Cancel
-                    </Button>
-                    <Button 
-                        onClick={executeProfilingAction} 
+                    <Button onClick={handleDialogClose}>Cancel</Button>
+                    <Button
+                        onClick={executeProfilingAction}
                         color={confirmationDialog.action === 'start' ? 'success' : 'error'}
                         variant="contained"
                         disabled={dryRunValidation.isValidating || !dryRunValidation.isValid}
@@ -755,6 +742,22 @@ const ProfilingStatusPage = () => {
                     </Button>
                 </DialogActions>
             </Dialog>
+
+            <Snackbar
+                open={snackbar.open}
+                autoHideDuration={3000}
+                onClose={() => setSnackbar({ open: false, message: '' })}
+                anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+            >
+                <Alert
+                    onClose={() => setSnackbar({ open: false, message: '' })}
+                    severity="success"
+                    variant="filled"
+                    sx={{ width: '100%' }}
+                >
+                    {snackbar.message}
+                </Alert>
+            </Snackbar>
         </Box>
     );
 };

@@ -29,6 +29,7 @@ on:
       - 'src/gprofiler/*.py'
       - 'src/gprofiler/backend/**'
       - 'src/gprofiler_logging/**'
+      - 'src/tests/**'
       - '.github/workflows/backend-ci.yml'
 
   # Allows you to run this workflow manually from the Actions tab
@@ -62,3 +63,26 @@ jobs:
 
       - name: Run linters
         run: ./lint.sh --ci
+
+  # Fast, in-process acceptance/spec tests: exercise the ProfilingRequest
+  # validator and the PMU/capacity guardrails directly (no server, no database).
+  spec-tests:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install minimal deps for fast spec tests
+        # Pinned to production's pydantic v1; boto3/psycopg2/json-logger are pulled
+        # in transitively when importing the backend package (gprofiler_dev).
+        run: |
+          python -m pip install --upgrade pip
+          pip install "pydantic[email]==1.10.14" "pyhumps==3.8.0" boto3 psycopg2-binary python-json-logger pytest
+
+      - name: Run fast backend spec tests
+        run: python -m pytest tests/spec -q
+        working-directory: ./src

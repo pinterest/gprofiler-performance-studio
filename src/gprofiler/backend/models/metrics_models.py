@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from backend.models import CamelModel
-from pydantic import BaseModel, root_validator, validator
+from pydantic import BaseModel, Field, root_validator, validator
 
 
 class SampleCount(BaseModel):
@@ -89,6 +89,36 @@ class HTMLMetadata(CamelModel):
     content: str
 
 
+class WorkloadTargetEntity(CamelModel):
+    id: Optional[str] = None
+    service_name: Optional[str] = None
+    namespace: Optional[str] = None
+    hostname: Optional[str] = None
+    ip_address: Optional[str] = None
+    pod_name: Optional[str] = None
+    container_name: Optional[str] = None
+    workload_name: Optional[str] = None
+    workload_kind: Optional[str] = None
+    pid: Optional[int] = None
+    process_name: Optional[str] = None
+
+
+class HeartbeatProcessInfo(CamelModel):
+    pid: int
+    process_name: str
+
+
+class HeartbeatContainerInfo(CamelModel):
+    container_id: Optional[str] = None
+    container_name: str
+    runtime: Optional[str] = None
+    namespace: Optional[str] = None
+    pod_name: Optional[str] = None
+    workload_name: Optional[str] = None
+    workload_kind: Optional[str] = None
+    processes: List[HeartbeatProcessInfo] = Field(default_factory=list)
+
+
 class ProfilingRequest(BaseModel):
     """Model for profiling request parameters"""
 
@@ -98,7 +128,9 @@ class ProfilingRequest(BaseModel):
     duration: Optional[int] = 60
     frequency: Optional[int] = 11
     profiling_mode: Optional[str] = "cpu"  # "cpu", "allocation", "none"
-    target_hosts: Dict[str, Optional[List[int]]]
+    target_hosts: Optional[Dict[str, Optional[List[int]]]] = None
+    target_scope: Optional[str] = "host"
+    target_entities: Optional[List[WorkloadTargetEntity]] = None
     stop_level: Optional[str] = "process"  # "process" or "host"
     additional_args: Optional[Dict[str, Any]] = None
     dry_run: Optional[bool] = False
@@ -115,10 +147,16 @@ class ProfilingRequest(BaseModel):
             raise ValueError('profiling_mode must be "cpu", "allocation", or "none"')
         return v
 
+    @validator("target_scope")
+    def validate_target_scope(cls, v):
+        if v not in ["host", "service", "namespace", "workload", "pod", "container", "process"]:
+            raise ValueError('target_scope must be one of "host", "service", "namespace", "workload", "pod", "container", or "process"')
+        return v
+
     @validator("target_hosts")
     def validate_target_hosts(cls, v):
-        """Validate that target_hosts is not empty."""
-        if len(v) == 0:
+        """Validate that target_hosts is not empty when provided."""
+        if v is not None and len(v) == 0:
             raise ValueError("target_hosts cannot be empty")
         return v
 
@@ -142,23 +180,29 @@ class ProfilingRequest(BaseModel):
 
     @root_validator
     def validate_profile_request(cls, values):
-        """Validate that PIDs are provided when request_type is stop and stop_level is process"""
+        """Validate target requirements for host- and workload-level requests."""
         request_type = values.get("request_type")
         stop_level = values.get("stop_level")
         target_hosts = values.get("target_hosts")
+        target_entities = values.get("target_entities") or []
+
+        if not target_hosts and not target_entities:
+            raise ValueError("At least one target_hosts entry or target_entities selector must be provided")
 
         if request_type == "stop" and stop_level == "process":
             # Check if PIDs are provided in target_hosts mapping
             has_pids = target_hosts and any(pids for pids in target_hosts.values() if pids)
-            if not has_pids:
+            has_entity_targets = len(target_entities) > 0
+            if not has_pids and not has_entity_targets:
                 raise ValueError(
-                    'At least one PID must be provided when request_type is "stop" and stop_level is "process"'
+                    'At least one PID or workload selector must be provided when request_type is "stop" and stop_level is "process"'
                 )
 
         # Validate if a process id is provided when request_type is stop and stop_level is host, if so raises
         if request_type == "stop" and stop_level == "host":
             has_pids = target_hosts and any(pids for pids in target_hosts.values() if pids is not None)
-            if has_pids:
+            has_process_entities = any(entity.pid is not None for entity in target_entities)
+            if has_pids or has_process_entities:
                 raise ValueError('No PIDs should be provided when request_type is "stop" and stop_level is "host"')
 
         return values
@@ -224,6 +268,11 @@ class HeartbeatRequest(BaseModel):
     ip_address: str
     hostname: str
     service_name: str
+    agent_version: Optional[str] = None
+    run_mode: Optional[str] = None
+    namespace: Optional[str] = None
+    pod_name: Optional[str] = None
+    containers: Optional[List[HeartbeatContainerInfo]] = None
     last_command_id: Optional[str] = None
     received_command_ids: Optional[List[str]] = None
     executed_command_ids: Optional[List[str]] = None
@@ -286,3 +335,65 @@ class ProfilingHostStatusResponse(BaseModel):
     hosts: List[ProfilingHostStatus]
     active_count: int  # Hosts with heartbeat in last 2 minutes
     total_count: int   # total number of hosts for the selected service
+
+
+class ProfilingInventoryStatusRequest(BaseModel):
+    """Model for workload inventory status request parameters."""
+
+    scope: str = "host"
+    service_name: Optional[List[str]] = None
+    exact_match: bool = False
+    hostname: Optional[List[str]] = None
+    ip_address: Optional[List[str]] = None
+    namespace: Optional[List[str]] = None
+    pod_name: Optional[List[str]] = None
+    container_name: Optional[List[str]] = None
+    workload_name: Optional[List[str]] = None
+    process_name: Optional[List[str]] = None
+    profiling_status: Optional[List[str]] = None
+    command_type: Optional[List[str]] = None
+    pids: Optional[List[int]] = None
+
+    @validator("scope")
+    def validate_scope(cls, v):
+        if v not in ["service", "namespace", "host", "pod", "container", "process"]:
+            raise ValueError('scope must be one of "service", "namespace", "host", "pod", "container", or "process"')
+        return v
+
+
+class ProfilingInventoryStatus(CamelModel):
+    id: str
+    scope: str
+    service_name: str
+    namespace: Optional[str] = None
+    hostname: Optional[str] = None
+    ip_address: Optional[str] = None
+    pod_name: Optional[str] = None
+    container_name: Optional[str] = None
+    workload_name: Optional[str] = None
+    workload_kind: Optional[str] = None
+    process_name: Optional[str] = None
+    pid: Optional[int] = None
+    pids: Optional[List[int]] = None
+    active_hosts: Optional[int] = None
+    host_count: Optional[int] = None
+    namespace_count: Optional[int] = None
+    pod_count: Optional[int] = None
+    container_count: Optional[int] = None
+    process_count: Optional[int] = None
+    command_type: Optional[str] = None
+    profiling_status: Optional[str] = None
+    profiling_mode: Optional[str] = None
+    frequency: Optional[int] = None
+    profiler_summary: Optional[str] = None
+    heartbeat_timestamp: Optional[datetime] = None
+    agent_version: Optional[str] = None
+    run_mode: Optional[str] = None
+
+
+class ProfilingInventoryStatusResponse(CamelModel):
+    scope: str
+    rows: List[ProfilingInventoryStatus]
+    tab_counts: Dict[str, int]
+    active_hosts: int
+    total_count: int

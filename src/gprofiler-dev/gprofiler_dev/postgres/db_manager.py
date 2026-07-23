@@ -18,6 +18,8 @@ import hashlib
 import json
 import threading
 import time
+import uuid
+import psycopg2.extras
 from collections import defaultdict
 from datetime import datetime, timedelta
 from secrets import token_urlsafe
@@ -608,11 +610,16 @@ class DBManager(metaclass=Singleton):
         target_hostnames: Optional[List[str]] = None,
         pids: Optional[List[int]] = None,
         host_pid_mapping: Optional[Dict[str, List[int]]] = None,
+        target_scope: str = "host",
+        target_entities: Optional[List[Dict[str, Any]]] = None,
         additional_args: Optional[Dict] = None,
     ) -> bool:
         """Save a profiling request with support for host-to-PID mapping"""
         # Store additional_args WITHOUT host_pid_mapping (keep that separate)
         clean_additional_args = additional_args.copy() if additional_args else {}
+        clean_additional_args["target_scope"] = target_scope
+        if target_entities:
+            clean_additional_args["target_entities"] = target_entities
 
         # Store host_pid_mapping separately in a dedicated field if we add one,
         # for now, we'll handle it during command creation to avoid polluting additional_args
@@ -855,6 +862,11 @@ class DBManager(metaclass=Singleton):
         hostname: str,
         ip_address: str,
         service_name: str,
+        agent_version: Optional[str] = None,
+        run_mode: Optional[str] = None,
+        namespace: Optional[str] = None,
+        pod_name: Optional[str] = None,
+        containers: Optional[List[Dict[str, Any]]] = None,
         last_command_id: Optional[str] = None,
         received_command_ids: Optional[List[str]] = None,
         executed_command_ids: Optional[List[str]] = None,
@@ -870,13 +882,18 @@ class DBManager(metaclass=Singleton):
         if heartbeat_timestamp is None:
             heartbeat_timestamp = datetime.now()
 
+        # Container/process inventory lives entirely in the normalized
+        # HeartbeatContainers/HeartbeatProcesses tables (synced below). ``RETURNING ID``
+        # gives us the stable host row id (the upsert key is (hostname, service_name))
+        # used to attach those child rows.
         query = """
         INSERT INTO HostHeartbeats (
-            hostname, ip_address, service_name, last_command_id,
+            hostname, ip_address, service_name, agent_version, run_mode, namespace, pod_name, last_command_id,
             received_command_ids, executed_command_ids,
             status, heartbeat_timestamp, supported_perf_events, created_at, updated_at
         ) VALUES (
-            %(hostname)s, %(ip_address)s::inet, %(service_name)s,
+            %(hostname)s, %(ip_address)s::inet, %(service_name)s, %(agent_version)s, %(run_mode)s,
+            %(namespace)s, %(pod_name)s,
             %(last_command_id)s::uuid, %(received_command_ids)s::uuid[],
             %(executed_command_ids)s::uuid[],
             %(status)s::HostStatus,
@@ -885,6 +902,10 @@ class DBManager(metaclass=Singleton):
         ON CONFLICT (hostname, service_name)
         DO UPDATE SET
             ip_address = EXCLUDED.ip_address,
+            agent_version = EXCLUDED.agent_version,
+            run_mode = EXCLUDED.run_mode,
+            namespace = EXCLUDED.namespace,
+            pod_name = EXCLUDED.pod_name,
             last_command_id = EXCLUDED.last_command_id,
             received_command_ids = EXCLUDED.received_command_ids,
             executed_command_ids = EXCLUDED.executed_command_ids,
@@ -892,12 +913,17 @@ class DBManager(metaclass=Singleton):
             heartbeat_timestamp = EXCLUDED.heartbeat_timestamp,
             supported_perf_events = EXCLUDED.supported_perf_events,
             updated_at = CURRENT_TIMESTAMP
+        RETURNING ID
         """
 
         values = {
             "hostname": hostname,
             "ip_address": ip_address,
             "service_name": service_name,
+            "agent_version": agent_version,
+            "run_mode": run_mode,
+            "namespace": namespace,
+            "pod_name": pod_name,
             "last_command_id": last_command_id,
             "received_command_ids": received_command_ids,
             "executed_command_ids": executed_command_ids,
@@ -906,8 +932,84 @@ class DBManager(metaclass=Singleton):
             "supported_perf_events": supported_perf_events,
         }
 
-        self.db.execute(query, values, has_value=False)
+        # Host upsert and the normalized inventory sync share one transaction so a
+        # reader never observes a host whose structured inventory is half-written.
+        with self.db.transaction() as cursor:
+            cursor.execute(query, values)
+            row = cursor.fetchone()
+            host_id = row[0] if row else None
+            if host_id is not None:
+                self._sync_host_inventory(cursor, host_id, containers or [])
         return True
+
+    def _sync_host_inventory(self, cursor, host_id: int, containers: List[Dict[str, Any]]) -> None:
+        """Replace the normalized inventory for a host with the latest heartbeat snapshot.
+
+        Runs inside the caller's transaction. Uses delete-then-insert (the cascade on
+        HeartbeatContainers clears child processes) which keeps the logic simple and
+        guarantees the stored set exactly matches the heartbeat. A future optimization
+        is to diff against existing rows to reduce write churn on stable inventories.
+        """
+        cursor.execute("DELETE FROM HeartbeatContainers WHERE host_id = %s", (host_id,))
+
+        if not containers:
+            return
+
+        seen_container_ids: Set[str] = set()
+        for container in containers:
+            if not isinstance(container, dict):
+                continue
+
+            # Guard against duplicate non-null container_ids in a single payload,
+            # which would violate UNIQUE (host_id, container_id). NULL ids are allowed
+            # to repeat (Postgres treats NULLs as distinct).
+            container_id = container.get("container_id")
+            if container_id is not None:
+                if container_id in seen_container_ids:
+                    continue
+                seen_container_ids.add(container_id)
+
+            cursor.execute(
+                """
+                INSERT INTO HeartbeatContainers (
+                    host_id, container_id, container_name, runtime, namespace,
+                    pod_name, workload_name, workload_kind, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                RETURNING id
+                """,
+                (
+                    host_id,
+                    container_id,
+                    container.get("container_name"),
+                    container.get("runtime"),
+                    container.get("namespace"),
+                    container.get("pod_name"),
+                    container.get("workload_name"),
+                    container.get("workload_kind"),
+                ),
+            )
+            container_row_id = cursor.fetchone()[0]
+
+            process_rows = []
+            seen_pids: Set[int] = set()
+            for process in container.get("processes") or []:
+                if not isinstance(process, dict):
+                    continue
+                pid = process.get("pid")
+                if pid is None or not str(pid).isdigit():
+                    continue
+                pid = int(pid)
+                if pid in seen_pids:  # satisfy UNIQUE (container_row_id, pid)
+                    continue
+                seen_pids.add(pid)
+                process_rows.append((container_row_id, pid, process.get("process_name")))
+
+            if process_rows:
+                psycopg2.extras.execute_values(
+                    cursor,
+                    "INSERT INTO HeartbeatProcesses (container_row_id, pid, process_name) VALUES %s",
+                    process_rows,
+                )
 
     def get_host_heartbeat(self, hostname: str) -> Optional[Dict]:
         """Get the latest heartbeat information for a host"""
@@ -1355,6 +1457,78 @@ class DBManager(metaclass=Singleton):
         self.db.execute(upsert_query, values, has_value=False)
         return True
 
+    def get_active_service_subscription(self, service_name: str) -> Optional[str]:
+        """Return the request_id of the active service-wide profiling subscription
+        for a service, or None.
+
+        A service is "actively subscribed" when its most recent service-scoped
+        continuous "start" request is newer than any service-scoped "stop" request
+        (and was not cancelled). This is what lets hosts that register *after* a
+        service-wide profiling request auto-join the in-progress profile.
+        """
+        start_query = """
+        SELECT request_id, created_at
+        FROM ProfilingRequests
+        WHERE service_name = %(service_name)s
+          AND request_type = 'start'
+          AND continuous = TRUE
+          AND COALESCE(additional_args->>'target_scope', 'host') = 'service'
+          AND status != 'cancelled'
+        ORDER BY created_at DESC
+        LIMIT 1
+        """
+        start_row = self.db.execute(
+            start_query, {"service_name": service_name}, one_value=True, return_dict=True
+        )
+        if not start_row:
+            return None
+
+        stop_query = """
+        SELECT created_at
+        FROM ProfilingRequests
+        WHERE service_name = %(service_name)s
+          AND request_type = 'stop'
+          AND COALESCE(additional_args->>'target_scope', 'host') = 'service'
+        ORDER BY created_at DESC
+        LIMIT 1
+        """
+        stop_row = self.db.execute(
+            stop_query, {"service_name": service_name}, one_value=True, return_dict=True
+        )
+        if stop_row and stop_row["created_at"] >= start_row["created_at"]:
+            return None
+
+        return str(start_row["request_id"])
+
+    def auto_subscribe_host_to_service(self, hostname: str, service_name: str) -> bool:
+        """Enroll a host into its service's active service-wide profiling.
+
+        Invoked on every heartbeat. When a service has an active service-wide
+        profiling subscription and the reporting host has no current command
+        (e.g. a node that was just added to the cluster by autoscaling), a start
+        command is created for it from the subscription's configuration. Hosts
+        that already have command state are left untouched so explicit per-host
+        actions (including stops) are preserved.
+
+        Returns True if a new subscription command was created for the host.
+        """
+        subscription_request_id = self.get_active_service_subscription(service_name)
+        if not subscription_request_id:
+            return False
+
+        current_command = self.get_current_profiling_command(hostname, service_name)
+        if current_command is not None:
+            return False
+
+        command_id = str(uuid.uuid4())
+        return self.create_or_update_profiling_command(
+            command_id=command_id,
+            hostname=hostname,
+            service_name=service_name,
+            command_type="start",
+            new_request_id=subscription_request_id,
+        )
+
     def _merge_profiling_configs(self, existing_config: Dict, new_config: Dict) -> Dict:
         """Merge two profiling configurations, combining parameters appropriately"""
         # Handle case where existing_config might be None or empty
@@ -1539,6 +1713,515 @@ class DBManager(metaclass=Singleton):
 
         result = self.db.execute(query, values, one_value=True, return_dict=True)
         return result if result else None
+
+    @staticmethod
+    def _parse_json_field(value: Any, default: Any) -> Any:
+        if value is None:
+            return default
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return default
+        return value
+
+    @staticmethod
+    def _normalize_profiling_status(command_type: Optional[str], command_status: Optional[str]) -> str:
+        if command_status is None:
+            return "stopped"
+        if command_type == "start" and command_status in ["pending", "sent", "completed"]:
+            return "active"
+        return command_status
+
+    @staticmethod
+    def _summarize_enabled_profilers(combined_config: Dict[str, Any]) -> str:
+        profiler_configs = combined_config.get("profiler_configs", {}) or {}
+        if not profiler_configs:
+            return "Default"
+
+        profiler_labels = {
+            "perf": "Perf",
+            "async_profiler": "Java",
+            "pyperf": "Pyperf",
+            "pyspy": "Pyspy",
+            "rbspy": "Rbspy",
+            "phpspy": "PHPspy",
+            "dotnet_trace": ".NET",
+            "nodejs_perf": "NodeJS",
+        }
+        enabled = []
+        for key, label in profiler_labels.items():
+            value = profiler_configs.get(key)
+            if value is None:
+                continue
+            if isinstance(value, dict):
+                if value.get("enabled") is False or value.get("mode") == "disabled":
+                    continue
+            elif value == "disabled":
+                continue
+            enabled.append(label)
+        return ", ".join(enabled) if enabled else "Disabled"
+
+    def _extract_command_metadata(self, combined_config: Any, command_type: Optional[str], command_status: Optional[str]) -> Dict[str, Any]:
+        config = self._parse_json_field(combined_config, {}) or {}
+        current_pids = []
+        for pid in config.get("pids", []) or []:
+            if str(pid).isdigit():
+                current_pids.append(int(pid))
+
+        return {
+            "combined_config": config,
+            "pids": current_pids,
+            "frequency": config.get("frequency"),
+            "profiling_mode": "Continuous" if config.get("continuous") else "Ad Hoc",
+            "profiler_summary": self._summarize_enabled_profilers(config),
+            "command_type": command_type or "N/A",
+            "profiling_status": self._normalize_profiling_status(command_type, command_status),
+        }
+
+    # Group keys per scope; the first element is always the grouping granularity and is
+    # also used to build the stable row "id". Scopes that key on an optional column skip
+    # records where that column is NULL (matching the previous Python behavior).
+    _WORKLOAD_SCOPE_KEYS: Dict[str, List[str]] = {
+        "service": ["service_name"],
+        "namespace": ["service_name", "namespace"],
+        "host": ["service_name", "hostname"],
+        "pod": ["service_name", "namespace", "pod_name"],
+        "container": ["service_name", "hostname", "namespace", "pod_name", "container_name"],
+        "process": ["service_name", "hostname", "pid"],
+    }
+    _WORKLOAD_SCOPE_NULL_GUARD: Dict[str, str] = {
+        "namespace": "namespace IS NOT NULL",
+        "pod": "pod_name IS NOT NULL",
+        "container": "container_name IS NOT NULL",
+        "process": "pid IS NOT NULL",
+    }
+
+    def _workload_inventory_cte(
+        self,
+        service_names: Optional[List[str]],
+        exact_match: bool,
+        hostnames: Optional[List[str]],
+        ip_addresses: Optional[List[str]],
+        namespaces: Optional[List[str]],
+        pod_names: Optional[List[str]],
+        container_names: Optional[List[str]],
+        workload_names: Optional[List[str]],
+        process_names: Optional[List[str]],
+        profiling_statuses: Optional[List[str]],
+        command_types: Optional[List[str]],
+        pids: Optional[List[int]],
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Build the shared ``WITH ... filtered AS (...)`` CTE for workload inventory.
+
+        The flattened CTE joins HostHeartbeats to the latest per-host command and to the
+        normalized container/process tables, so a host with no containers contributes one
+        row (NULL container/process columns) and every (container, process) pair is one
+        row. All caller-supplied filters are applied inside ``filtered`` so both the
+        tab-count and grouped-row queries operate on the same filtered set.
+        """
+        params: Dict[str, Any] = {}
+        conditions: List[str] = []
+
+        def add_partial(column: str, values: Optional[List[Any]], prefix: str) -> None:
+            if not values:
+                return
+            ors = []
+            for idx, value in enumerate(values):
+                key = f"{prefix}_{idx}"
+                ors.append(f"{column}::text ILIKE %({key})s")
+                params[key] = f"%{value}%"
+            conditions.append("(" + " OR ".join(ors) + ")")
+
+        def add_exact(column: str, values: Optional[List[Any]], prefix: str) -> None:
+            if not values:
+                return
+            ors = []
+            for idx, value in enumerate(values):
+                key = f"{prefix}_{idx}"
+                ors.append(f"LOWER({column}::text) = LOWER(%({key})s)")
+                params[key] = str(value)
+            conditions.append("(" + " OR ".join(ors) + ")")
+
+        service_filter = "TRUE"
+        if service_names:
+            if exact_match:
+                service_filter = "h.service_name = ANY(%(service_names)s)"
+                params["service_names"] = service_names
+            else:
+                ors = []
+                for idx, service_name in enumerate(service_names):
+                    key = f"svc_{idx}"
+                    ors.append(f"h.service_name ILIKE %({key})s")
+                    params[key] = f"%{service_name}%"
+                service_filter = "(" + " OR ".join(ors) + ")"
+
+        add_partial("hostname", hostnames, "host")
+        add_partial("ip_address", ip_addresses, "ip")
+        add_partial("namespace", namespaces, "ns")
+        add_partial("pod_name", pod_names, "pod")
+        add_partial("container_name", container_names, "cont")
+        add_partial("workload_name", workload_names, "wl")
+        add_partial("process_name", process_names, "proc")
+        add_exact("profiling_status", profiling_statuses, "pstat")
+        add_exact("command_type", command_types, "ctype")
+        if pids:
+            conditions.append("pid = ANY(%(pids)s)")
+            params["pids"] = pids
+
+        filter_where = " AND ".join(conditions) if conditions else "TRUE"
+
+        cte = f"""
+        WITH latest_commands AS (
+            SELECT
+                pc.hostname,
+                pc.service_name,
+                pc.command_type,
+                pc.status,
+                pc.combined_config,
+                ROW_NUMBER() OVER (PARTITION BY pc.hostname, pc.service_name ORDER BY pc.created_at DESC) AS rn
+            FROM ProfilingCommands pc
+        ),
+        current_commands AS (
+            SELECT hostname, service_name, command_type, status, combined_config
+            FROM latest_commands
+            WHERE rn = 1
+        ),
+        flattened AS (
+            SELECT
+                h.hostname,
+                host(h.ip_address) AS ip_address,
+                h.service_name,
+                h.agent_version,
+                h.run_mode,
+                h.heartbeat_timestamp,
+                hc.container_name,
+                hc.namespace,
+                hc.pod_name,
+                hc.workload_name,
+                hc.workload_kind,
+                hp.pid,
+                hp.process_name,
+                COALESCE(c.command_type, 'N/A') AS command_type,
+                c.status AS command_status,
+                c.combined_config AS combined_config,
+                CASE
+                    WHEN c.status IS NULL THEN 'stopped'
+                    WHEN c.command_type = 'start' AND c.status IN ('pending', 'sent', 'completed') THEN
+                        -- PID-aware: an active "start" command may target only a subset of
+                        -- PIDs on the host (e.g. a single container/pod). A row is only
+                        -- "active" when the command targets all PIDs on the host (no/empty
+                        -- "pids" list == whole host) OR this row's PID is in the target set.
+                        CASE
+                            WHEN c.combined_config IS NULL
+                                 OR (c.combined_config -> 'pids') IS NULL
+                                 OR jsonb_typeof(c.combined_config -> 'pids') <> 'array'
+                                 OR jsonb_array_length(c.combined_config -> 'pids') = 0
+                                THEN 'active'
+                            WHEN hp.pid IS NOT NULL AND EXISTS (
+                                SELECT 1
+                                FROM jsonb_array_elements_text(c.combined_config -> 'pids') AS target(pid)
+                                WHERE target.pid = hp.pid::text
+                            ) THEN 'active'
+                            ELSE 'stopped'
+                        END
+                    ELSE c.status::text
+                END AS profiling_status
+            FROM HostHeartbeats h
+            LEFT JOIN current_commands c
+                ON h.hostname = c.hostname AND h.service_name = c.service_name
+            LEFT JOIN HeartbeatContainers hc ON hc.host_id = h.id
+            LEFT JOIN HeartbeatProcesses hp ON hp.container_row_id = hc.id
+            WHERE h.heartbeat_timestamp > NOW() - INTERVAL '2 minutes'
+              AND {service_filter}
+        ),
+        filtered AS (
+            SELECT * FROM flattened WHERE {filter_where}
+        )
+        """
+        return cte, params
+
+    def _query_workload_groups(self, scope: str, cte: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
+        key_cols = self._WORKLOAD_SCOPE_KEYS.get(scope, self._WORKLOAD_SCOPE_KEYS["process"])
+        guard = self._WORKLOAD_SCOPE_NULL_GUARD.get(scope)
+        where_clause = f"WHERE {guard}" if guard else ""
+        group_by = ", ".join(key_cols)
+
+        query = cte + f"""
+        SELECT
+            {group_by},
+            COUNT(DISTINCT hostname) AS host_count,
+            COUNT(DISTINCT namespace) FILTER (WHERE namespace IS NOT NULL) AS namespace_count,
+            COUNT(DISTINCT pod_name) FILTER (WHERE pod_name IS NOT NULL) AS pod_count,
+            COUNT(DISTINCT container_name) FILTER (WHERE container_name IS NOT NULL) AS container_count,
+            COUNT(DISTINCT (pid, process_name)) FILTER (WHERE pid IS NOT NULL) AS process_count,
+            array_agg(DISTINCT pid) FILTER (WHERE pid IS NOT NULL) AS pids,
+            (array_agg(hostname ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_hostname,
+            (array_agg(ip_address ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_ip_address,
+            (array_agg(namespace ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_namespace,
+            (array_agg(pod_name ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_pod_name,
+            (array_agg(container_name ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_container_name,
+            (array_agg(workload_name ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_workload_name,
+            (array_agg(workload_kind ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_workload_kind,
+            (array_agg(process_name ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_process_name,
+            (array_agg(pid ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_pid,
+            (array_agg(command_type ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_command_type,
+            (array_agg(command_status ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_command_status,
+            (array_agg(combined_config ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_combined_config,
+            bool_or(profiling_status = 'active') AS any_active,
+            (array_agg(profiling_status ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_profiling_status,
+            (array_agg(agent_version ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_agent_version,
+            (array_agg(run_mode ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_run_mode,
+            MAX(heartbeat_timestamp) AS l_heartbeat_timestamp
+        FROM filtered
+        {where_clause}
+        GROUP BY {group_by}
+        """
+
+        db_rows = self.db.execute(query, params, one_value=False, return_dict=True, fetch_all=True)
+        rows: List[Dict[str, Any]] = []
+        for db_row in db_rows or []:
+            key_values = [db_row.get(col) for col in key_cols]
+            row_id = "|".join("" if value is None else str(value) for value in key_values)
+            command_metadata = self._extract_command_metadata(
+                db_row.get("l_combined_config"),
+                db_row.get("l_command_type"),
+                db_row.get("l_command_status"),
+            )
+            # Prefer the PID-aware, row-level status computed in SQL over the host-level
+            # command status. A group is "active" when any of its rows are actively
+            # targeted (whole-host command or a matching PID); otherwise fall back to the
+            # latest row status so entities on a host that is only partially profiled
+            # (e.g. one container) are not incorrectly shown as active.
+            profiling_status = (
+                "active" if db_row.get("any_active") else db_row.get("l_profiling_status")
+            )
+            if not profiling_status:
+                profiling_status = command_metadata.get("profiling_status")
+            host_count = db_row.get("host_count") or 0
+            rows.append(
+                {
+                    "id": row_id,
+                    "scope": scope,
+                    "service_name": db_row.get("service_name"),
+                    "namespace": db_row.get("l_namespace"),
+                    "hostname": db_row.get("l_hostname"),
+                    "ip_address": db_row.get("l_ip_address"),
+                    "pod_name": db_row.get("l_pod_name"),
+                    "container_name": db_row.get("l_container_name"),
+                    "workload_name": db_row.get("l_workload_name"),
+                    "workload_kind": db_row.get("l_workload_kind"),
+                    "process_name": db_row.get("l_process_name"),
+                    "pid": db_row.get("l_pid"),
+                    "pids": sorted(db_row.get("pids") or []),
+                    "active_hosts": host_count,
+                    "host_count": host_count,
+                    "namespace_count": db_row.get("namespace_count") or 0,
+                    "pod_count": db_row.get("pod_count") or 0,
+                    "container_count": db_row.get("container_count") or 0,
+                    "process_count": db_row.get("process_count") or 0,
+                    "command_type": command_metadata.get("command_type"),
+                    "profiling_status": profiling_status,
+                    "profiling_mode": command_metadata.get("profiling_mode"),
+                    "frequency": command_metadata.get("frequency"),
+                    "profiler_summary": command_metadata.get("profiler_summary"),
+                    "heartbeat_timestamp": db_row.get("l_heartbeat_timestamp"),
+                    "agent_version": db_row.get("l_agent_version"),
+                    "run_mode": db_row.get("l_run_mode"),
+                }
+            )
+
+        rows.sort(
+            key=lambda row: (
+                row.get("service_name") or "",
+                row.get("namespace") or "",
+                row.get("hostname") or "",
+                row.get("pod_name") or "",
+                row.get("container_name") or "",
+                row.get("pid") or 0,
+            )
+        )
+        return rows
+
+    def get_workload_inventory_status(
+        self,
+        scope: str,
+        service_names: Optional[List[str]] = None,
+        hostnames: Optional[List[str]] = None,
+        ip_addresses: Optional[List[str]] = None,
+        namespaces: Optional[List[str]] = None,
+        pod_names: Optional[List[str]] = None,
+        container_names: Optional[List[str]] = None,
+        workload_names: Optional[List[str]] = None,
+        process_names: Optional[List[str]] = None,
+        profiling_statuses: Optional[List[str]] = None,
+        command_types: Optional[List[str]] = None,
+        pids: Optional[List[int]] = None,
+        exact_match: bool = False,
+    ) -> Dict[str, Any]:
+        cte, params = self._workload_inventory_cte(
+            service_names=service_names,
+            exact_match=exact_match,
+            hostnames=hostnames,
+            ip_addresses=ip_addresses,
+            namespaces=namespaces,
+            pod_names=pod_names,
+            container_names=container_names,
+            workload_names=workload_names,
+            process_names=process_names,
+            profiling_statuses=profiling_statuses,
+            command_types=command_types,
+            pids=pids,
+        )
+
+        # Tab counts and active-host total in a single pass over the filtered set.
+        tab_query = cte + """
+        SELECT
+            COUNT(DISTINCT service_name) AS c_service,
+            COUNT(DISTINCT (service_name, namespace)) FILTER (WHERE namespace IS NOT NULL) AS c_namespace,
+            COUNT(DISTINCT (service_name, hostname)) AS c_host,
+            COUNT(DISTINCT (service_name, namespace, pod_name)) FILTER (WHERE pod_name IS NOT NULL) AS c_pod,
+            COUNT(DISTINCT (service_name, hostname, namespace, pod_name, container_name)) FILTER (WHERE container_name IS NOT NULL) AS c_container,
+            COUNT(DISTINCT (service_name, hostname, pid)) FILTER (WHERE pid IS NOT NULL) AS c_process,
+            COUNT(DISTINCT hostname) FILTER (WHERE hostname IS NOT NULL) AS active_hosts
+        FROM filtered
+        """
+        tab_rows = self.db.execute(tab_query, params, one_value=False, return_dict=True, fetch_all=True)
+        counts = (tab_rows or [{}])[0] or {}
+        tab_counts = {
+            "service": counts.get("c_service") or 0,
+            "namespace": counts.get("c_namespace") or 0,
+            "host": counts.get("c_host") or 0,
+            "pod": counts.get("c_pod") or 0,
+            "container": counts.get("c_container") or 0,
+            "process": counts.get("c_process") or 0,
+        }
+        active_hosts = counts.get("active_hosts") or 0
+
+        rows = self._query_workload_groups(scope, cte, params)
+
+        return {
+            "scope": scope,
+            "rows": rows,
+            "tab_counts": tab_counts,
+            "active_hosts": active_hosts,
+            "total_count": len(rows),
+        }
+
+    def resolve_workload_targets(
+        self,
+        service_name: str,
+        target_scope: str,
+        target_entities: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Optional[List[int]]]:
+        """Resolve workload selectors into concrete host/PID profiling targets.
+
+        Matching is pushed down to SQL joins over HostHeartbeats / HeartbeatContainers /
+        HeartbeatProcesses so we never materialize the full inventory in Python.
+        Service- and host-scope resolve to host-level targets (PID list = None); the
+        finer scopes resolve to per-host PID sets.
+        """
+        entities = target_entities or [{"service_name": service_name}]
+        recency = "h.heartbeat_timestamp > NOW() - INTERVAL '2 minutes'"
+
+        if target_scope in ("service", "host"):
+            query = (
+                f"SELECT DISTINCT h.hostname FROM HostHeartbeats h "
+                f"WHERE {recency} AND h.service_name = %(service_name)s"
+            )
+            params: Dict[str, Any] = {"service_name": service_name}
+            if target_scope == "host":
+                wanted_hosts = sorted(
+                    {
+                        entity.get("hostname")
+                        for entity in entities
+                        if entity.get("hostname")
+                        and (not entity.get("service_name") or entity.get("service_name") == service_name)
+                    }
+                )
+                if not wanted_hosts:
+                    return {}
+                query += " AND h.hostname = ANY(%(wanted_hosts)s)"
+                params["wanted_hosts"] = wanted_hosts
+
+            rows = self.db.execute(query, params, one_value=False, return_dict=True, fetch_all=True)
+            hostnames = sorted({row["hostname"] for row in (rows or []) if row.get("hostname")})
+            return {hostname: None for hostname in hostnames}
+
+        # Finer scopes require a concrete process, so inner-join through to processes.
+        base_from = (
+            "FROM HostHeartbeats h "
+            "JOIN HeartbeatContainers hc ON hc.host_id = h.id "
+            "JOIN HeartbeatProcesses hp ON hp.container_row_id = hc.id "
+            f"WHERE {recency} AND h.service_name = %(service_name)s"
+        )
+
+        host_pid_mapping: Dict[str, Set[int]] = defaultdict(set)
+        for entity in entities:
+            if entity.get("service_name") and entity.get("service_name") != service_name:
+                continue
+
+            conditions: List[str] = []
+            params = {"service_name": service_name}
+
+            if target_scope == "namespace":
+                conditions.append("hc.namespace IS NOT DISTINCT FROM %(e_namespace)s")
+                params["e_namespace"] = entity.get("namespace")
+            elif target_scope == "workload":
+                conditions.append("hc.workload_name IS NOT DISTINCT FROM %(e_workload)s")
+                params["e_workload"] = entity.get("workload_name")
+                if entity.get("namespace") is not None:
+                    conditions.append("hc.namespace = %(e_namespace)s")
+                    params["e_namespace"] = entity.get("namespace")
+            elif target_scope == "pod":
+                conditions.append("hc.pod_name IS NOT DISTINCT FROM %(e_pod)s")
+                params["e_pod"] = entity.get("pod_name")
+                if entity.get("namespace") is not None:
+                    conditions.append("hc.namespace = %(e_namespace)s")
+                    params["e_namespace"] = entity.get("namespace")
+            elif target_scope == "container":
+                conditions.append("hc.container_name IS NOT DISTINCT FROM %(e_container)s")
+                params["e_container"] = entity.get("container_name")
+                if entity.get("pod_name") is not None:
+                    conditions.append("hc.pod_name = %(e_pod)s")
+                    params["e_pod"] = entity.get("pod_name")
+                if entity.get("namespace") is not None:
+                    conditions.append("hc.namespace = %(e_namespace)s")
+                    params["e_namespace"] = entity.get("namespace")
+            elif target_scope == "process":
+                # (pid match) OR (process_name match + optional container/pod/namespace),
+                # mirroring the original disjunction.
+                or_parts: List[str] = []
+                if entity.get("pid") is not None:
+                    or_parts.append("hp.pid = %(e_pid)s")
+                    params["e_pid"] = entity.get("pid")
+                if entity.get("process_name") is not None:
+                    name_conditions = ["hp.process_name = %(e_process)s"]
+                    params["e_process"] = entity.get("process_name")
+                    if entity.get("container_name") is not None:
+                        name_conditions.append("hc.container_name = %(e_container)s")
+                        params["e_container"] = entity.get("container_name")
+                    if entity.get("pod_name") is not None:
+                        name_conditions.append("hc.pod_name = %(e_pod)s")
+                        params["e_pod"] = entity.get("pod_name")
+                    if entity.get("namespace") is not None:
+                        name_conditions.append("hc.namespace = %(e_namespace)s")
+                        params["e_namespace"] = entity.get("namespace")
+                    or_parts.append("(" + " AND ".join(name_conditions) + ")")
+                if not or_parts:
+                    continue
+                conditions.append("(" + " OR ".join(or_parts) + ")")
+            else:
+                continue
+
+            where_extra = (" AND " + " AND ".join(conditions)) if conditions else ""
+            query = f"SELECT h.hostname, hp.pid {base_from}{where_extra}"
+            rows = self.db.execute(query, params, one_value=False, return_dict=True, fetch_all=True)
+            for row in rows or []:
+                if row.get("hostname") is not None and row.get("pid") is not None:
+                    host_pid_mapping[row["hostname"]].add(row["pid"])
+
+        return {hostname: sorted(pid_set) for hostname, pid_set in host_pid_mapping.items()}
 
     def get_profiling_host_status_optimized(
         self,

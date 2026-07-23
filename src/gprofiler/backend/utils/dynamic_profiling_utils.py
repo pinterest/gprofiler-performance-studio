@@ -157,12 +157,22 @@ def validate_pmu_events(
             
             # Only validate if perf is enabled and events are specified
             if perf_mode != "disabled" and perf_events:
-                target_hostnames_for_service = list(profiling_request.target_hosts.keys())
-                
+                # target_hosts is only populated for host-scope requests. For
+                # workload scopes (service/namespace/pod/container/process) the
+                # UI sends no target_hosts because the concrete hosts are
+                # resolved later; fall back to None so events are validated
+                # against all of the service's active hosts instead of crashing
+                # on None.keys().
+                target_hostnames_for_service = (
+                    list(profiling_request.target_hosts.keys())
+                    if profiling_request.target_hosts
+                    else None
+                )
+
                 validation_result = db_manager.validate_perf_events_support(
                     service_name=profiling_request.service_name,
                     requested_events=perf_events,
-                    target_hostnames=target_hostnames_for_service if target_hostnames_for_service else None
+                    target_hostnames=target_hostnames_for_service
                 )
                 
                 if not validation_result["valid"]:

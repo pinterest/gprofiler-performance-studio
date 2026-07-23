@@ -38,6 +38,8 @@ from backend.models.metrics_models import (
     MetricNodesAndCores,
     MetricNodesCoresSummary,
     MetricSummary,
+    ProfilingInventoryStatusRequest,
+    ProfilingInventoryStatusResponse,
     ProfilingHostStatus,
     ProfilingHostStatusRequest,
     ProfilingHostStatusResponse,
@@ -120,6 +122,38 @@ def profiling_host_status_params(
         exact_match=exact_match,
         hostname=hostname,
         ip_address=ip_address,
+        profiling_status=profiling_status,
+        command_type=command_type,
+        pids=pids,
+    )
+
+
+def profiling_inventory_status_params(
+    scope: str = Query("host", description="Inventory scope: service, namespace, host, pod, container, process"),
+    service_name: Optional[List[str]] = Query(None, description="Filter by service name(s)"),
+    exact_match: bool = Query(False, description="Use exact match for service name (default: false for partial matching)"),
+    hostname: Optional[List[str]] = Query(None, description="Filter by hostname(s)"),
+    ip_address: Optional[List[str]] = Query(None, description="Filter by IP address(es)"),
+    namespace: Optional[List[str]] = Query(None, description="Filter by namespace(s)"),
+    pod_name: Optional[List[str]] = Query(None, description="Filter by pod name(s)"),
+    container_name: Optional[List[str]] = Query(None, description="Filter by container name(s)"),
+    workload_name: Optional[List[str]] = Query(None, description="Filter by workload name(s)"),
+    process_name: Optional[List[str]] = Query(None, description="Filter by process name(s)"),
+    profiling_status: Optional[List[str]] = Query(None, description="Filter by profiling status(es)"),
+    command_type: Optional[List[str]] = Query(None, description="Filter by command type(s)"),
+    pids: Optional[List[int]] = Query(None, description="Filter by PIDs"),
+) -> ProfilingInventoryStatusRequest:
+    return ProfilingInventoryStatusRequest(
+        scope=scope,
+        service_name=service_name,
+        exact_match=exact_match,
+        hostname=hostname,
+        ip_address=ip_address,
+        namespace=namespace,
+        pod_name=pod_name,
+        container_name=container_name,
+        workload_name=workload_name,
+        process_name=process_name,
         profiling_status=profiling_status,
         command_type=command_type,
         pids=pids,
@@ -327,6 +361,21 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
         )
         db_manager = DBManager()
 
+        target_entities = [entity.dict() for entity in (profiling_request.target_entities or [])]
+        target_scope = profiling_request.target_scope or "host"
+        resolved_target_hosts = profiling_request.target_hosts or {}
+        if target_entities or target_scope != "host":
+            resolved_target_hosts = db_manager.resolve_workload_targets(
+                service_name=profiling_request.service_name,
+                target_scope=target_scope,
+                target_entities=target_entities,
+            )
+            if not resolved_target_hosts:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"No active targets were resolved for scope '{target_scope}' in service '{profiling_request.service_name}'",
+                )
+
         # Handle dry run requests.
         # No DB changes, just validate and return success.
         if profiling_request.dry_run:
@@ -343,10 +392,10 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
 
         try:
             # Convert target_hosts to legacy format for database compatibility
-            target_hostnames = list(profiling_request.target_hosts.keys()) if profiling_request.target_hosts else None
+            target_hostnames = list(resolved_target_hosts.keys()) if resolved_target_hosts else None
             host_pid_mapping = (
-                {hostname: pids for hostname, pids in profiling_request.target_hosts.items() if pids}
-                if profiling_request.target_hosts
+                {hostname: pids for hostname, pids in resolved_target_hosts.items() if pids}
+                if resolved_target_hosts
                 else None
             )
 
@@ -362,6 +411,8 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
                 target_hostnames=target_hostnames,
                 pids=None,  # Deprecated field, always None
                 host_pid_mapping=host_pid_mapping,
+                target_scope=target_scope,
+                target_entities=target_entities,
                 additional_args=profiling_request.additional_args,
             )
 
@@ -374,8 +425,8 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
                 target_hosts = []
 
                 # Determine target hosts from target_hosts mapping
-                if profiling_request.target_hosts:
-                    target_hosts = list(profiling_request.target_hosts.keys())
+                if resolved_target_hosts:
+                    target_hosts = list(resolved_target_hosts.keys())
 
                 if target_hosts:
                     # Create commands for specific hosts
@@ -406,8 +457,8 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
                 target_hosts = []
 
                 # Determine target hosts for stop commands
-                if profiling_request.target_hosts:
-                    target_hosts = list(profiling_request.target_hosts.keys())
+                if resolved_target_hosts:
+                    target_hosts = list(resolved_target_hosts.keys())
 
                 if target_hosts:
                     for hostname in target_hosts:
@@ -425,8 +476,8 @@ def create_profiling_request(profiling_request: ProfilingRequest) -> ProfilingRe
                         else:  # process level stop
                             # Get PIDs for this specific host from target_hosts mapping
                             host_pids = None
-                            if profiling_request.target_hosts and hostname in profiling_request.target_hosts:
-                                host_pids = profiling_request.target_hosts[hostname]
+                            if resolved_target_hosts and hostname in resolved_target_hosts:
+                                host_pids = resolved_target_hosts[hostname]
 
                             # Stop specific processes for this host
                             db_manager.handle_process_level_stop(
@@ -731,6 +782,11 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                 hostname=heartbeat.hostname,
                 ip_address=heartbeat.ip_address,
                 service_name=heartbeat.service_name,
+                agent_version=heartbeat.agent_version,
+                run_mode=heartbeat.run_mode,
+                namespace=heartbeat.namespace,
+                pod_name=heartbeat.pod_name,
+                containers=[container.dict() for container in (heartbeat.containers or [])],
                 last_command_id=heartbeat.last_command_id,
                 received_command_ids=heartbeat.received_command_ids,
                 executed_command_ids=heartbeat.executed_command_ids,
@@ -738,6 +794,24 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                 heartbeat_timestamp=heartbeat.timestamp,
                 supported_perf_events=heartbeat.perf_supported_events,  # Use agent field name
             )
+
+            # 1b. Auto-subscribe newly-registered hosts to an active service-wide
+            # profiling session. Hosts that join a service after a service-scoped
+            # request was issued (e.g. cluster autoscaling) are enrolled here so
+            # users do not have to re-select the service.
+            try:
+                if db_manager.auto_subscribe_host_to_service(
+                    hostname=heartbeat.hostname,
+                    service_name=heartbeat.service_name,
+                ):
+                    logger.info(
+                        f"Auto-subscribed host {heartbeat.hostname} to active service-wide "
+                        f"profiling for service {heartbeat.service_name}"
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"Auto-subscribe check failed for {heartbeat.hostname}/{heartbeat.service_name}: {e}"
+                )
 
             # 2. Check for current profiling command for this host/service
             current_command = db_manager.get_current_profiling_command(
@@ -995,6 +1069,28 @@ def get_profiling_host_status(
         hosts=results,
         active_count=len(results),
         total_count=total_count
+    )
+
+
+@router.get("/profiling/workload_status", response_model=ProfilingInventoryStatusResponse)
+def get_profiling_workload_status(
+    profiling_params: ProfilingInventoryStatusRequest = Depends(profiling_inventory_status_params),
+):
+    db_manager = DBManager()
+    return db_manager.get_workload_inventory_status(
+        scope=profiling_params.scope,
+        service_names=profiling_params.service_name,
+        hostnames=profiling_params.hostname,
+        ip_addresses=profiling_params.ip_address,
+        namespaces=profiling_params.namespace,
+        pod_names=profiling_params.pod_name,
+        container_names=profiling_params.container_name,
+        workload_names=profiling_params.workload_name,
+        process_names=profiling_params.process_name,
+        profiling_statuses=profiling_params.profiling_status,
+        command_types=profiling_params.command_type,
+        pids=profiling_params.pids,
+        exact_match=profiling_params.exact_match,
     )
 
 

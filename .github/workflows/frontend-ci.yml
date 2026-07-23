@@ -97,3 +97,19 @@ jobs:
         if: github.ref == 'refs/heads/master'
         run: yarn build
         working-directory: ./src/gprofiler/frontend
+
+  # Fast, dependency-free acceptance/spec tests for the request-building logic
+  # (Node's built-in test runner; no yarn install or browser needed).
+  unit-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.19"
+
+      - name: Run fast frontend spec tests
+        run: node --test src
+        working-directory: ./src/gprofiler/frontend

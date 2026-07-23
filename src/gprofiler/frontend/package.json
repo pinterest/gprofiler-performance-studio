@@ -51,7 +51,8 @@
     "format": "prettier --write \"src/**/*.{js,jsx,scss}\"",
     "format-check": "prettier --check \"src/**/*.{js,jsx,scss}\"",
     "eslint": "eslint \"./src/**/*.{js,jsx}\" --max-warnings=0",
-    "eslint-fix": "eslint --fix \"./src/**/*.{js,jsx}\""
+    "eslint-fix": "eslint --fix \"./src/**/*.{js,jsx}\"",
+    "test": "node --test src"
   },
   "browserslist": [
     ">0.2%",
