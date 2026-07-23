@@ -24,6 +24,7 @@ import { ICONS_NAMES } from '../common/icon/iconsData';
 import MuiTable from '../common/dataDisplay/table/MuiTable';
 import ProfilingHeader from './header/ProfilingHeader';
 import ProfilingTopPanel from './header/ProfilingTopPanel';
+import { buildProfilingRequests } from './profilingRequestBuilder.mjs';
 
 const DEFAULT_PROFILING_FREQUENCY = 11;
 const DEFAULT_MAX_PROCESSES = 10;
@@ -259,20 +260,6 @@ const rowDisplayName = (row, scope) => {
     return `${row.processName} (${row.pid})`;
 };
 
-const buildTargetEntity = (row) => ({
-    id: row.id,
-    service_name: row.service,
-    namespace: row.namespace || undefined,
-    hostname: row.host || undefined,
-    ip_address: row.ip || undefined,
-    pod_name: row.podName || undefined,
-    container_name: row.containerName || undefined,
-    workload_name: row.workloadName || undefined,
-    workload_kind: row.workloadKind || undefined,
-    pid: row.pid || undefined,
-    process_name: row.processName || undefined,
-});
-
 const ProfilingStatusPage = () => {
     const history = useHistory();
     const location = useLocation();
@@ -442,45 +429,15 @@ const ProfilingStatusPage = () => {
         updateURL(nextScope, appliedFilters);
     };
 
-    const buildRequests = useCallback((action, selectedRows) => {
-        const grouped = selectedRows.reduce((groups, row) => {
-            if (!groups[row.service]) {
-                groups[row.service] = [];
-            }
-            groups[row.service].push(row);
-            return groups;
-        }, {});
-
-        const requests = Object.entries(grouped).map(([serviceName, serviceRows]) => {
-            const targetScope = activeScope;
-            const targetHosts = targetScope === 'host'
-                ? serviceRows.reduce((hostMap, row) => {
-                    hostMap[row.host] = null;
-                    return hostMap;
-                }, {})
-                : undefined;
-
-            return {
-                service_name: serviceName,
-                request_type: action,
-                continuous: profilingMode === 'continuous',
-                duration: profilingMode === 'continuous' ? 60 : duration,
-                frequency: profilingFrequency,
-                profiling_mode: 'cpu',
-                target_scope: targetScope,
-                target_hosts: targetHosts,
-                target_entities: serviceRows.map((row) => buildTargetEntity(row)),
-                stop_level: action === 'stop' ? (['service', 'host'].includes(targetScope) ? 'host' : 'process') : undefined,
-                additional_args: {
-                    enable_perfspect: enablePerfSpect,
-                    profiler_configs: profilerConfigs,
-                    max_processes: maxProcesses,
-                },
-            };
-        });
-
-        return { grouped, requests };
-    }, [activeScope, duration, enablePerfSpect, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
+    const buildRequests = useCallback((action, selectedRows) => buildProfilingRequests(action, selectedRows, {
+        scope: activeScope,
+        profilingMode,
+        duration,
+        profilingFrequency,
+        enablePerfSpect,
+        profilerConfigs,
+        maxProcesses,
+    }), [activeScope, duration, enablePerfSpect, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
 
     const executeDryRun = useCallback((action, selectedRows) => {
         const { requests } = buildRequests(action, selectedRows);
