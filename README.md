@@ -55,6 +55,7 @@ same backend services and storage layer:
 ```mermaid
 %%{init: {
   'theme': 'base',
+  'flowchart': { 'defaultRenderer': 'elk' },
   'themeVariables': {
     'primaryColor': '#ffffff',
     'primaryBorderColor': '#cbd5e1',
