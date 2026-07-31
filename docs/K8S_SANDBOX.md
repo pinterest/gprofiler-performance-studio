@@ -50,10 +50,115 @@ Your Linux host
       └─ pods (run by containerd, orchestrated by Kubernetes)
 ```
 
-minikube is the same idea using a VM (or a container). kind is lighter and
-containerd-native, which is why it is the default here and recommended for CI.
-Both give a **hermetic, disposable** cluster: create → test → destroy, nothing
-touches real infrastructure.
+Both kind and minikube give a **hermetic, disposable** cluster: create → test →
+destroy, nothing touches real infrastructure. The `Makefile.k8s` supports either
+via `CLUSTER=kind|minikube` (see [the runbook](../deploy/k8s-sandbox/K8S_SANDBOX.md)).
+
+## kind vs. minikube (and why kind is the default)
+
+Both create a throwaway local Kubernetes cluster; the difference is *how* the node
+is run and which container runtime lives inside it — which matters a lot here,
+because the whole point of this sandbox is that the agent reads the node's **CRI
+socket**.
+
+| | **kind** | **minikube** |
+|---|---|---|
+| Name | "Kubernetes **IN D**ocker" | "mini Kubernetes" |
+| Node runs as | a Docker container (`kindest/node`) | a VM *or* a container ("drivers": docker, kvm2, virtualbox, none, …) |
+| Runtime inside node | **containerd** (native) — socket at `/run/containerd/containerd.sock` | docker by default; containerd only with `--container-runtime=containerd` |
+| Install | single static binary, needs Docker | single binary, but drivers add moving parts |
+| Weight / speed | very light, fast, CI-standard | heavier; more features (addons, dashboard, LoadBalancer tunnels) |
+| Best fit | automated testing / CI | general local dev with extras |
+
+Why kind is the default for this sandbox:
+
+1. **containerd-native, prod-like path.** A real production node runs containerd
+   and exposes the CRI socket the agent reads (`/run/containerd/containerd.sock`).
+   kind gives exactly that out of the box. minikube's default docker driver would
+   hand the agent `docker.sock` instead — a different, less prod-like code path —
+   unless you explicitly pass `--container-runtime=containerd`.
+2. **Lighter + fewer choices.** One binary, only needs Docker; no VM/driver
+   matrix to reason about.
+3. **CI-standard.** Easiest to graduate this sandbox into CI later.
+
+minikube is **not wrong** — with `--container-runtime=containerd` it produces the
+same containerd CRI topology and the manifests/tests are identical. It's just
+heavier and has more environment-specific setup.
+
+## Challenge: minikube's docker driver won't boot on this host
+
+`CLUSTER=minikube` is fully wired into `Makefile.k8s`, but when validated on the
+build host it could **not** bring up a cluster. Documented here so the next person
+doesn't burn time rediscovering it.
+
+**Symptom.** `minikube start --driver=docker --container-runtime=containerd`
+creates the `kicbase` node container, which then exits immediately at
+`exec /sbin/init`:
+
+```
++ exec /sbin/init
+Couldn't find an alternative telinit implementation to spawn.: container exited unexpectedly
+X Exiting due to GUEST_PROVISION_EXIT_UNEXPECTED: Failed to start host ...
+```
+
+i.e. systemd cannot come up as PID 1 inside minikube's node container, so the
+kubelet/API server never start.
+
+**What was tried (all reproduced the same failure):**
+
+| Attempt | Result |
+|---------|--------|
+| current kicbase `v0.0.50` (Ubuntu 24.04) + containerd | `exec /sbin/init` exits |
+| older kicbase `v0.0.44` + `--kubernetes-version=v1.30.0` | same |
+| `--force-systemd` | same |
+
+**Root cause.** minikube's node image can't run systemd-as-PID-1 in this
+particular **Docker 28.x + cgroup v2 + AWS `6.8.0` kernel** combination — the
+container's init bails before systemd takes over. Notably, kind's
+`kindest/node:v1.30.0` boots systemd fine on the *exact same host* (that's what
+the running sandbox uses), so this is specific to how minikube constructs/runs its
+node container, not a general "systemd-in-container is impossible here" problem.
+
+**Why the other minikube drivers weren't used.** VM drivers (`kvm2`,
+`virtualbox`) need nested virtualization this cloud VM doesn't expose; the `none`
+driver installs the kubelet **directly on the host** (invasive, root-level, would
+mutate the host) and was intentionally avoided. That leaves the docker driver as
+the only in-scope option — and it's the one that fails.
+
+**Resolution / takeaway.** Use **kind** here (the default). On a laptop or CI
+runner where minikube's docker driver boots normally, `CLUSTER=minikube` works
+with the *same* manifests and acceptance suite — nothing else changes. This is the
+concrete, practical reason kind is the default for this sandbox, beyond the
+containerd-native argument above.
+
+## How to use it (kind or minikube)
+
+All flow through `deploy/k8s-sandbox/Makefile.k8s`. Pick the cluster tool with the
+`CLUSTER` variable (default `kind`):
+
+```bash
+cd gprofiler-performance-studio/deploy/k8s-sandbox
+
+# --- kind (default, recommended) ---
+make -f Makefile.k8s k8s-all           # cluster + build + load + deploy + token
+make -f Makefile.k8s k8s-test          # AT-K1..K5 real-topology acceptance
+make -f Makefile.k8s k8s-status        # live workload inventory (all scopes)
+make -f Makefile.k8s k8s-url           # -> https://localhost:30443 (admin/admin)
+make -f Makefile.k8s k8s-down-all      # delete the whole cluster
+
+# --- minikube (same manifests/tests; needs a host where its docker driver boots) ---
+make -f Makefile.k8s k8s-all  CLUSTER=minikube CLUSTER_NAME=gprofiler-mk
+make -f Makefile.k8s k8s-test CLUSTER=minikube CLUSTER_NAME=gprofiler-mk
+make -f Makefile.k8s k8s-url  CLUSTER=minikube CLUSTER_NAME=gprofiler-mk   # -> https://<minikube ip>:30443
+make -f Makefile.k8s k8s-down-all CLUSTER=minikube CLUSTER_NAME=gprofiler-mk
+```
+
+The only thing `CLUSTER` changes is cluster lifecycle + image loading (`kind load
+docker-image` vs `minikube image load`) and the URL; every manifest, ConfigMap,
+Secret, the agent DaemonSet, and the acceptance suite are identical. Use a
+distinct `CLUSTER_NAME` (e.g. `gprofiler-mk`) if you want to run minikube
+alongside an existing kind cluster, and note kind already binds host port `30443`
+— map minikube elsewhere (e.g. `--ports=30444:30443`) to avoid a collision.
 
 ## Topology: what runs as systemd vs. as pods
 
