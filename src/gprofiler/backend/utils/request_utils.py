@@ -170,7 +170,13 @@ def get_metrics_response(
     compared_start_datetime=None,
     compared_end_datetime=None,
 ) -> Union[List, Dict, str]:
+    logger.info(f"get_metrics_response DEBUG - fg_params: {fg_params}")
+    logger.info(f"get_metrics_response DEBUG - lookup_for: {lookup_for}")
+    logger.info(f"get_metrics_response DEBUG - filter: {fg_params.filter}")
+    
     fg_filter = fg_params.filter.json().encode() if fg_params.filter else None
+    logger.info(f"get_metrics_response DEBUG - encoded fg_filter: {fg_filter}")
+    
     db_api_params = get_api_params(
         fg_params.service_name,
         fg_params.start_time,
@@ -182,13 +188,26 @@ def get_metrics_response(
         lookup_for=lookup_for,
         interval=interval,
     )
+    logger.info(f"get_metrics_response DEBUG - db_api_params: {db_api_params}")
+    
+    url = f"{QUERY_API_BASE_URL}/api/v1/metrics/{lookup_for}"
+    logger.info(f"get_metrics_response DEBUG - Making request to: {url}")
+    logger.info(f"get_metrics_response DEBUG - Request params: {db_api_params}")
+    
     try:
         response = requests.get(
-            url=f"{QUERY_API_BASE_URL}/api/v1/metrics/{lookup_for}",
+            url=url,
             params=db_api_params,
             verify=REST_CERTIFICATE_PATH,
             auth=(REST_USERNAME, REST_PASSWORD),
         )
-    except requests.exceptions.ConnectionError:
+        logger.info(f"get_metrics_response DEBUG - Response status: {response.status_code}")
+        if response.status_code != 200:
+            logger.error(f"get_metrics_response ERROR - Response content: {response.text}")
+    except requests.exceptions.ConnectionError as e:
+        logger.error(f"get_metrics_response ERROR - Connection error: {e}")
         raise HTTPException(status_code=502, detail="Failed connect to flamedb api")
-    return _common_fg_rest_response(response, db_api_params)
+    
+    result = _common_fg_rest_response(response, db_api_params)
+    logger.info(f"get_metrics_response DEBUG - Final result: {result}")
+    return result
