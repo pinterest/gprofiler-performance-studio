@@ -20,6 +20,8 @@ Each mode stresses a different Catalyst/JVM path:
   join   -> shuffle + sort-merge join (ExternalSorter, ShuffleWriter, SMJ)
   regex  -> string/regex parsing (java.util.regex, UTF8String)
   pyudf  -> Python UDF round-trips (JVM PythonRunner + socket, Python worker CPU)
+  skew   -> deliberate data skew so ONE task thread dominates the flamegraph
+            (the others finish fast) -- use it to see unequal per-thread weight
 
 Usage: spark_workloads.py <mode> <run_seconds> [app_name]
 """
@@ -99,7 +101,27 @@ def run_pyudf():
     return df.agg(F.sum("v")).collect()[0][0]
 
 
-RUNNERS = {"agg": run_agg, "join": run_join, "regex": run_regex, "pyudf": run_pyudf}
+def run_skew():
+    """DELIBERATE DATA SKEW: ~98% of rows collapse onto a single partition key, so
+    after the repartition ONE downstream task gets almost all the rows and its
+    'Executor task launch worker' thread dominates the flamegraph while the other
+    task threads finish quickly. Use this to see one thread far wider than the rest
+    (vs the uniform-width threads you get when every task does equal work)."""
+    rows = 12_000_000
+    base = spark.range(0, rows, numPartitions=PARTITIONS)
+    # id % 50 != 0  -> key 0 (98% of rows); else a spread key. One hot partition.
+    keyed = base.withColumn("p", F.when(F.col("id") % 50 != 0, F.lit(0)).otherwise(F.col("id")))
+    skewed = keyed.repartition(PARTITIONS, "p")
+    # Heavy per-row math in the skewed stage so the hot task actually burns CPU.
+    for _ in range(6):
+        skewed = (skewed.withColumn("v", F.sqrt(F.col("id") + 1.0))
+                        .withColumn("v", F.sin(F.col("v")) * F.cos(F.col("v"))
+                                    + F.log(F.col("v") + 2.0)))
+    return skewed.agg(F.sum("v").alias("s")).collect()[0]["s"]
+
+
+RUNNERS = {"agg": run_agg, "join": run_join, "regex": run_regex,
+           "pyudf": run_pyudf, "skew": run_skew}
 runner = RUNNERS.get(MODE, run_agg)
 
 deadline = time.time() + RUN_SECONDS
