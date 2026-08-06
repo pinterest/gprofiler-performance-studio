@@ -3,3 +3,4 @@
 FROM apache/spark:3.5.1
 
 COPY spark_cpu_job.py /opt/spark_cpu_job.py
+COPY spark_workloads.py /opt/spark_workloads.py
