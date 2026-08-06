@@ -85,6 +85,32 @@ minikube is **not wrong** — with `--container-runtime=containerd` it produces 
 same containerd CRI topology and the manifests/tests are identical. It's just
 heavier and has more environment-specific setup.
 
+### Isolation model: VM drivers vs container drivers (and why no VM here)
+
+A common assumption is "minikube = an isolated VM." That was minikube's original
+design, but today its isolation depends on the **driver**:
+
+- **VM drivers** (`kvm2`, `virtualbox`, `hyperkit`, `hyper-v`, `qemu`) boot a real
+  virtual machine with its **own kernel** — the strongest isolation, and
+  minikube's genuine edge over kind *when a hypervisor is available*.
+- **Container drivers** (`docker`, `podman`) run the node as a **container sharing
+  the host kernel** — the same model as kind (which is *always* a container).
+- **`none`** runs the kubelet directly on the host (no isolation).
+
+Either way the *cluster* is hermetic and disposable; what differs is whether the
+boundary is a separate kernel (VM) or a shared-kernel container.
+
+**Why this host only offers the container driver.** The build host is a standard
+(non-`.metal`) AWS EC2 instance — itself a guest VM that does **not expose nested
+virtualization**: there is no `/dev/kvm`, `/proc/cpuinfo` shows zero `vmx`/`svm`
+flags, and `systemd-detect-virt` reports `amazon`. A VM driver needs hardware
+virtualization (VT-x/AMD-V) passed through to the guest, so `kvm2`/`virtualbox`
+cannot run — only the `docker` (container) driver is viable. That is why minikube
+here has the *same* shared-kernel boundary as kind and hits the same
+systemd-in-container problem described in the Challenge below. To get a true
+minikube VM on AWS you need a **bare-metal instance type** (e.g. `*.metal`), which
+exposes the CPU virtualization extensions to the guest.
+
 ## Challenge: minikube's docker driver won't boot on this host
 
 `CLUSTER=minikube` is fully wired into `Makefile.k8s`, but when validated on the

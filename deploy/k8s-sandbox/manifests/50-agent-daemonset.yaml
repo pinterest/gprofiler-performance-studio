@@ -48,6 +48,14 @@ spec:
             - --output-dir=/tmp/gprofiler_output
             - --dont-send-logs
             - --disable-pidns-check
+            # Per-thread Java profiling: appends ',threads' to async-profiler so
+            # each sample is split by (and prefixed with) its JVM thread name
+            # (e.g. "Executor task launch worker-0"). This is the async-profiler
+            # "thread renaming in samples" capability surfaced via gProfiler.
+            - --java-async-profiler-args=threads
+            # Tag Spark executor samples with the Spark application name in the
+            # appid, so different Spark apps are distinguishable in the data.
+            - --java-collect-spark-app-name-as-appid
           env:
             - name: GPROFILER_IN_CONTAINER
               value: "1"
@@ -65,7 +73,9 @@ spec:
               valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
           resources:
             requests: { cpu: 100m, memory: 128Mi }
-            limits: { cpu: "1", memory: 512Mi }
+            # bumped: per-thread collapsed output + a busy 6-executor Spark app
+            # produces a much larger profile to hold/merge.
+            limits: { cpu: "2", memory: 1Gi }
       # Tolerate control-plane taints so the DaemonSet also lands on a
       # single-node kind/minikube cluster's control-plane node.
       tolerations:
