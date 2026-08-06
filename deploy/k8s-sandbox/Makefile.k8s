@@ -8,6 +8,7 @@
 # One-shot:
 #   make -f Makefile.k8s k8s-all          # cluster + build + load + deploy + token
 #   make -f Makefile.k8s k8s-test         # run AT-K1..K5 real-topology acceptance
+#   make -f Makefile.k8s spark-demo       # Spark-on-k8s + per-thread flamegraph
 #   make -f Makefile.k8s k8s-down-all     # delete the whole cluster
 #
 # Granular targets are listed in `make -f Makefile.k8s help`.
@@ -230,3 +231,62 @@ ifeq ($(CLUSTER),kind)
 else
 	minikube delete -p $(CLUSTER_NAME)
 endif
+
+# --------------------------------------------------------------------------- #
+# Spark-on-Kubernetes demo (spark/): a driver + 6 executor JVM pods deliberately
+# oversubscribed to be very busy, profiled PER JVM THREAD by the agent (which runs
+# with --java-async-profiler-args=threads). This is the workload that shows real
+# Spark executor task threads in a gProfiler flamegraph.
+# --------------------------------------------------------------------------- #
+SPARK_DIR             := spark
+SPARK_NS              := spark
+SPARK_IMAGE           := spark-cpu-job:sandbox
+SPARK_PROFILE_SECONDS ?= 90
+
+.PHONY: spark-build spark-load spark-submit spark-status spark-profile spark-demo spark-clean
+
+## spark-build     : build the Spark demo image (job baked into apache/spark)
+spark-build:
+	docker build -t $(SPARK_IMAGE) $(SPARK_DIR)
+
+## spark-load      : load the Spark image into the cluster (CLUSTER=kind|minikube)
+spark-load:
+	@if [ "$(CLUSTER)" = "kind" ]; then \
+	  kind load docker-image $(SPARK_IMAGE) --name $(CLUSTER_NAME); \
+	else \
+	  minikube image load $(SPARK_IMAGE) -p $(CLUSTER_NAME); \
+	fi
+
+## spark-submit    : RBAC + submit (spark-submit cluster mode -> driver + executors)
+spark-submit:
+	kubectl apply -f $(SPARK_DIR)/00-rbac.yaml
+	-kubectl -n $(SPARK_NS) delete job spark-submit --ignore-not-found --now
+	-kubectl -n $(SPARK_NS) delete pod spark-cpu-driver --ignore-not-found --now
+	kubectl apply -f $(SPARK_DIR)/10-submit-job.yaml
+	@echo ">> submitted. Driver + 6 executor pods appear in ns/$(SPARK_NS) within ~30-40s."
+
+## spark-status    : show the Spark driver + executor pods
+spark-status:
+	kubectl -n $(SPARK_NS) get pods -o wide
+
+## spark-profile   : host-scope profile while Spark runs (SPARK_PROFILE_SECONDS=90)
+spark-profile:
+	@host=$(call resolve_host); echo ">> profiling host=$$host for $(SPARK_PROFILE_SECONDS)s"; \
+	 req=$$(python3 -c "import json;print(json.dumps({'service_name':'$(SERVICE)','request_type':'start','continuous':False,'duration':$(SPARK_PROFILE_SECONDS),'frequency':11,'profiling_mode':'cpu','target_scope':'host','target_hosts':{'$$host':[]},'target_entities':[{'service_name':'$(SERVICE)','hostname':'$$host'}],'additional_args':{}}))"); \
+	 $(KUBECTL) run rq-$$RANDOM --image=curlimages/curl:8.7.1 --restart=Never -i --rm --quiet --command -- \
+	   curl -s -X POST "http://webapp/api/metrics/profile_request" -H "Content-Type: application/json" -d "$$req"
+
+## spark-demo      : build + load + submit + profile + list flamegraph (one-shot)
+spark-demo: spark-build spark-load spark-submit
+	@echo ">> letting executors schedule and get busy (~45s)..."; sleep 45
+	@$(MAKE) -f Makefile.k8s spark-status
+	@$(MAKE) -f Makefile.k8s spark-profile
+	@echo ">> waiting for the profile to run + upload..."; sleep $$(( $(SPARK_PROFILE_SECONDS) + 45 ))
+	@$(MAKE) -f Makefile.k8s k8s-flamegraph
+	@echo ">> done: the newest *_adhoc_flamegraph.html above is the Spark per-thread profile."
+
+## spark-clean     : remove the Spark job/driver + RBAC (deletes the spark namespace)
+spark-clean:
+	-kubectl -n $(SPARK_NS) delete job spark-submit --ignore-not-found
+	-kubectl -n $(SPARK_NS) delete pod spark-cpu-driver --ignore-not-found
+	-kubectl delete -f $(SPARK_DIR)/00-rbac.yaml --ignore-not-found
