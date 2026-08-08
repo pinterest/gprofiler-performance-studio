@@ -25,11 +25,29 @@ the profile shows visibly different stacks and lets you compare where CPU goes:
 `agg/join/regex/pyudf` make the *apps* differ. `skew` makes the *threads within one
 app* differ -- ~98% of rows land on one partition so a single "Executor task launch
 worker" thread is far wider than its peers (vs the uniform widths you get when every
-task does equal work):
+task does equal work).
+
+**Preferred readable demo** (one app, few partitions, short profile):
 
 ```bash
-make -f Makefile.k8s spark-multi SPARK_MODES="skew" SPARK_MULTI_SECONDS=1200
+# 4 partitions keep the per-thread forest small; skew makes one task ~3-4x wider.
+make -f Makefile.k8s spark-multi \
+  SPARK_MODES="skew" SPARK_PARTITIONS=4 SPARK_MULTI_SECONDS=500
+make -f Makefile.k8s spark-profile SPARK_PROFILE_SECONDS=30
 ```
+
+Measured on the sandbox (one 30s profile while skew was busy):
+
+```
+task 1:  53.7%   ################################   <- hot partition
+task 3:  18.5%   ###########
+task 2:  15.3%   #########
+task 0:  12.5%   #######
+```
+
+`SPARK_PARTITIONS` (default 24) controls how many task-thread columns appear under
+async-profiler's per-sample rename. Lower it when the flamegraph looks like a
+forest of equal slivers.
 
 Example from one 120s host profile (8 executor JVMs, 16-core node):
 
@@ -89,7 +107,7 @@ backend class (it already reads `spark.app.name`), then `make agent-build` + rol
 - `Dockerfile` — thin layer over `apache/spark:3.5.1` baking both scripts in.
 - `00-rbac.yaml` — `spark` namespace + ServiceAccount/Role so the driver can create executor pods.
 - `10-submit-job.yaml` — single-app `spark-submit` Job (cluster mode).
-- `11-submit-workload.yaml` — templated per-mode Job (`__SUFFIX__/__MODE__/__APPNAME__/__SECONDS__`).
+- `11-submit-workload.yaml` — templated per-mode Job (`__SUFFIX__/__MODE__/__APPNAME__/__SECONDS__/__PARTS__`).
 
 ## Gotchas (learned the hard way)
 
@@ -106,3 +124,11 @@ backend class (it already reads `spark.app.name`), then `make agent-build` + rol
    `org.apache.spark.executor` in argv, which the k8s executor backend main class
    no longer contains. Group by the executor **pod** (its name is a frame in every
    sample) or the `workload=<mode>` pod label instead.
+3. **Uniform workloads + per-thread naming = a forest.** Spark renames the
+   executor task thread for *every* task (`... for task X in stage Y [TID N]`),
+   so a busy uniform app fans into one thin column per task. Use `skew` (or
+   lower `SPARK_PARTITIONS`) when you want a readable per-thread view.
+4. **Wedged ad-hoc agent.** If `spark-profile` returns success but no new `.gz`
+   lands in S3 / the UI stays stale, the agent may be stuck re-skipping a prior
+   command (`Command ID ... already received, skipping`). Restart it:
+   `kubectl -n perf-studio rollout restart ds/gprofiler-agent`.

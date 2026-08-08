@@ -36,8 +36,9 @@ from pyspark.sql.types import DoubleType
 MODE = sys.argv[1] if len(sys.argv) > 1 else "agg"
 RUN_SECONDS = int(sys.argv[2]) if len(sys.argv) > 2 else 300
 APP_NAME = sys.argv[3] if len(sys.argv) > 3 else f"spark-{MODE}"
-
-PARTITIONS = 24
+# Fewer partitions -> fewer tasks -> fewer per-thread columns in the flamegraph
+# (each task becomes its own thread-name frame under per-sample renaming).
+PARTITIONS = int(sys.argv[4]) if len(sys.argv) > 4 else 24
 
 spark = SparkSession.builder.appName(APP_NAME).getOrCreate()
 print(f">> {APP_NAME} starting: mode={MODE} run_seconds={RUN_SECONDS} "

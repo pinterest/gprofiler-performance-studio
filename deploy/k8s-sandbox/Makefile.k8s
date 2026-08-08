@@ -246,6 +246,9 @@ SPARK_PROFILE_SECONDS ?= 90
 # Distinct workloads to run side by side (each becomes its own appid in gProfiler).
 SPARK_MODES           ?= agg join regex pyudf
 SPARK_MULTI_SECONDS   ?= 300
+# Partitions per app => task count => number of per-thread columns. Lower it
+# (e.g. SPARK_PARTITIONS=6) for a less crowded per-thread flamegraph.
+SPARK_PARTITIONS      ?= 24
 
 .PHONY: spark-build spark-load spark-submit spark-status spark-profile spark-demo \
         spark-multi spark-multi-demo spark-clean
@@ -303,6 +306,7 @@ spark-multi: spark-build spark-load
 	  kubectl -n $(SPARK_NS) delete pod spark-$$m-driver --ignore-not-found --now >/dev/null 2>&1; \
 	  sed -e "s/__SUFFIX__/$$m/g" -e "s/__MODE__/$$m/g" \
 	      -e "s/__APPNAME__/$$name/g" -e "s/__SECONDS__/$(SPARK_MULTI_SECONDS)/g" \
+	      -e "s/__PARTS__/$(SPARK_PARTITIONS)/g" \
 	      $(SPARK_DIR)/11-submit-workload.yaml | kubectl apply -f - ; \
 	done
 	@echo ">> submitted modes: $(SPARK_MODES). Drivers + executors appear in ns/$(SPARK_NS) within ~40s."

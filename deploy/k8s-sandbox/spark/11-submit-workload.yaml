@@ -70,3 +70,4 @@ spec:
             - __MODE__
             - "__SECONDS__"
             - __APPNAME__
+            - "__PARTS__"
