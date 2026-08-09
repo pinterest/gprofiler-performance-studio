@@ -30,6 +30,7 @@ const baseConfig = {
     duration: 120,
     profilingFrequency: 11,
     enablePerfSpect: false,
+    enableNsys: false,
     profilerConfigs: {},
     maxProcesses: 10,
 };
@@ -289,8 +290,22 @@ describe('buildProfilingRequests — scope matrix (start)', () => {
         });
         assert.deepEqual(requests[0].additional_args, {
             enable_perfspect: true,
+            enable_nsys: false,
             profiler_configs: profilerConfigs,
             max_processes: 25,
         });
+    });
+
+    it('threads enable_nsys through additional_args without forcing continuous=false', () => {
+        const { requests } = buildProfilingRequests('start', [makeRow()], {
+            ...baseConfig,
+            scope: 'host',
+            profilingMode: 'continuous',
+            enableNsys: true,
+        });
+        assert.equal(requests[0].additional_args.enable_nsys, true);
+        // Builder leaves mode to the operator (UI recommends Adhoc via tooltip only).
+        assert.equal(requests[0].continuous, true);
+        assert.equal(requests[0].duration, 60);
     });
 });

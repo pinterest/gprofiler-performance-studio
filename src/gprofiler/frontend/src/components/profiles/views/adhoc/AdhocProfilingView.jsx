@@ -27,6 +27,18 @@ import { formatDate, TIME_FORMATS } from '@/utils/datetimesUtils';
 import Icon from '@/components/common/icon/Icon';
 import { ICONS_NAMES } from '@/components/common/icon/iconsData';
 
+/** True when this adhoc artifact looks like an nsys / GPU flamegraph. */
+const isNsysGpuFile = (file) => {
+    const events = file?.perf_events || file?.perfEvents || file?.events || [];
+    const eventHit = Array.isArray(events) && events.some((ev) => {
+        const s = String(ev).toLowerCase();
+        return s === 'nsys' || s === 'nsys-cuda' || s.includes('nsys');
+    });
+    const name = String(file?.filename || '').toLowerCase();
+    const nameHit = name.includes('nsys') || name.includes('cuda') || name.includes('gpu');
+    return eventHit || nameHit;
+};
+
 const AdhocProfilingView = () => {
     const { selectedService, timeSelection, selectedHost } = useContext(SelectorsContext);
     const { activeFilterTag } = useContext(FilterTagsContext);
@@ -178,9 +190,16 @@ const AdhocProfilingView = () => {
                                                 <TableCell sx={removedCellSx}>{formatDate(new Date(file.timestamp), TIME_FORMATS.DATETIME_WITH_SECONDS)}</TableCell>
                                                 <TableCell sx={removedCellSx}>{file.hostname || 'N/A'}</TableCell>
                                                 <TableCell sx={removedCellSx}>
-                                                    {file.perf_events && file.perf_events.length > 0
-                                                        ? file.perf_events.join(', ')
-                                                        : 'N/A'}
+                                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                                                        {isNsysGpuFile(file) && (
+                                                            <Chip label="GPU / nsys" size="small" color="primary" variant="outlined" />
+                                                        )}
+                                                        <span>
+                                                            {file.perf_events && file.perf_events.length > 0
+                                                                ? file.perf_events.join(', ')
+                                                                : isNsysGpuFile(file) ? '' : 'N/A'}
+                                                        </span>
+                                                    </Box>
                                                 </TableCell>
                                                 <TableCell sx={removedCellSx}>{(file.size / 1024).toFixed(2)} KB</TableCell>
                                                 <TableCell>
@@ -229,7 +248,14 @@ const AdhocProfilingView = () => {
                     ) : null}
                 </Box>
             ) : (
-                <Typography>No adhoc flamegraphs found for the selected service and time range.</Typography>
+                <Box>
+                    <Typography>No adhoc flamegraphs found for the selected service and time range.</Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                        GPU (nsys) profiles appear here after an Adhoc Dynamic Profiling run with the
+                        GPU (nsys) checkbox enabled. The profiled host must have NVIDIA Nsight Systems
+                        (`nsys`) installed.
+                    </Typography>
+                </Box>
             )}
         </Flexbox>
     );

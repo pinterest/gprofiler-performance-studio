@@ -52,6 +52,8 @@ const ProfilingTopPanel = ({
     loading,
     enablePerfSpect,
     onPerfSpectChange,
+    enableNsys,
+    onNsysChange,
     profilingFrequency,
     onProfilingFrequencyChange,
     maxProcesses,
@@ -185,24 +187,51 @@ const ProfilingTopPanel = ({
                 <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 4 }}>
                     {/* Left column */}
                     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                        <Tooltip title='Enable Intel PerfSpect hardware metrics collection (auto-installs on agents)'>
-                            <FormControlLabel
-                                control={
-                                    <Checkbox
-                                        checked={enablePerfSpect}
-                                        onChange={(e) => onPerfSpectChange(e.target.checked)}
-                                        size='small'
-                                        color='primary'
-                                    />
-                                }
-                                label={
-                                    <Typography variant='body2' sx={{ fontSize: '0.875rem' }}>
-                                        PerfSpect HW Metrics
-                                    </Typography>
-                                }
-                                sx={{ m: 0 }}
-                            />
-                        </Tooltip>
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
+                            <Tooltip title='Enable Intel PerfSpect hardware metrics collection (auto-installs on agents)'>
+                                <FormControlLabel
+                                    control={
+                                        <Checkbox
+                                            checked={enablePerfSpect}
+                                            onChange={(e) => onPerfSpectChange(e.target.checked)}
+                                            size='small'
+                                            color='primary'
+                                        />
+                                    }
+                                    label={
+                                        <Typography variant='body2' sx={{ fontSize: '0.875rem' }}>
+                                            PerfSpect HW Metrics
+                                        </Typography>
+                                    }
+                                    sx={{ m: 0 }}
+                                />
+                            </Tooltip>
+                            <Tooltip
+                                title={
+                                    'Enable NVIDIA Nsight Systems (nsys) GPU capture. ' +
+                                    'The profiled host must have nsys installed (not bundled with the agent). ' +
+                                    'Produces a CUDA kernel flamegraph for the Adhoc Profiling view ' +
+                                    '(inspired by GPU flame graphs). Adhoc mode is recommended — ' +
+                                    'continuous mode is left to the operator and is not auto-forced.'
+                                }>
+                                <FormControlLabel
+                                    control={
+                                        <Checkbox
+                                            checked={enableNsys}
+                                            onChange={(e) => onNsysChange(e.target.checked)}
+                                            size='small'
+                                            color='primary'
+                                        />
+                                    }
+                                    label={
+                                        <Typography variant='body2' sx={{ fontSize: '0.875rem' }}>
+                                            GPU (nsys)
+                                        </Typography>
+                                    }
+                                    sx={{ m: 0 }}
+                                />
+                            </Tooltip>
+                        </Box>
 
                         <Box>
                             <Label>Profiling Frequency (Hz)</Label>

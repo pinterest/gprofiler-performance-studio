@@ -274,6 +274,7 @@ const ProfilingStatusPage = () => {
     const [filters, setFilters] = useState(EMPTY_FILTERS);
     const [appliedFilters, setAppliedFilters] = useState(EMPTY_FILTERS);
     const [enablePerfSpect, setEnablePerfSpect] = useState(false);
+    const [enableNsys, setEnableNsys] = useState(false);
     const [profilingFrequency, setProfilingFrequency] = useState(DEFAULT_PROFILING_FREQUENCY);
     const [maxProcesses, setMaxProcesses] = useState(DEFAULT_MAX_PROCESSES);
     const [profilingMode, setProfilingMode] = useState('continuous');
@@ -315,6 +316,7 @@ const ProfilingStatusPage = () => {
             const saved = JSON.parse(localStorage.getItem(CONFIG_STORAGE_KEY));
             if (saved) {
                 if (typeof saved.enablePerfSpect === 'boolean') setEnablePerfSpect(saved.enablePerfSpect);
+                if (typeof saved.enableNsys === 'boolean') setEnableNsys(saved.enableNsys);
                 if (saved.profilingFrequency) setProfilingFrequency(saved.profilingFrequency);
                 if (saved.maxProcesses != null) setMaxProcesses(saved.maxProcesses);
                 if (saved.profilingMode) setProfilingMode(saved.profilingMode);
@@ -329,6 +331,7 @@ const ProfilingStatusPage = () => {
     const handleSaveConfiguration = useCallback(() => {
         const config = {
             enablePerfSpect,
+            enableNsys,
             profilingFrequency,
             maxProcesses,
             profilingMode,
@@ -341,7 +344,7 @@ const ProfilingStatusPage = () => {
         } catch (error) {
             setSnackbar({ open: true, message: 'Failed to save configuration' });
         }
-    }, [duration, enablePerfSpect, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
+    }, [duration, enableNsys, enablePerfSpect, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
 
     const fetchProfilingStatus = useCallback((filterParams, scope = activeScope) => {
         setLoading(true);
@@ -442,9 +445,10 @@ const ProfilingStatusPage = () => {
         duration,
         profilingFrequency,
         enablePerfSpect,
+        enableNsys,
         profilerConfigs,
         maxProcesses,
-    }), [activeScope, duration, enablePerfSpect, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
+    }), [activeScope, duration, enableNsys, enablePerfSpect, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
 
     const executeDryRun = useCallback((action, selectedRows) => {
         const { requests } = buildRequests(action, selectedRows);
@@ -512,6 +516,7 @@ const ProfilingStatusPage = () => {
             fetchProfilingStatus(appliedFilters, activeScope);
             setSelectionModel([]);
             setEnablePerfSpect(false);
+            setEnableNsys(false);
         });
     };
 
@@ -600,6 +605,8 @@ const ProfilingStatusPage = () => {
                     loading={loading}
                     enablePerfSpect={enablePerfSpect}
                     onPerfSpectChange={setEnablePerfSpect}
+                    enableNsys={enableNsys}
+                    onNsysChange={setEnableNsys}
                     profilingFrequency={profilingFrequency}
                     onProfilingFrequencyChange={setProfilingFrequency}
                     maxProcesses={maxProcesses}
@@ -693,6 +700,7 @@ const ProfilingStatusPage = () => {
                                     <Typography variant="body2">• Frequency: {profilingFrequency} Hz</Typography>
                                     <Typography variant="body2">• Max Processes: {maxProcesses}</Typography>
                                     <Typography variant="body2">• PerfSpect HW Metrics: {enablePerfSpect ? 'Enabled' : 'Disabled'}</Typography>
+                                    <Typography variant="body2">• GPU (nsys): {enableNsys ? 'Enabled' : 'Disabled'}</Typography>
                                     <Typography variant="body2">• Profiling Mode: {profilingMode === 'adhoc' ? 'Ad Hoc' : 'Continuous'}</Typography>
                                     <Typography variant="body2">• Duration: {profilingMode === 'continuous' ? 60 : duration} seconds</Typography>
                                     <Typography variant="body2">• Mode: CPU profiling</Typography>
