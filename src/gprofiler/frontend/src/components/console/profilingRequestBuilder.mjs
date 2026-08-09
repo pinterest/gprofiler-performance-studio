@@ -90,6 +90,8 @@ export const groupRowsByService = (selectedRows) =>
  * @param {number} config.duration
  * @param {number} config.profilingFrequency
  * @param {boolean} config.enablePerfSpect
+ * @param {boolean} [config.enableNsys] - When true, agents with nsys run GPU capture
+ *   (Adhoc mode is recommended by the UI; this builder does not force continuous=false).
  * @param {object} config.profilerConfigs
  * @param {number} config.maxProcesses
  * @returns {{grouped: Record<string, Array<object>>, requests: Array<object>}}
@@ -101,6 +103,7 @@ export const buildProfilingRequests = (action, selectedRows, config) => {
         duration,
         profilingFrequency,
         enablePerfSpect,
+        enableNsys = false,
         profilerConfigs,
         maxProcesses,
     } = config;
@@ -132,6 +135,7 @@ export const buildProfilingRequests = (action, selectedRows, config) => {
             stop_level: stopLevel,
             additional_args: {
                 enable_perfspect: enablePerfSpect,
+                enable_nsys: enableNsys,
                 profiler_configs: profilerConfigs,
                 max_processes: maxProcesses,
             },

@@ -7,8 +7,11 @@
 #
 # The --fast build skips staticx, so the exe is glibc-dynamic and needs a glibc
 # base (ubuntu) rather than the alpine base in the repo's container.Dockerfile.
+# BASE is overridable because the GPU (nsys) demo needs a newer glibc than 22.04
+# to run host-compiled CUDA binaries inside the agent container.
 ARG ARCH=x86_64
-FROM ubuntu:22.04
+ARG BASE=ubuntu:22.04
+FROM ${BASE}
 
 ARG ARCH
 ENV GPROFILER_IN_CONTAINER=1
