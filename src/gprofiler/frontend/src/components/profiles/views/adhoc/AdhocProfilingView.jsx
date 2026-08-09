@@ -167,7 +167,7 @@ const AdhocProfilingView = () => {
                                     <TableRow>
                                         <TableCell>Timestamp</TableCell>
                                         <TableCell>Hostname</TableCell>
-                                        <TableCell>PMU Events</TableCell>
+                                        <TableCell>Events</TableCell>
                                         <TableCell>Size</TableCell>
                                         <TableCell>Action</TableCell>
                                     </TableRow>
