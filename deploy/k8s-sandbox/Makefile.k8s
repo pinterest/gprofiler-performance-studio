@@ -98,8 +98,23 @@ k8s-load:
 	  fi; \
 	done
 
+## k8s-secrets     : generate local dev TLS certs + basic-auth file if missing
+# Fresh clones have neither (they are gitignored secrets); the sandbox only
+# needs self-signed certs and an admin/admin login, same as deploy/README.md.
+k8s-secrets:
+	@test -f ../.htpasswd || { \
+	  echo ">> generating deploy/.htpasswd (admin/admin)"; \
+	  printf 'admin:%s\n' "$$(openssl passwd -apr1 admin)" > ../.htpasswd; }
+	@test -f ../tls/cert.pem -a -f ../tls/ch_rest_cert.pem || { \
+	  echo ">> generating self-signed TLS certs under deploy/tls/"; \
+	  mkdir -p ../tls; \
+	  openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+	    -keyout ../tls/key.pem -out ../tls/cert.pem -subj "/CN=localhost"; \
+	  openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+	    -keyout ../tls/ch_rest_key.pem -out ../tls/ch_rest_cert.pem -subj "/CN=ch-rest-service"; }
+
 ## k8s-config      : create ConfigMaps/Secrets from the existing deploy/ files
-k8s-config:
+k8s-config: k8s-secrets
 	$(KUBECTL) apply -f manifests/00-namespaces.yaml
 	$(KUBECTL) apply -f manifests/01-config.yaml
 	@echo ">> schema + init ConfigMaps (single source of truth with compose)"
@@ -132,8 +147,10 @@ k8s-config:
 	  --dry-run=client -o yaml | $(KUBECTL) apply -f -
 
 ## k8s-deploy      : apply all manifests (core stack + workloads + agent)
+# Every resource declares its own namespace (perf-studio, team-a, team-b), so
+# apply without -n: forcing $(NS) makes kubectl reject the team-a/b workloads.
 k8s-deploy:
-	$(KUBECTL) apply -f manifests/
+	kubectl apply -f manifests/
 	@echo ">> waiting for the webapp to become ready..."
 	$(KUBECTL) rollout status deploy/webapp --timeout=300s
 
