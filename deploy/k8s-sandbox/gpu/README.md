@@ -84,4 +84,36 @@ binaries need a newer glibc than the 22.04 base used for the CPU e2e agent.
   `additional_args.enable_nsys=true`, targeting a heartbeating host. Override the workload
   with `NSYS_WORKLOAD` (inside the container the directory is mounted at `/gpu`).
 
+## PyTorch demo (real ML kernels)
+
+`cuda_burn` proves the pipeline with hand-written kernels; the PyTorch demo shows what a
+real ML workload looks like in the same flamegraph:
+
+```bash
+make -f Makefile.k8s gpu-agent-image     # base image, once
+bash gpu/run_torch_demo.sh               # torch image + agent + adhoc request
+```
+
+The workload (`torch_workload.py`) loops `relu(x @ W + b)` — a transformer linear layer —
+in fp16. Expect one dominant frame (~90%): a `cutlass_80_tensorop_*gemm_relu_*` kernel,
+i.e. the matmul on Tensor Cores with the relu fused into its epilogue by torch, plus a
+thin ATen elementwise tail for the bias add. The libraries (cuBLAS/cutlass, ATen) pick
+the kernels; nothing in the workload names them.
+
+### Workloads must survive the agent's PyInstaller environment
+
+The agent is a PyInstaller bundle: it prepends its unpack dir (`/tmp/_MEIxxxx`) to
+`LD_LIBRARY_PATH`, and a spawned nsys workload inherits that. A **dynamically-linked**
+workload (python/torch, most real binaries) then loads the bundle's older `libstdc++`
+and dies with `CXXABI_... not found` — the capture comes back empty and the Adhoc view
+shows a bare `root` frame. Statically-linked workloads (`cuda_burn`, `-cudart static`)
+are immune.
+
+Two layers of defense exist: the agent scrubs `_MEI` paths from the workload's
+environment (`_workload_env()` in `gprofiler/nsys_profiler.py`), and
+`torch_workload.py` additionally re-execs itself with a clean `LD_LIBRARY_PATH` before
+importing torch, so the demo works even under agents built before that fix. If a custom
+`NSYS_WORKLOAD` produces an empty flamegraph, check `docker logs gprofiler-gpu-agent`
+for `ImportError`/`CXXABI` first.
+
 Design notes: [DESIGN.md](./DESIGN.md).
