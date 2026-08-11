@@ -19,6 +19,13 @@ that the studio-only setup never touches.
                                               UI / flamegraph API (nginx :4433)
 ```
 
+> **Where this fits.** This harness is **Layer 2** of a three-layer test setup
+> (fast unit → this compose harness → a kind/minikube Kubernetes sandbox). See
+> [The three-layer test harness](#the-three-layer-test-harness) below for how the
+> layers differ and how to invoke each. Layer 3 lives in
+> [`k8s-sandbox/`](k8s-sandbox/K8S_SANDBOX.md) (architecture:
+> [`../docs/K8S_SANDBOX.md`](../docs/K8S_SANDBOX.md)).
+
 ## Files
 
 | File | Purpose |
@@ -206,32 +213,100 @@ where it's verified. Keep these in mind:
 - **Prerequisites** above (TLS + `.htpasswd`) are one-time and cross-platform
   (need `openssl` + `htpasswd`; `htpasswd` ships with `apache2-utils` on Ubuntu).
 
-## Test layers
+## The three-layer test harness
 
-1. **Fast unit/spec** (no stack) — PR gate: `gprofiler/tests_fast/` and
-   `gprofiler-performance-studio/src/tests/spec/` + the frontend `node --test`.
-2. **API acceptance** (this harness) — `src/tests/e2e/`, run via
-   `make -f Makefile.e2e e2e-test`. 15 in-network pytest cases covering the
-   spec's **AT-S1 .. AT-S15** against the live stack: inventory/tab-counts (S1–S4),
-   host/service/process resolution + command creation (S5–S7), empty-resolution
-   422 (S8), PMU rejection (S9), continuous subscription auto-enrollment (S10–S13),
-   and legacy/partial-inventory compatibility (S14–S15).
-3. **Full-pipeline smoke** — the real agent path above proves S3/SQS/indexer/
-   ClickHouse/flamegraph (AT-A1–A8). Verified with the source-built agent.
-4. **Playwright UI e2e** — `src/tests/playwright/`, run via
-   `make -f Makefile.e2e e2e-ui-test`. Drives the console through the internal
-   nginx (basic auth + self-signed TLS) using the official Playwright browser
-   image, asserting the start/stop confirmation flow (dry-run validation +
-   submit). The STOP case is the direct UI regression test for the
-   host-level-stop bug.
+Three layers test the workload-level profiling flow at increasing fidelity. The
+key difference between layers is **how the workload inventory is produced** —
+fabricated in-code, POSTed as synthetic heartbeats, or enumerated for real from a
+Kubernetes node's container runtime.
 
-Run everything against a running stack:
+| Layer | What runs | Inventory source | Proves | Invoke |
+|-------|-----------|------------------|--------|--------|
+| **1. Fast unit/spec** | no stack | in-code fixtures | backend/agent pure logic (PR gate) | `pytest` / `node --test` |
+| **2. Compose harness** (this doc) | full studio via Docker Compose | **synthetic** heartbeats (+ real-agent pipeline) | studio logic + S3→SQS→indexer→ClickHouse→flamegraph | `make -f Makefile.e2e …` |
+| **3. kind/minikube sandbox** | full studio on Kubernetes | **real** CRI enumeration by a DaemonSet | real namespace/pod/container/process discovery + scoping | `make -f Makefile.k8s …` |
+
+### Layer 1 — fast unit/spec (no stack, PR gate)
+
+No services required; runs in seconds.
 
 ```bash
-make -f Makefile.e2e e2e-up        # or e2e-up-src for the source-built agent
-make -f Makefile.e2e e2e-test      # API acceptance (AT-S1..S15)
-make -f Makefile.e2e e2e-ui-test   # Playwright UI acceptance
+# studio backend spec (request builder, PMU/capacity, profiling-request logic)
+pytest -q gprofiler-performance-studio/src/tests/spec
+# studio frontend unit tests
+cd gprofiler-performance-studio/src/gprofiler/frontend && node --test
+# agent-side fast logic (heartbeat inventory, command queue) — in the agent repo
+pytest -q gprofiler/tests_fast
 ```
+
+### Layer 2 — compose harness (this doc)
+
+Full studio + a real agent profiling a deterministic sample app, plus the
+complete artifact pipeline. Three test families:
+
+- **API acceptance `AT-S1..S15`** — 15 in-network pytest cases (`src/tests/e2e/`)
+  driving the live stack with **synthetic** heartbeats: inventory/tab-counts
+  (S1–S4), host/service/process resolution + command creation (S5–S7),
+  empty-resolution 422 (S8), PMU rejection (S9), continuous-subscription
+  auto-enrollment (S10–S13), legacy/partial-inventory compatibility (S14–S15).
+- **Full-pipeline smoke `AT-A1..A8`** — the real source-built agent proves
+  S3 → SQS → indexer → ClickHouse → flamegraph.
+- **Playwright UI e2e** — drives the console through nginx (basic auth +
+  self-signed TLS), asserting the start/stop confirmation flow (the STOP case is
+  the regression test for the host-level-stop bug).
+
+```bash
+cd deploy
+make -f Makefile.e2e e2e-up            # bring up (or e2e-up-src for source-built agent)
+make -f Makefile.e2e e2e-test          # AT-S1..S15 API acceptance
+make -f Makefile.e2e e2e-start \
+  && make -f Makefile.e2e e2e-flamegraph   # AT-A1..A8 pipeline smoke (inspect artifacts)
+make -f Makefile.e2e e2e-ui-test       # Playwright UI acceptance
+make -f Makefile.e2e e2e-down          # remove harness (studio keeps running)
+```
+
+### Layer 3 — kind/minikube sandbox (real Kubernetes topology)
+
+The one thing compose can't do: real namespaces/pods/containers. A gProfiler
+agent **DaemonSet** on a real node reads the node's CRI socket and enumerates
+genuine workloads, so this layer proves discovery + scope resolution under
+Kubernetes. Tests: **`AT-K1..K5`** (agent registers as host; tenant namespaces,
+pods, and containers — incl. a 2-container pod — discovered from real CRI;
+host-scope start dispatches to the real agent). Full details:
+[`k8s-sandbox/K8S_SANDBOX.md`](k8s-sandbox/K8S_SANDBOX.md) (architecture +
+rationale: [`../docs/K8S_SANDBOX.md`](../docs/K8S_SANDBOX.md)).
+
+```bash
+cd deploy/k8s-sandbox
+
+# --- kind (default, recommended: lightweight, containerd-native) ---
+make -f Makefile.k8s k8s-all           # cluster + build + load + deploy + token
+make -f Makefile.k8s k8s-test          # AT-K1..K5 real-topology acceptance
+make -f Makefile.k8s k8s-status        # live inventory across all scopes
+make -f Makefile.k8s k8s-url           # -> https://localhost:30443 (admin/admin)
+make -f Makefile.k8s k8s-down-all      # delete the whole cluster
+```
+
+**Option: minikube instead of kind.** The same manifests, agent DaemonSet, and
+`AT-K1..K5` suite run unchanged on minikube — only cluster lifecycle, image
+loading, and the URL differ. Select it with `CLUSTER=minikube`, and use a distinct
+`CLUSTER_NAME` if a kind cluster is already running (kind binds host port `30443`;
+map minikube elsewhere, e.g. `--ports=30444:30443`, to avoid a collision):
+
+```bash
+cd deploy/k8s-sandbox
+make -f Makefile.k8s k8s-all  CLUSTER=minikube CLUSTER_NAME=gprofiler-mk
+make -f Makefile.k8s k8s-test CLUSTER=minikube CLUSTER_NAME=gprofiler-mk
+make -f Makefile.k8s k8s-url  CLUSTER=minikube CLUSTER_NAME=gprofiler-mk  # -> https://<minikube ip>:30443
+make -f Makefile.k8s k8s-down-all CLUSTER=minikube CLUSTER_NAME=gprofiler-mk
+```
+
+> **Caveat (why kind is the default).** With `--container-runtime=containerd`
+> minikube gives the same prod-like CRI path, but its **docker driver may fail to
+> boot on some hosts** (e.g. Docker 28 + cgroup v2 + newer kernels, where the node
+> container can't start systemd), while kind's `kindest/node` boots there fine. If
+> minikube won't start, use kind. See the "Challenge" section in
+> [`../docs/K8S_SANDBOX.md`](../docs/K8S_SANDBOX.md) for the full write-up.
 
 ## Optional: container/pod inventory
 
@@ -240,6 +315,11 @@ because the Docker socket isn't mounted (keeps it isolated from the host). To
 exercise namespace/pod/container scope tabs with a real agent, mount
 `/var/run/docker.sock:/var/run/docker.sock:ro` into `gprofiler-agent` — note this
 gives the agent visibility into all host containers.
+
+For **real** Kubernetes namespace/pod/container/process inventory (not the Docker
+socket workaround), use **Layer 3** — the kind/minikube sandbox — which runs an
+agent DaemonSet against a real node's CRI. See
+[The three-layer test harness](#the-three-layer-test-harness).
 
 ## Notes
 
