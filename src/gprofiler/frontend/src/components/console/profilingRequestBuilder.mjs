@@ -92,6 +92,10 @@ export const groupRowsByService = (selectedRows) =>
  * @param {boolean} config.enablePerfSpect
  * @param {boolean} [config.enableNsys] - When true, agents with nsys run GPU capture
  *   (Adhoc mode is recommended by the UI; this builder does not force continuous=false).
+ * @param {boolean} [config.enableNsysTimeline] - With enableNsys, upload the CPU/GPU
+ *   timeline view instead of the GPU flamegraph.
+ * @param {boolean} [config.enableNsysTimelineStacks] - With the timeline, also record a
+ *   CPU backtrace per kernel launch (heavier capture) for click-for-stack.
  * @param {object} config.profilerConfigs
  * @param {number} config.maxProcesses
  * @returns {{grouped: Record<string, Array<object>>, requests: Array<object>}}
@@ -104,6 +108,8 @@ export const buildProfilingRequests = (action, selectedRows, config) => {
         profilingFrequency,
         enablePerfSpect,
         enableNsys = false,
+        enableNsysTimeline = false,
+        enableNsysTimelineStacks = false,
         profilerConfigs,
         maxProcesses,
     } = config;
@@ -136,6 +142,10 @@ export const buildProfilingRequests = (action, selectedRows, config) => {
             additional_args: {
                 enable_perfspect: enablePerfSpect,
                 enable_nsys: enableNsys,
+                // Timeline flags only make sense with nsys enabled; gate them so a
+                // stale saved toggle can't reach the agent without the capture.
+                nsys_timeline: enableNsys && enableNsysTimeline,
+                nsys_timeline_stacks: enableNsys && enableNsysTimeline && enableNsysTimelineStacks,
                 profiler_configs: profilerConfigs,
                 max_processes: maxProcesses,
             },

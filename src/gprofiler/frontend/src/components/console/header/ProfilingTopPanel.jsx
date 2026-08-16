@@ -54,6 +54,10 @@ const ProfilingTopPanel = ({
     onPerfSpectChange,
     enableNsys,
     onNsysChange,
+    enableNsysTimeline,
+    onNsysTimelineChange,
+    enableNsysTimelineStacks,
+    onNsysTimelineStacksChange,
     profilingFrequency,
     onProfilingFrequencyChange,
     maxProcesses,
@@ -232,6 +236,58 @@ const ProfilingTopPanel = ({
                                 />
                             </Tooltip>
                         </Box>
+
+                        {enableNsys && (
+                            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, ml: 3 }}>
+                                <Tooltip
+                                    title={
+                                        'Upload a CPU/GPU timeline view (CPU-thread and GPU stream swim ' +
+                                        'lanes, launch↔kernel linked) instead of the GPU flamegraph.'
+                                    }>
+                                    <FormControlLabel
+                                        control={
+                                            <Checkbox
+                                                checked={enableNsysTimeline}
+                                                onChange={(e) => onNsysTimelineChange(e.target.checked)}
+                                                size='small'
+                                                color='primary'
+                                            />
+                                        }
+                                        label={
+                                            <Typography variant='body2' sx={{ fontSize: '0.875rem' }}>
+                                                Timeline view
+                                            </Typography>
+                                        }
+                                        sx={{ m: 0 }}
+                                    />
+                                </Tooltip>
+                                {enableNsysTimeline && (
+                                    <Tooltip
+                                        title={
+                                            'Also record a CPU backtrace per kernel launch and show it when ' +
+                                            'an event is clicked in the timeline. Enables CPU sampling in ' +
+                                            'nsys — noticeably heavier capture.'
+                                        }>
+                                        <FormControlLabel
+                                            control={
+                                                <Checkbox
+                                                    checked={enableNsysTimelineStacks}
+                                                    onChange={(e) => onNsysTimelineStacksChange(e.target.checked)}
+                                                    size='small'
+                                                    color='primary'
+                                                />
+                                            }
+                                            label={
+                                                <Typography variant='body2' sx={{ fontSize: '0.875rem' }}>
+                                                    Click-for-stack backtraces
+                                                </Typography>
+                                            }
+                                            sx={{ m: 0 }}
+                                        />
+                                    </Tooltip>
+                                )}
+                            </Box>
+                        )}
 
                         <Box>
                             <Label>Profiling Frequency (Hz)</Label>

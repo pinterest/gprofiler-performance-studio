@@ -275,6 +275,8 @@ const ProfilingStatusPage = () => {
     const [appliedFilters, setAppliedFilters] = useState(EMPTY_FILTERS);
     const [enablePerfSpect, setEnablePerfSpect] = useState(false);
     const [enableNsys, setEnableNsys] = useState(false);
+    const [enableNsysTimeline, setEnableNsysTimeline] = useState(false);
+    const [enableNsysTimelineStacks, setEnableNsysTimelineStacks] = useState(false);
     const [profilingFrequency, setProfilingFrequency] = useState(DEFAULT_PROFILING_FREQUENCY);
     const [maxProcesses, setMaxProcesses] = useState(DEFAULT_MAX_PROCESSES);
     const [profilingMode, setProfilingMode] = useState('continuous');
@@ -317,6 +319,9 @@ const ProfilingStatusPage = () => {
             if (saved) {
                 if (typeof saved.enablePerfSpect === 'boolean') setEnablePerfSpect(saved.enablePerfSpect);
                 if (typeof saved.enableNsys === 'boolean') setEnableNsys(saved.enableNsys);
+                if (typeof saved.enableNsysTimeline === 'boolean') setEnableNsysTimeline(saved.enableNsysTimeline);
+                if (typeof saved.enableNsysTimelineStacks === 'boolean')
+                    setEnableNsysTimelineStacks(saved.enableNsysTimelineStacks);
                 if (saved.profilingFrequency) setProfilingFrequency(saved.profilingFrequency);
                 if (saved.maxProcesses != null) setMaxProcesses(saved.maxProcesses);
                 if (saved.profilingMode) setProfilingMode(saved.profilingMode);
@@ -332,6 +337,8 @@ const ProfilingStatusPage = () => {
         const config = {
             enablePerfSpect,
             enableNsys,
+            enableNsysTimeline,
+            enableNsysTimelineStacks,
             profilingFrequency,
             maxProcesses,
             profilingMode,
@@ -344,7 +351,7 @@ const ProfilingStatusPage = () => {
         } catch (error) {
             setSnackbar({ open: true, message: 'Failed to save configuration' });
         }
-    }, [duration, enableNsys, enablePerfSpect, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
+    }, [duration, enableNsys, enableNsysTimeline, enableNsysTimelineStacks, enablePerfSpect, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
 
     const fetchProfilingStatus = useCallback((filterParams, scope = activeScope) => {
         setLoading(true);
@@ -446,9 +453,11 @@ const ProfilingStatusPage = () => {
         profilingFrequency,
         enablePerfSpect,
         enableNsys,
+        enableNsysTimeline,
+        enableNsysTimelineStacks,
         profilerConfigs,
         maxProcesses,
-    }), [activeScope, duration, enableNsys, enablePerfSpect, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
+    }), [activeScope, duration, enableNsys, enableNsysTimeline, enableNsysTimelineStacks, enablePerfSpect, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
 
     const executeDryRun = useCallback((action, selectedRows) => {
         const { requests } = buildRequests(action, selectedRows);
@@ -517,6 +526,8 @@ const ProfilingStatusPage = () => {
             setSelectionModel([]);
             setEnablePerfSpect(false);
             setEnableNsys(false);
+            setEnableNsysTimeline(false);
+            setEnableNsysTimelineStacks(false);
         });
     };
 
@@ -607,6 +618,10 @@ const ProfilingStatusPage = () => {
                     onPerfSpectChange={setEnablePerfSpect}
                     enableNsys={enableNsys}
                     onNsysChange={setEnableNsys}
+                    enableNsysTimeline={enableNsysTimeline}
+                    onNsysTimelineChange={setEnableNsysTimeline}
+                    enableNsysTimelineStacks={enableNsysTimelineStacks}
+                    onNsysTimelineStacksChange={setEnableNsysTimelineStacks}
                     profilingFrequency={profilingFrequency}
                     onProfilingFrequencyChange={setProfilingFrequency}
                     maxProcesses={maxProcesses}
@@ -700,7 +715,15 @@ const ProfilingStatusPage = () => {
                                     <Typography variant="body2">• Frequency: {profilingFrequency} Hz</Typography>
                                     <Typography variant="body2">• Max Processes: {maxProcesses}</Typography>
                                     <Typography variant="body2">• PerfSpect HW Metrics: {enablePerfSpect ? 'Enabled' : 'Disabled'}</Typography>
-                                    <Typography variant="body2">• GPU (nsys): {enableNsys ? 'Enabled' : 'Disabled'}</Typography>
+                                    <Typography variant="body2">• GPU (nsys): {
+                                        enableNsys
+                                            ? `Enabled (${
+                                                enableNsysTimeline
+                                                    ? `Timeline${enableNsysTimelineStacks ? ' + stacks' : ''}`
+                                                    : 'Flamegraph'
+                                            })`
+                                            : 'Disabled'
+                                    }</Typography>
                                     <Typography variant="body2">• Profiling Mode: {profilingMode === 'adhoc' ? 'Ad Hoc' : 'Continuous'}</Typography>
                                     <Typography variant="body2">• Duration: {profilingMode === 'continuous' ? 60 : duration} seconds</Typography>
                                     <Typography variant="body2">• Mode: CPU profiling</Typography>
