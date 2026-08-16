@@ -124,6 +124,13 @@ echo ">> nsys workload: ${NSYS_WORKLOAD}"
 export _GPU_SERVICE="${SERVICE}"
 export _GPU_HOST="${host}"
 export _GPU_DURATION="${DURATION}"
+# NSYS_TIMELINE=1 -> upload the CPU/GPU timeline view instead of the flamegraph
+export _GPU_TIMELINE="${NSYS_TIMELINE:-0}"
+[[ "${_GPU_TIMELINE}" == "1" ]] && echo ">> nsys timeline view: enabled"
+# NSYS_TIMELINE_STACKS=1 -> also record CPU backtraces per kernel launch
+# (--cudabacktrace; heavier) for click-for-stack in the timeline
+export _GPU_TIMELINE_STACKS="${NSYS_TIMELINE_STACKS:-0}"
+[[ "${_GPU_TIMELINE_STACKS}" == "1" ]] && echo ">> nsys timeline stacks: enabled"
 
 req="$(python3 <<'PY'
 import json, os
@@ -142,6 +149,8 @@ print(json.dumps({
   }],
   "additional_args": {
     "enable_nsys": True,
+    "nsys_timeline": os.environ.get("_GPU_TIMELINE") == "1",
+    "nsys_timeline_stacks": os.environ.get("_GPU_TIMELINE_STACKS") == "1",
     "nsys_workload": os.environ["NSYS_WORKLOAD"],
   },
 }))
