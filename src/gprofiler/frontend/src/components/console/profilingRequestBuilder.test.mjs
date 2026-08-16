@@ -202,6 +202,48 @@ describe('buildProfilingRequests — start requests', () => {
     });
 });
 
+describe('buildProfilingRequests — nsys timeline flags', () => {
+    it('defaults nsys_timeline and nsys_timeline_stacks to false', () => {
+        const { requests } = buildProfilingRequests('start', [makeRow()], baseConfig);
+        assert.equal(requests[0].additional_args.nsys_timeline, false);
+        assert.equal(requests[0].additional_args.nsys_timeline_stacks, false);
+    });
+
+    it('passes the timeline flags through when nsys is enabled', () => {
+        const { requests } = buildProfilingRequests('start', [makeRow()], {
+            ...baseConfig,
+            enableNsys: true,
+            enableNsysTimeline: true,
+            enableNsysTimelineStacks: true,
+        });
+        assert.equal(requests[0].additional_args.enable_nsys, true);
+        assert.equal(requests[0].additional_args.nsys_timeline, true);
+        assert.equal(requests[0].additional_args.nsys_timeline_stacks, true);
+    });
+
+    it('gates the timeline flags on enableNsys (stale saved toggles stay off)', () => {
+        const { requests } = buildProfilingRequests('start', [makeRow()], {
+            ...baseConfig,
+            enableNsys: false,
+            enableNsysTimeline: true,
+            enableNsysTimelineStacks: true,
+        });
+        assert.equal(requests[0].additional_args.nsys_timeline, false);
+        assert.equal(requests[0].additional_args.nsys_timeline_stacks, false);
+    });
+
+    it('gates stacks on the timeline itself being enabled', () => {
+        const { requests } = buildProfilingRequests('start', [makeRow()], {
+            ...baseConfig,
+            enableNsys: true,
+            enableNsysTimeline: false,
+            enableNsysTimelineStacks: true,
+        });
+        assert.equal(requests[0].additional_args.nsys_timeline, false);
+        assert.equal(requests[0].additional_args.nsys_timeline_stacks, false);
+    });
+});
+
 describe('buildProfilingRequests — multi-service', () => {
     it('emits one request per service', () => {
         const { requests } = buildProfilingRequests(
@@ -291,6 +333,8 @@ describe('buildProfilingRequests — scope matrix (start)', () => {
         assert.deepEqual(requests[0].additional_args, {
             enable_perfspect: true,
             enable_nsys: false,
+            nsys_timeline: false,
+            nsys_timeline_stacks: false,
             profiler_configs: profilerConfigs,
             max_processes: 25,
         });
