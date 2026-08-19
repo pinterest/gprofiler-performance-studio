@@ -39,7 +39,7 @@ from gprofiler_dev.api_key import get_service_by_api_key
 from gprofiler_dev.client_handler import ClientHandler 
 from gprofiler_dev.postgres.db_manager import DBManager
 from gprofiler_dev.postgres.schemas import AgentMetadata, GetServiceResponse
-from gprofiler_dev.profiles_utils import get_gprofiler_metadata_utils, get_gprofiler_utils
+from gprofiler_dev.profiles_utils import get_gprofiler_metadata_utils, get_gprofiler_utils, put_nowait_dropping
 from gprofiler_dev.tags import CONTAINER_KEY, HOSTNAME_KEY, K8S_OBJ_KEY, container_and_k8s_name
 
 SQS_CONFIG = Config(region_name=config.AWS_DEFAULT_REGION)
@@ -131,7 +131,7 @@ def new_profile_v2(
                                 logger.error(f"Bad gpid, got the following error: {e}, generating new gpid")
 
                         if gprofiler_process_id:
-                            metadata_utils.processes_queue.put(gprofiler_process_id)
+                            put_nowait_dropping(metadata_utils.processes_queue, gprofiler_process_id, "processes")
                             service_id = db_manager.get_service_by_profiler_process_id(gprofiler_process_id)
                             service_response = GetServiceResponse(
                                 service_id=service_id,
@@ -175,7 +175,7 @@ def new_profile_v2(
 
         does_service_exist = service_response.does_service_exist
 
-        gprofiler_utils.tokens_queue.put((token_id, service_name, service_id))
+        put_nowait_dropping(gprofiler_utils.tokens_queue, (token_id, service_name, service_id), "tokens")
 
         profile_file_name = get_profile_file_name(agent_data.start_time, hostname, is_gz=True)
         profile_file_path = client_handler.join_path(client_handler.get_input_dir(), profile_file_name)

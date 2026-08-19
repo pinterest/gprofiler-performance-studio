@@ -29,13 +29,27 @@ if TYPE_CHECKING:
 PROCESSES_UPDATER_INTERVAL_SEC = 30
 TOKENS_UPDATER_INTERVAL_SEC = 300
 
+# Bound the updater queues so that a slow or failing DB cannot cause unbounded
+# memory growth in the API process. Both queues carry periodic "last seen"
+# updates that are re-sent on every profile upload, so dropping entries when
+# the queue is full only delays the next update.
+UPDATER_QUEUE_MAX_SIZE = 10000
+
 logger = getLogger(__name__)
+
+
+def put_nowait_dropping(q: queue.Queue, item, queue_name: str) -> None:
+    """Put an item on the queue, dropping it (with a warning) if the queue is full."""
+    try:
+        q.put_nowait(item)
+    except queue.Full:
+        logger.warning(f"{queue_name} queue is full (maxsize={q.maxsize}), dropping item")
 
 
 class GprofilerMetadataUtils:
     def __init__(self, db: DBManager):
         self.db = db
-        self.processes_queue: queue.Queue[int] = queue.Queue()
+        self.processes_queue: queue.Queue[int] = queue.Queue(maxsize=UPDATER_QUEUE_MAX_SIZE)
         self.update_processes_thread = threading.Thread(
             target=self._processes_updater, args=(PROCESSES_UPDATER_INTERVAL_SEC,), daemon=True
         )
@@ -54,7 +68,10 @@ class GprofilerMetadataUtils:
                 if time.time() - start > interval:
                     break
             if processes:
-                self.db.update_processes(list(processes))
+                try:
+                    self.db.update_processes(list(processes))
+                except Exception:
+                    logger.exception(f"Failed to update {len(processes)} processes, dropping batch")
 
 
 class GprofilerUtils:
@@ -62,7 +79,7 @@ class GprofilerUtils:
 
         self.db = db
 
-        self.tokens_queue: queue.Queue[Tuple[int, str, int]] = queue.Queue()
+        self.tokens_queue: queue.Queue[Tuple[int, str, int]] = queue.Queue(maxsize=UPDATER_QUEUE_MAX_SIZE)
         self.update_tokens_thread = threading.Thread(
             target=self._token_updater, args=(TOKENS_UPDATER_INTERVAL_SEC,), daemon=True
         )
@@ -81,7 +98,10 @@ class GprofilerUtils:
                 if time.time() - start > interval:
                     break
             if tokens:
-                self.db.update_tokens_last_seen(tokens)
+                try:
+                    self.db.update_tokens_last_seen(tokens)
+                except Exception:
+                    logger.exception(f"Failed to update last seen for {len(tokens)} tokens, dropping batch")
 
 
 @lru_cache(maxsize=1)
