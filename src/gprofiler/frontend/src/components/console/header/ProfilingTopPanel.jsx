@@ -58,6 +58,8 @@ const ProfilingTopPanel = ({
     onNsysTimelineChange,
     enableNsysTimelineStacks,
     onNsysTimelineStacksChange,
+    enableNsysUploadRep,
+    onNsysUploadRepChange,
     profilingFrequency,
     onProfilingFrequencyChange,
     maxProcesses,
@@ -286,6 +288,29 @@ const ProfilingTopPanel = ({
                                         />
                                     </Tooltip>
                                 )}
+                                <Tooltip
+                                    title={
+                                        'Also upload the raw .nsys-rep capture so it can be downloaded ' +
+                                        'from the Adhoc Profiling view and opened in NVIDIA Nsight ' +
+                                        'Systems. Reports can be large (tens to hundreds of MB).'
+                                    }>
+                                    <FormControlLabel
+                                        control={
+                                            <Checkbox
+                                                checked={enableNsysUploadRep}
+                                                onChange={(e) => onNsysUploadRepChange(e.target.checked)}
+                                                size='small'
+                                                color='primary'
+                                            />
+                                        }
+                                        label={
+                                            <Typography variant='body2' sx={{ fontSize: '0.875rem' }}>
+                                                Keep raw .nsys-rep
+                                            </Typography>
+                                        }
+                                        sx={{ m: 0 }}
+                                    />
+                                </Tooltip>
                             </Box>
                         )}
 

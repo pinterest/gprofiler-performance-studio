@@ -47,13 +47,14 @@ from backend.models.metrics_models import (
     ProfilingResponse,
     SampleCount,
 )
+from backend.routers.nsys_routes import NSYS_REP_S3_DIR, nsys_rep_s3_key
 from backend.utils.dynamic_profiling_utils import validate_profiling_capacity, validate_pmu_events, validate_async_profiler_config
 from backend.utils.filters_utils import get_rql_first_eq_key, get_rql_only_for_one_key, get_rql_all_eq_values
 from backend.utils.notifications import SlackNotifier
 from backend.utils.request_utils import flamegraph_base_request_params, get_metrics_response, get_query_response
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from gprofiler_dev import S3ProfileDal
 from gprofiler_dev.postgres.db_manager import DBManager
 
@@ -73,6 +74,9 @@ class FlamegraphFile(BaseModel):
     s3_path: str
     perf_events: Optional[List[str]] = None
     removed: bool = False
+    # Set when a raw .nsys-rep capture was uploaded for this profile (same
+    # start_time + hostname); used by the UI to offer a download.
+    nsys_rep_s3_path: Optional[str] = None
 
 
 class FlamegraphContent(BaseModel):
@@ -1136,15 +1140,23 @@ def get_adhoc_flamegraphs(
                 perf_events=metadata.get("perf_events")
             ))
 
-        # Mark entries whose S3 file no longer exists.
+        # Mark entries whose S3 file no longer exists, and detect which have a
+        # raw .nsys-rep uploaded (same derived key: service + start_time + hostname).
         # All head_object calls are issued in parallel (one thread per key)
         # so the total latency is ~one S3 round-trip regardless of list size.
         if flamegraph_files:
             s3_dal = S3ProfileDal(logger)
-            all_s3_paths = [f.s3_path for f in flamegraph_files]
+            rep_key_by_file = {
+                f.filename: nsys_rep_s3_key(service_name, f.timestamp.replace(tzinfo=None), f.hostname or "")
+                for f in flamegraph_files
+            }
+            all_s3_paths = [f.s3_path for f in flamegraph_files] + list(rep_key_by_file.values())
             existing_keys = s3_dal.check_keys_exist(all_s3_paths)
             for f in flamegraph_files:
                 f.removed = f.s3_path not in existing_keys
+                rep_key = rep_key_by_file[f.filename]
+                if rep_key in existing_keys:
+                    f.nsys_rep_s3_path = rep_key
 
         return flamegraph_files
         
@@ -1181,9 +1193,44 @@ def get_adhoc_flamegraph_content(
             content=html_content,
             filename=filename
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error fetching adhoc flamegraph content: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch flamegraph content")
+
+
+@router.get(
+    "/adhoc_nsys_rep",
+    responses={
+        200: {"content": {"application/octet-stream": {}}},
+        404: {"description": "nsys rep not found"},
+    },
+)
+def download_adhoc_nsys_rep(
+    filename: str = Query(..., description="nsys rep filename to download"),
+    service_name: str = Query(..., alias="serviceName"),
+):
+    """
+    Download a raw .nsys-rep capture from S3 (openable in NVIDIA Nsight Systems).
+    Streams the object so large reports don't get buffered in backend memory.
+    """
+    if "/" in filename or not filename.endswith(".nsys-rep"):
+        raise HTTPException(status_code=400, detail="Invalid nsys rep filename")
+
+    s3_path = f"products/{service_name}/stacks/{NSYS_REP_S3_DIR}/{filename}"
+    s3_dal = S3ProfileDal(logger)
+    try:
+        body = s3_dal.open_stream(s3_path)
+    except ClientError as e:
+        if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
+            raise HTTPException(status_code=404, detail="nsys rep file not found")
+        logger.error(f"Error fetching nsys rep from S3: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch nsys rep from S3")
+
+    return StreamingResponse(
+        body.iter_chunks(chunk_size=1024 * 1024),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )

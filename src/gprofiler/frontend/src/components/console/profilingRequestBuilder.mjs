@@ -96,6 +96,8 @@ export const groupRowsByService = (selectedRows) =>
  *   timeline view instead of the GPU flamegraph.
  * @param {boolean} [config.enableNsysTimelineStacks] - With the timeline, also record a
  *   CPU backtrace per kernel launch (heavier capture) for click-for-stack.
+ * @param {boolean} [config.enableNsysUploadRep] - With enableNsys, also upload the raw
+ *   .nsys-rep capture for download (openable in NVIDIA Nsight Systems; can be large).
  * @param {object} config.profilerConfigs
  * @param {number} config.maxProcesses
  * @returns {{grouped: Record<string, Array<object>>, requests: Array<object>}}
@@ -110,6 +112,7 @@ export const buildProfilingRequests = (action, selectedRows, config) => {
         enableNsys = false,
         enableNsysTimeline = false,
         enableNsysTimelineStacks = false,
+        enableNsysUploadRep = false,
         profilerConfigs,
         maxProcesses,
     } = config;
@@ -146,6 +149,7 @@ export const buildProfilingRequests = (action, selectedRows, config) => {
                 // stale saved toggle can't reach the agent without the capture.
                 nsys_timeline: enableNsys && enableNsysTimeline,
                 nsys_timeline_stacks: enableNsys && enableNsysTimeline && enableNsysTimelineStacks,
+                nsys_upload_rep: enableNsys && enableNsysUploadRep,
                 profiler_configs: profilerConfigs,
                 max_processes: maxProcesses,
             },
