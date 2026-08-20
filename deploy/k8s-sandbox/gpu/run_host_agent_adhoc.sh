@@ -131,6 +131,10 @@ export _GPU_TIMELINE="${NSYS_TIMELINE:-0}"
 # (--cudabacktrace; heavier) for click-for-stack in the timeline
 export _GPU_TIMELINE_STACKS="${NSYS_TIMELINE_STACKS:-0}"
 [[ "${_GPU_TIMELINE_STACKS}" == "1" ]] && echo ">> nsys timeline stacks: enabled"
+# NSYS_UPLOAD_REP=1 -> also upload the raw .nsys-rep for download from the
+# Adhoc Profiling view (openable in NVIDIA Nsight Systems; can be large)
+export _GPU_UPLOAD_REP="${NSYS_UPLOAD_REP:-0}"
+[[ "${_GPU_UPLOAD_REP}" == "1" ]] && echo ">> nsys rep upload: enabled"
 
 req="$(python3 <<'PY'
 import json, os
@@ -151,6 +155,7 @@ print(json.dumps({
     "enable_nsys": True,
     "nsys_timeline": os.environ.get("_GPU_TIMELINE") == "1",
     "nsys_timeline_stacks": os.environ.get("_GPU_TIMELINE_STACKS") == "1",
+    "nsys_upload_rep": os.environ.get("_GPU_UPLOAD_REP") == "1",
     "nsys_workload": os.environ["NSYS_WORKLOAD"],
   },
 }))
