@@ -75,6 +75,15 @@ class S3ProfileDal:
                 raise FileNotFoundError("Requested file does not exist", src_file_path) from error
             raise
 
+    def open_stream(self, s3_path: str):
+        """Return the raw boto3 StreamingBody for *s3_path* (caller iterates/closes).
+
+        For large binary artifacts (e.g. .nsys-rep) that must not be read fully
+        into memory the way get_object does.
+        """
+        s3_response = self._s3_client.get_object(Bucket=self.bucket_name, Key=s3_path)
+        return s3_response["Body"]
+
     def get_object(self, s3_path: str, is_gzip=False) -> str:
         s3_response = self._s3_client.get_object(Bucket=self.bucket_name, Key=s3_path)
         response_body = s3_response["Body"].read()
