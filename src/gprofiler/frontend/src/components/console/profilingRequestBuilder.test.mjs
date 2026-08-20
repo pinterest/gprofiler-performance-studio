@@ -232,6 +232,22 @@ describe('buildProfilingRequests — nsys timeline flags', () => {
         assert.equal(requests[0].additional_args.nsys_timeline_stacks, false);
     });
 
+    it('gates the rep upload on enableNsys (stale saved toggle stays off)', () => {
+        const { requests } = buildProfilingRequests('start', [makeRow()], {
+            ...baseConfig,
+            enableNsys: false,
+            enableNsysUploadRep: true,
+        });
+        assert.equal(requests[0].additional_args.nsys_upload_rep, false);
+
+        const { requests: onRequests } = buildProfilingRequests('start', [makeRow()], {
+            ...baseConfig,
+            enableNsys: true,
+            enableNsysUploadRep: true,
+        });
+        assert.equal(onRequests[0].additional_args.nsys_upload_rep, true);
+    });
+
     it('gates stacks on the timeline itself being enabled', () => {
         const { requests } = buildProfilingRequests('start', [makeRow()], {
             ...baseConfig,
@@ -335,6 +351,7 @@ describe('buildProfilingRequests — scope matrix (start)', () => {
             enable_nsys: false,
             nsys_timeline: false,
             nsys_timeline_stacks: false,
+            nsys_upload_rep: false,
             profiler_configs: profilerConfigs,
             max_processes: 25,
         });

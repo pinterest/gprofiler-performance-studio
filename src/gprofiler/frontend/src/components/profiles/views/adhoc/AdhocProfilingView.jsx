@@ -15,7 +15,7 @@
  */
 
 import { useContext, useEffect, useState } from 'react';
-import { Box, Typography, Select, MenuItem, FormControl, InputLabel, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Button, Chip, IconButton, Collapse } from '@mui/material';
+import { Box, Typography, Select, MenuItem, FormControl, InputLabel, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Button, Chip, IconButton, Collapse, Tooltip } from '@mui/material';
 import { SelectorsContext } from '@/states';
 import { FilterTagsContext } from '@/states/filters/FiltersTagsContext';
 import useFetchWithRequest from '@/api/useFetchWithRequest';
@@ -103,6 +103,20 @@ const AdhocProfilingView = () => {
     const handleRowClick = (file) => {
         if (file.removed) return;
         setSelectedFile(file);
+    };
+
+    const handleRepDownload = (file) => {
+        const repFilename = file.nsys_rep_s3_path.split('/').pop();
+        const url = `${DATA_URLS.GET_ADHOC_NSYS_REP}?${stringify({
+            serviceName: selectedService,
+            filename: repFilename,
+        })}`;
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = repFilename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
     };
 
     if (filesLoading) {
@@ -205,7 +219,18 @@ const AdhocProfilingView = () => {
                                                 <TableCell>
                                                     {file.removed
                                                         ? <Chip label="Removed" size="small" color="error" variant="outlined" />
-                                                        : <Button size="small" onClick={(e) => { e.stopPropagation(); handleRowClick(file); }}>View</Button>
+                                                        : (
+                                                            <>
+                                                                <Button size="small" onClick={(e) => { e.stopPropagation(); handleRowClick(file); }}>View</Button>
+                                                                {file.nsys_rep_s3_path && (
+                                                                    <Tooltip title="Download the raw .nsys-rep capture (open in NVIDIA Nsight Systems)">
+                                                                        <Button size="small" onClick={(e) => { e.stopPropagation(); handleRepDownload(file); }}>
+                                                                            .nsys-rep
+                                                                        </Button>
+                                                                    </Tooltip>
+                                                                )}
+                                                            </>
+                                                        )
                                                     }
                                                 </TableCell>
                                             </TableRow>

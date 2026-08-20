@@ -366,6 +366,7 @@ const ProfilingStatusPage = () => {
     const [enableNsys, setEnableNsys] = useState(false);
     const [enableNsysTimeline, setEnableNsysTimeline] = useState(false);
     const [enableNsysTimelineStacks, setEnableNsysTimelineStacks] = useState(false);
+    const [enableNsysUploadRep, setEnableNsysUploadRep] = useState(false);
     const [profilingFrequency, setProfilingFrequency] = useState(DEFAULT_PROFILING_FREQUENCY);
     const [maxProcesses, setMaxProcesses] = useState(DEFAULT_MAX_PROCESSES);
     const [profilingMode, setProfilingMode] = useState('continuous');
@@ -412,6 +413,7 @@ const ProfilingStatusPage = () => {
                 if (typeof saved.enableNsysTimeline === 'boolean') setEnableNsysTimeline(saved.enableNsysTimeline);
                 if (typeof saved.enableNsysTimelineStacks === 'boolean')
                     setEnableNsysTimelineStacks(saved.enableNsysTimelineStacks);
+                if (typeof saved.enableNsysUploadRep === 'boolean') setEnableNsysUploadRep(saved.enableNsysUploadRep);
                 if (saved.profilingFrequency) setProfilingFrequency(saved.profilingFrequency);
                 if (saved.maxProcesses != null) setMaxProcesses(saved.maxProcesses);
                 if (saved.profilingMode) setProfilingMode(saved.profilingMode);
@@ -429,6 +431,7 @@ const ProfilingStatusPage = () => {
             enableNsys,
             enableNsysTimeline,
             enableNsysTimelineStacks,
+            enableNsysUploadRep,
             profilingFrequency,
             maxProcesses,
             profilingMode,
@@ -441,7 +444,7 @@ const ProfilingStatusPage = () => {
         } catch (error) {
             setSnackbar({ open: true, message: 'Failed to save configuration' });
         }
-    }, [duration, enableNsys, enableNsysTimeline, enableNsysTimelineStacks, enablePerfSpect, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
+    }, [duration, enableNsys, enableNsysTimeline, enableNsysTimelineStacks, enableNsysUploadRep, enablePerfSpect, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
 
     const fetchProfilingStatus = useCallback((filterParams, scope, opts = {}) => {
         const pageArg = opts.page ?? pageRef.current;
@@ -629,9 +632,10 @@ const ProfilingStatusPage = () => {
         enableNsys,
         enableNsysTimeline,
         enableNsysTimelineStacks,
+        enableNsysUploadRep,
         profilerConfigs,
         maxProcesses,
-    }), [activeScope, duration, enableNsys, enableNsysTimeline, enableNsysTimelineStacks, enablePerfSpect, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
+    }), [activeScope, duration, enableNsys, enableNsysTimeline, enableNsysTimelineStacks, enableNsysUploadRep, enablePerfSpect, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
 
     const executeDryRun = useCallback((action, selectedRows) => {
         const { requests } = buildRequests(action, selectedRows);
@@ -702,6 +706,7 @@ const ProfilingStatusPage = () => {
             setEnableNsys(false);
             setEnableNsysTimeline(false);
             setEnableNsysTimelineStacks(false);
+            setEnableNsysUploadRep(false);
         });
     };
 
@@ -808,6 +813,8 @@ const ProfilingStatusPage = () => {
                     onNsysTimelineChange={setEnableNsysTimeline}
                     enableNsysTimelineStacks={enableNsysTimelineStacks}
                     onNsysTimelineStacksChange={setEnableNsysTimelineStacks}
+                    enableNsysUploadRep={enableNsysUploadRep}
+                    onNsysUploadRepChange={setEnableNsysUploadRep}
                     profilingFrequency={profilingFrequency}
                     onProfilingFrequencyChange={setProfilingFrequency}
                     maxProcesses={maxProcesses}
