@@ -80,6 +80,7 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       - BUCKET_NAME=$BUCKET_NAME
+      - S3_PATH_PREFIX=$S3_PATH_PREFIX
       - QUERY_API_BASE_URL=https://ch-rest-service:4433
       - REST_VERIFY_TLS=FALSE
       - REST_USERNAME=$REST_USERNAME
@@ -209,6 +210,7 @@ services:
       - SQS_QUEUE_URL=$SQS_INDEXER_QUEUE_URL
       - AWS_REGION=$AWS_REGION
       - S3_BUCKET=$BUCKET_NAME
+      - S3_PATH_PREFIX=$S3_PATH_PREFIX
       - CLICKHOUSE_ADDR=$CLICKHOUSE_HOST:9000
       - CLICKHOUSE_USER=${CLICKHOUSE_USER}
       - CLICKHOUSE_USE_TLS=false

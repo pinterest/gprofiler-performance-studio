@@ -238,7 +238,7 @@ func (pw *ProfilesWriter) writeMetrics(serviceId uint32, instanceType string,
 	log.Infof("DEBUG: Metric record sent to channel successfully")
 }
 
-func (pw *ProfilesWriter) ParseStackFrameFile(sess *session.Session, task SQSMessage, s3bucket string,
+func (pw *ProfilesWriter) ParseStackFrameFile(sess *session.Session, task SQSMessage, s3bucket string, s3PathPrefix string,
 	timestamp time.Time, buf []byte) error {
 	var fileInfo FileInfo
 	var withMetadata bool
@@ -291,7 +291,7 @@ func (pw *ProfilesWriter) ParseStackFrameFile(sess *session.Session, task SQSMes
 	var htmlBlobPath string
 	if fileInfo.HTMLBlob != "" {
 		baseFileName := strings.TrimSuffix(task.Filename, ".gz")
-		htmlBlobPath = fmt.Sprintf("products/%s/stacks/%s.html", task.Service, baseFileName)
+		htmlBlobPath = s3KeyPath(s3PathPrefix, fmt.Sprintf("products/%s/stacks/%s.html", task.Service, baseFileName))
 		decodedBlob, err := base64.StdEncoding.DecodeString(fileInfo.HTMLBlob)
 		if err != nil {
 			log.Errorf("failed to decode base64 HTML blob for file %s: %v", task.Filename, err)
@@ -322,7 +322,7 @@ func (pw *ProfilesWriter) ParseStackFrameFile(sess *session.Session, task SQSMes
 			profilingType = ProfilingTypeContinuous
 		}
 		
-		flamegraphHTMLPath := fmt.Sprintf("products/%s/stacks/flamegraph/%s_%s_flamegraph.html", task.Service, baseFileName, profilingType)
+		flamegraphHTMLPath := s3KeyPath(s3PathPrefix, fmt.Sprintf("products/%s/stacks/flamegraph/%s_%s_flamegraph.html", task.Service, baseFileName, profilingType))
 		
 		var flamegraphData []byte
 		// Try to decode as base64, if it fails, treat it as plain HTML

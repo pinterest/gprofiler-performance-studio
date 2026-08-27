@@ -55,6 +55,7 @@ from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 from gprofiler_dev import S3ProfileDal
+from gprofiler_dev import config as _dev_config
 from gprofiler_dev.postgres.db_manager import DBManager
 
 # Adhoc profiling models
@@ -1166,7 +1167,9 @@ def get_adhoc_flamegraph_content(
         s3_dal = S3ProfileDal(logger)
         
         # Build full S3 path for flamegraph HTML files
-        s3_path = f"products/{service_name}/stacks/flamegraph/{filename}"
+        _prefix = _dev_config.S3_PATH_PREFIX
+        _root = f"{_prefix}/products" if _prefix else "products"
+        s3_path = f"{_root}/{service_name}/stacks/flamegraph/{filename}"
         
         # Fetch file content from S3 (flamegraph HTML files are not gzipped)
         try:

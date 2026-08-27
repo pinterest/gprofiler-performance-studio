@@ -39,7 +39,8 @@ class S3ProfileDal:
     ):
         self.logger = logger
         self.bucket_name = config.BUCKET_NAME
-        self.base_directory = config.BASE_DIRECTORY
+        _prefix = config.S3_PATH_PREFIX
+        self.base_directory = f"{_prefix}/{config.BASE_DIRECTORY}" if _prefix else config.BASE_DIRECTORY
         self.input_folder_name = input_folder_name
         if session is None:
             with boto3_lock:
