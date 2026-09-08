@@ -93,14 +93,21 @@ agent executes. See [Resolution Model](#resolution-model).
 - `run_mode`
 - `namespace`
 - `pod_name`
-- `containers jsonb`
 
-The `containers` payload stores the flattened workload inventory reported by the
-agent. Each container entry may include:
+The flattened workload inventory reported by the agent is stored in the
+normalized `HeartbeatContainers` and `HeartbeatProcesses` tables (an earlier
+transitional `containers jsonb` column on `HostHeartbeats` has been dropped).
+Each container entry may include:
 
 - container identity
 - namespace/pod/workload metadata
 - process list
+
+Only containerized workloads are stored: the agent reports an empty list for
+hosts with no container runtime, and processes not mapped to a container are
+covered by host-scope profiling instead. On each heartbeat the inventory is
+diffed against the stored rows (upsert keyed on `(host_id, container_id)` and
+`(container_row_id, pid)`), so an unchanged inventory performs no row writes.
 
 `ProfilingRequests` remains API-level intent storage. Workload selectors are
 stored in `additional_args` as part of the request contract so the existing
