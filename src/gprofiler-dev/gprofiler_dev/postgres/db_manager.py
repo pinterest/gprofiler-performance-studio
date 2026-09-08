@@ -943,73 +943,138 @@ class DBManager(metaclass=Singleton):
         return True
 
     def _sync_host_inventory(self, cursor, host_id: int, containers: List[Dict[str, Any]]) -> None:
-        """Replace the normalized inventory for a host with the latest heartbeat snapshot.
+        """Diff the normalized inventory for a host against the latest heartbeat snapshot.
 
-        Runs inside the caller's transaction. Uses delete-then-insert (the cascade on
-        HeartbeatContainers clears child processes) which keeps the logic simple and
-        guarantees the stored set exactly matches the heartbeat. A future optimization
-        is to diff against existing rows to reduce write churn on stable inventories.
+        Runs inside the caller's transaction. Rather than deleting and re-inserting every
+        row on each heartbeat, it upserts containers/processes on their natural identity
+        and rewrites a row only when a value actually changed. At fleet scale most beats
+        report an unchanged inventory, so the guarded upserts produce zero row writes
+        (no dead tuples, WAL, or index churn) in the steady state.
+
+        Only containerized workloads are stored: the agent sends an empty list for
+        non-containerized hosts and never emits a usable NULL container_id, so entries
+        without a container_id are skipped — they also can't be diffed via the
+        UNIQUE (host_id, container_id) key. Any legacy NULL-id rows are cleaned on the
+        next heartbeat by the prune below.
         """
-        cursor.execute("DELETE FROM HeartbeatContainers WHERE host_id = %s", (host_id,))
-
-        if not containers:
-            return
-
         seen_container_ids: Set[str] = set()
+        normalized: List[Dict[str, Any]] = []
         for container in containers:
             if not isinstance(container, dict):
                 continue
-
-            # Guard against duplicate non-null container_ids in a single payload,
-            # which would violate UNIQUE (host_id, container_id). NULL ids are allowed
-            # to repeat (Postgres treats NULLs as distinct).
             container_id = container.get("container_id")
-            if container_id is not None:
-                if container_id in seen_container_ids:
-                    continue
-                seen_container_ids.add(container_id)
+            if container_id is None or container_id in seen_container_ids:
+                continue
+            seen_container_ids.add(container_id)
+            normalized.append(container)
 
-            cursor.execute(
-                """
-                INSERT INTO HeartbeatContainers (
-                    host_id, container_id, container_name, runtime, namespace,
-                    pod_name, workload_name, workload_kind, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-                RETURNING id
-                """,
+        incoming_ids = [c["container_id"] for c in normalized]
+
+        # Drop containers the host no longer reports (cascades to their processes). The
+        # IS NULL clause also reclaims any legacy NULL-id rows left by the old writer.
+        cursor.execute(
+            "DELETE FROM HeartbeatContainers "
+            "WHERE host_id = %s AND (container_id IS NULL OR container_id <> ALL(%s::text[]))",
+            (host_id, incoming_ids),
+        )
+
+        if not normalized:
+            return
+
+        # Upsert containers, rewriting a row only when its metadata actually changed.
+        psycopg2.extras.execute_values(
+            cursor,
+            """
+            INSERT INTO HeartbeatContainers (
+                host_id, container_id, container_name, runtime, namespace,
+                pod_name, workload_name, workload_kind, updated_at
+            ) VALUES %s
+            ON CONFLICT (host_id, container_id) DO UPDATE SET
+                container_name = EXCLUDED.container_name,
+                runtime        = EXCLUDED.runtime,
+                namespace      = EXCLUDED.namespace,
+                pod_name       = EXCLUDED.pod_name,
+                workload_name  = EXCLUDED.workload_name,
+                workload_kind  = EXCLUDED.workload_kind,
+                updated_at     = CURRENT_TIMESTAMP
+            WHERE (
+                HeartbeatContainers.container_name, HeartbeatContainers.runtime,
+                HeartbeatContainers.namespace, HeartbeatContainers.pod_name,
+                HeartbeatContainers.workload_name, HeartbeatContainers.workload_kind
+            ) IS DISTINCT FROM (
+                EXCLUDED.container_name, EXCLUDED.runtime, EXCLUDED.namespace,
+                EXCLUDED.pod_name, EXCLUDED.workload_name, EXCLUDED.workload_kind
+            )
+            """,
+            [
                 (
                     host_id,
-                    container_id,
+                    container["container_id"],
                     container.get("container_name"),
                     container.get("runtime"),
                     container.get("namespace"),
                     container.get("pod_name"),
                     container.get("workload_name"),
                     container.get("workload_kind"),
-                ),
-            )
-            container_row_id = cursor.fetchone()[0]
-
-            process_rows = []
-            seen_pids: Set[int] = set()
-            for process in container.get("processes") or []:
-                if not isinstance(process, dict):
-                    continue
-                pid = process.get("pid")
-                if pid is None or not str(pid).isdigit():
-                    continue
-                pid = int(pid)
-                if pid in seen_pids:  # satisfy UNIQUE (container_row_id, pid)
-                    continue
-                seen_pids.add(pid)
-                process_rows.append((container_row_id, pid, process.get("process_name")))
-
-            if process_rows:
-                psycopg2.extras.execute_values(
-                    cursor,
-                    "INSERT INTO HeartbeatProcesses (container_row_id, pid, process_name) VALUES %s",
-                    process_rows,
                 )
+                for container in normalized
+            ],
+            template="(%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)",
+        )
+
+        # Map every reported container_id to its stable row id (changed or not) so
+        # processes can be attached — the guarded upsert above returns nothing for
+        # unchanged rows, so we can't rely on RETURNING here.
+        cursor.execute(
+            "SELECT id, container_id FROM HeartbeatContainers "
+            "WHERE host_id = %s AND container_id = ANY(%s::text[])",
+            (host_id, incoming_ids),
+        )
+        row_id_by_container_id = {container_id: row_id for row_id, container_id in cursor.fetchall()}
+
+        for container in normalized:
+            container_row_id = row_id_by_container_id.get(container["container_id"])
+            if container_row_id is None:
+                continue
+            self._sync_container_processes(cursor, container_row_id, container.get("processes") or [])
+
+    def _sync_container_processes(self, cursor, container_row_id: int, processes: List[Dict[str, Any]]) -> None:
+        """Diff a single container's processes, mirroring the container-level upsert."""
+        process_rows = []
+        seen_pids: Set[int] = set()
+        for process in processes:
+            if not isinstance(process, dict):
+                continue
+            pid = process.get("pid")
+            if pid is None or not str(pid).isdigit():
+                continue
+            pid = int(pid)
+            if pid in seen_pids:  # satisfy UNIQUE (container_row_id, pid)
+                continue
+            seen_pids.add(pid)
+            process_rows.append((container_row_id, pid, process.get("process_name")))
+
+        # Drop processes the container no longer reports.
+        cursor.execute(
+            "DELETE FROM HeartbeatProcesses WHERE container_row_id = %s AND pid <> ALL(%s::int[])",
+            (container_row_id, [pid for _, pid, _ in process_rows]),
+        )
+
+        if not process_rows:
+            return
+
+        # Upsert processes, rewriting a row only when its name actually changed.
+        psycopg2.extras.execute_values(
+            cursor,
+            """
+            INSERT INTO HeartbeatProcesses (container_row_id, pid, process_name)
+            VALUES %s
+            ON CONFLICT (container_row_id, pid) DO UPDATE SET
+                process_name = EXCLUDED.process_name
+            WHERE HeartbeatProcesses.process_name IS DISTINCT FROM EXCLUDED.process_name
+            """,
+            process_rows,
+        )
 
     def get_host_heartbeat(self, hostname: str) -> Optional[Dict]:
         """Get the latest heartbeat information for a host"""
