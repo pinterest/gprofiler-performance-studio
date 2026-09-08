@@ -1861,6 +1861,27 @@ class DBManager(metaclass=Singleton):
         "container": "container_name IS NOT NULL",
         "process": "pid IS NOT NULL",
     }
+    # Whitelist of sortable columns -> grouped-query expression. Client input is
+    # matched against these keys only, so no caller string reaches the SQL.
+    _WORKLOAD_SORT_COLUMNS: Dict[str, str] = {
+        "service_name": "service_name",
+        "hostname": "l_hostname",
+        "ip_address": "l_ip_address",
+        "namespace": "l_namespace",
+        "pod_name": "l_pod_name",
+        "container_name": "l_container_name",
+        "workload_name": "l_workload_name",
+        "process_name": "l_process_name",
+        "pid": "l_pid",
+        "heartbeat_timestamp": "l_heartbeat_timestamp",
+        "profiling_status": "l_profiling_status",
+        "agent_version": "l_agent_version",
+        "host_count": "host_count",
+        "namespace_count": "namespace_count",
+        "pod_count": "pod_count",
+        "container_count": "container_count",
+        "process_count": "process_count",
+    }
 
     def _workload_inventory_cte(
         self,
@@ -2006,11 +2027,31 @@ class DBManager(metaclass=Singleton):
         """
         return cte, params
 
-    def _query_workload_groups(self, scope: str, cte: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _query_workload_groups(
+        self,
+        scope: str,
+        cte: str,
+        params: Dict[str, Any],
+        page: int = 0,
+        page_size: int = 50,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
+    ) -> Tuple[List[Dict[str, Any]], int]:
         key_cols = self._WORKLOAD_SCOPE_KEYS.get(scope, self._WORKLOAD_SCOPE_KEYS["process"])
         guard = self._WORKLOAD_SCOPE_NULL_GUARD.get(scope)
         where_clause = f"WHERE {guard}" if guard else ""
         group_by = ", ".join(key_cols)
+
+        # Deterministic ORDER BY: the optional client sort first, then the full
+        # group-key tuple as a tiebreaker so LIMIT/OFFSET pages never overlap or
+        # drop rows. Only whitelisted expressions reach the SQL.
+        direction = "DESC" if str(sort_order).lower() == "desc" else "ASC"
+        order_terms: List[str] = []
+        sort_expr = self._WORKLOAD_SORT_COLUMNS.get(sort_by) if sort_by else None
+        if sort_expr:
+            order_terms.append(f"{sort_expr} {direction} NULLS LAST")
+        order_terms.extend(f"{col} ASC NULLS LAST" for col in key_cols)
+        order_by = "ORDER BY " + ", ".join(order_terms)
 
         query = cte + f"""
         SELECT
@@ -2037,15 +2078,21 @@ class DBManager(metaclass=Singleton):
             (array_agg(profiling_status ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_profiling_status,
             (array_agg(agent_version ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_agent_version,
             (array_agg(run_mode ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_run_mode,
-            MAX(heartbeat_timestamp) AS l_heartbeat_timestamp
+            MAX(heartbeat_timestamp) AS l_heartbeat_timestamp,
+            COUNT(*) OVER () AS total_groups
         FROM filtered
         {where_clause}
         GROUP BY {group_by}
+        {order_by}
+        LIMIT %(page_size)s OFFSET %(offset)s
         """
 
-        db_rows = self.db.execute(query, params, one_value=False, return_dict=True, fetch_all=True)
+        group_params = {**params, "page_size": page_size, "offset": page * page_size}
+        db_rows = self.db.execute(query, group_params, one_value=False, return_dict=True, fetch_all=True)
+        total_count = db_rows[0]["total_groups"] if db_rows else 0
         rows: List[Dict[str, Any]] = []
         for db_row in db_rows or []:
+
             key_values = [db_row.get(col) for col in key_cols]
             row_id = "|".join("" if value is None else str(value) for value in key_values)
             command_metadata = self._extract_command_metadata(
@@ -2096,17 +2143,8 @@ class DBManager(metaclass=Singleton):
                 }
             )
 
-        rows.sort(
-            key=lambda row: (
-                row.get("service_name") or "",
-                row.get("namespace") or "",
-                row.get("hostname") or "",
-                row.get("pod_name") or "",
-                row.get("container_name") or "",
-                row.get("pid") or 0,
-            )
-        )
-        return rows
+        # Ordering and pagination are done in SQL (see order_by/LIMIT above).
+        return rows, total_count
 
     def get_workload_inventory_status(
         self,
@@ -2123,6 +2161,10 @@ class DBManager(metaclass=Singleton):
         command_types: Optional[List[str]] = None,
         pids: Optional[List[int]] = None,
         exact_match: bool = False,
+        page: int = 0,
+        page_size: int = 50,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
     ) -> Dict[str, Any]:
         cte, params = self._workload_inventory_cte(
             service_names=service_names,
@@ -2163,14 +2205,18 @@ class DBManager(metaclass=Singleton):
         }
         active_hosts = counts.get("active_hosts") or 0
 
-        rows = self._query_workload_groups(scope, cte, params)
+        rows, total_count = self._query_workload_groups(
+            scope, cte, params, page=page, page_size=page_size, sort_by=sort_by, sort_order=sort_order
+        )
 
         return {
             "scope": scope,
             "rows": rows,
             "tab_counts": tab_counts,
             "active_hosts": active_hosts,
-            "total_count": len(rows),
+            "total_count": total_count,
+            "page": page,
+            "page_size": page_size,
         }
 
     def resolve_workload_targets(
