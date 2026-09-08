@@ -58,7 +58,10 @@ aws s3api create-bucket --bucket test --endpoint-url=http://localhost:4566 --pro
 Now you can run indexer:
 
 ```shell
-./indexer -sqs-queue test-queue -s3-bucket test -aws-endpoint http://localhost:4566 -aws-region us-east-1 
+./indexer -sqs-queue test-queue -s3-bucket test -aws-endpoint http://localhost:4566 -aws-region us-east-1
+
+# Optional: scope all keys under a prefix (env: S3_PATH_PREFIX)
+./indexer -sqs-queue test-queue -s3-bucket test -s3-path-prefix my/root -aws-endpoint http://localhost:4566 -aws-region us-east-1 
 ```
 
 # Run tests

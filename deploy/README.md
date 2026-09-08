@@ -119,6 +119,7 @@ AWS_SESSION_TOKEN=<your-session-token>  # Optional, only if using temporary cred
 
 # S3 and SQS resources
 BUCKET_NAME=<your-s3-bucket-name>
+S3_PATH_PREFIX=<optional-key-prefix>   # e.g. my/root — leave blank to use bucket root
 SQS_INDEXER_QUEUE_URL=<your-sqs-queue-url>
 ```
 

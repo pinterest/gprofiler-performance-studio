@@ -18,11 +18,13 @@ package main
 
 import (
 	"flag"
+	"strings"
 )
 
 type CLIArgs struct {
 	SQSQueue                   string
 	S3Bucket                   string
+	S3PathPrefix               string
 	ClickHouseAddr             string
 	ClickHouseUser             string
 	ClickHousePassword         string
@@ -79,6 +81,7 @@ func (ca *CLIArgs) ParseArgs() {
 	flag.StringVar(&ca.SQSQueue, "sqs-queue", LookupEnvOrString("SQS_QUEUE_URL", ca.SQSQueue),
 		"SQS Queue name to listen")
 	flag.StringVar(&ca.S3Bucket, "s3-bucket", LookupEnvOrString("S3_BUCKET", ca.S3Bucket), "S3 bucket name")
+	flag.StringVar(&ca.S3PathPrefix, "s3-path-prefix", LookupEnvOrString("S3_PATH_PREFIX", ca.S3PathPrefix), "optional S3 key prefix (before products/)")
 	flag.StringVar(&ca.AWSEndpoint, "aws-endpoint", LookupEnvOrString("AWS_ENDPOINT_URL", ca.AWSEndpoint), "AWS Endpoint URL")
 	flag.StringVar(&ca.AWSRegion, "aws-region", LookupEnvOrString("AWS_REGION", ca.AWSRegion), "AWS Region")
 	flag.StringVar(&ca.ClickHouseAddr, "clickhouse-addr", LookupEnvOrString("CLICKHOUSE_ADDR", ca.ClickHouseAddr),
@@ -126,6 +129,9 @@ func (ca *CLIArgs) ParseArgs() {
 	flag.StringVar(&ca.PostgresDB, "postgres-db", LookupEnvOrString("GPROFILER_POSTGRES_DB_NAME", ca.PostgresDB),
 		"PostgreSQL database name (default gprofiler_db)")
 	flag.Parse()
+
+	// Normalize: strip any leading/trailing slashes so concatenation is consistent
+	ca.S3PathPrefix = strings.Trim(ca.S3PathPrefix, "/")
 
 	if ca.SQSQueue == "" && ca.InputFolder == "" {
 		logger.Fatal("You must supply the name of a queue (-sqs-queue QUEUE)")

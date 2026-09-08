@@ -43,6 +43,8 @@ spec:
               valueFrom: { configMapKeyRef: { name: studio-config, key: AWS_ENDPOINT_URL } }
             - name: S3_BUCKET
               valueFrom: { configMapKeyRef: { name: studio-config, key: BUCKET_NAME } }
+            - name: S3_PATH_PREFIX
+              valueFrom: { configMapKeyRef: { name: studio-config, key: S3_PATH_PREFIX } }
             - name: CLICKHOUSE_HOST
               valueFrom: { configMapKeyRef: { name: studio-config, key: CLICKHOUSE_HOST } }
             - name: CLICKHOUSE_USER

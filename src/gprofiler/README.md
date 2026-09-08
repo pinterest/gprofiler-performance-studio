@@ -15,6 +15,7 @@ pip install -e .
 ### Running the backend
 To run the backend, you need to set the following environment variables:
 - `BUCKET_NAME` - S3 bucket name
+- `S3_PATH_PREFIX` - optional prefix prepended to every S3 key (e.g. `my/root`); empty by default
 - `QUERY_API_BASE_URL` - running `src/gprofiler_flamedb_rest` http://localhost:8080
 - `SQS_INDEXER_QUEUE_URL` - SQS queue name
 - `GPROFILER_POSTGRES_DB_NAME`

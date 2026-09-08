@@ -75,7 +75,7 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 		log.Debugf("got new file %s from service %s (ID: %d)", task.Filename, serviceName, task.ServiceId)
 
 		if useSQS {
-			fullPath := fmt.Sprintf("products/%s/stacks/%s", task.Service, task.Filename)
+			fullPath := s3KeyPath(args.S3PathPrefix, fmt.Sprintf("products/%s/stacks/%s", task.Service, task.Filename))
 			buf, err = GetFileFromS3(sess, args.S3Bucket, fullPath)
 			if err != nil {
 				log.Errorf("Error while fetching file from S3: %v", err)
@@ -113,7 +113,7 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 		}
 
 		// Parse stack frame file and write to ClickHouse
-		err := pw.ParseStackFrameFile(sess, task, args.S3Bucket, timestamp, buf)
+		err := pw.ParseStackFrameFile(sess, task, args.S3Bucket, args.S3PathPrefix, timestamp, buf)
 		if err != nil {
 			log.Errorf("Error while parsing stack frame file: %v", err)
 

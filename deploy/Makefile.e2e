@@ -90,7 +90,7 @@ e2e-flamegraph:
 	@docker run --rm --network $(NETWORK) \
 	  -e AWS_ACCESS_KEY_ID=test -e AWS_SECRET_ACCESS_KEY=test -e AWS_DEFAULT_REGION=us-east-1 \
 	  amazon/aws-cli:2.15.0 --endpoint-url http://localstack:4566 \
-	  s3 ls s3://performance-studio-bucket/products/$(SERVICE)/ --recursive
+	  s3 ls s3://performance-studio-bucket/$${S3_PATH_PREFIX:+$${S3_PATH_PREFIX}/}products/$(SERVICE)/ --recursive
 
 e2e-agent-logs:
 	@docker logs -f gprofiler-ps-e2e-agent

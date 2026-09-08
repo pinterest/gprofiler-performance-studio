@@ -16,6 +16,7 @@ data:
   S3_ENDPOINT_URL: http://localstack:4566
   SQS_ENDPOINT_URL: http://localstack:4566
   BUCKET_NAME: performance-studio-bucket
+  S3_PATH_PREFIX: ""
   # The indexer takes a bare queue name; the webapp takes a full URL. Path-style
   # LocalStack URL works cross-pod (the localhost.localstack.cloud magic DNS the
   # compose .env used only resolves on the host).

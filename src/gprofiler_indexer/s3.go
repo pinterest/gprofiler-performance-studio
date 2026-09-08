@@ -30,6 +30,14 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// s3KeyPath prepends an optional prefix to a key; prefix must already be slash-normalized.
+func s3KeyPath(prefix, key string) string {
+	if prefix == "" {
+		return key
+	}
+	return prefix + "/" + key
+}
+
 func GetFileFromS3(sess *session.Session, bucketName string, filename string) ([]byte, error) {
 	downloader := s3manager.NewDownloader(sess)
 	head, err := downloader.S3.HeadObject(&s3.HeadObjectInput{
