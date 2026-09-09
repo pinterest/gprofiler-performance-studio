@@ -102,29 +102,34 @@ const formatHeartbeat = (value) => {
     }
 };
 
-// Build a profiles-view deep link for a status row, translating the active tab's
-// grouping into the filters the profiles view understands: the `service` param,
-// RQL host/container/deployment tags, and the process list. Scopes without a
-// matching filter (namespace) fall back to the service-wide view.
+// Build a profiles-view deep link for a status row. Each scope maps to the
+// filters the profiles view supports: the exact `service` param, exact Host name
+// (hn,is), a "Contains" Container name match (cn,has) that encodes the
+// namespace/deployment/container, and an exact process for the process scope.
 const buildScopeProfileUrl = (row, scope, view) => {
     const baseUrl = `${window.location.protocol}//${window.location.host}`;
     const params = { gtab: '1', pm: '1', rtms: '1', time: '1h', wp: '100', service: row.service, view };
     const rules = [];
-    if (scope === 'host') {
+    const namespace = row.namespace || '';
+    const deployment = row.workloadName || '';
+
+    if (scope === 'namespace') {
+        if (namespace) rules.push(`cn,has,_${namespace}`);
+    } else if (scope === 'host') {
         if (row.host) rules.push(`hn,is,${row.host}`);
-    } else if (scope === 'container') {
-        if (row.host) rules.push(`hn,is,${row.host}`);
-        if (row.containerName) rules.push(`cn,is,${row.containerName}`);
     } else if (scope === 'pod') {
         if (row.host) rules.push(`hn,is,${row.host}`);
-        if (row.workloadName) rules.push(`cen,is,${row.workloadName}`);
+        rules.push(`cn,has,_${deployment}_${namespace}`);
+    } else if (scope === 'container') {
+        if (row.host) rules.push(`hn,is,${row.host}`);
+        rules.push(`cn,has,${row.containerName || ''}_${deployment}_${namespace}`);
     } else if (scope === 'process') {
         if (row.host) rules.push(`hn,is,${row.host}`);
         if (row.processName) params.p = row.processName;
     }
-    // Multiple RQL rules are AND-joined (",a," is the profiles-view separator).
+    // service scope: exact service via the `service` param only, no RQL rule.
     if (rules.length) {
-        params.filter = rules.join(',a,');
+        params.filter = rules.join(',a,'); // ",a," is the profiles-view AND separator
     }
     return `${baseUrl}${PAGES.profiles.to}?${new URLSearchParams(params).toString()}`;
 };
