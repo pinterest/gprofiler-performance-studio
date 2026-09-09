@@ -16,7 +16,7 @@ RUN yarn --cwd /frontend/ install
 COPY gprofiler/frontend /frontend
 RUN yarn build
 
-FROM python:3.12.3-bullseye
+FROM python:3.12.3-bookworm
 
 WORKDIR /usr/src/app
 EXPOSE 80
@@ -30,8 +30,8 @@ RUN gpg --no-default-keyring --keyring ./temp-keyring.gpg --export --output ngin
 RUN rm -f temp-keyring.gpg
 RUN mkdir -p /etc/apt/keyrings/
 RUN cp nginx_signing.gpg /etc/apt/keyrings/
-RUN echo "deb [signed-by=/etc/apt/keyrings/nginx_signing.gpg] https://nginx.org/packages/mainline/debian/ bullseye nginx" >> /etc/apt/sources.list
-RUN echo "deb-src [signed-by=/etc/apt/keyrings/nginx_signing.gpg] https://nginx.org/packages/mainline/debian bullseye nginx" >> /etc/apt/sources.list
+RUN echo "deb [signed-by=/etc/apt/keyrings/nginx_signing.gpg] https://nginx.org/packages/mainline/debian/ bookworm nginx" >> /etc/apt/sources.list
+RUN echo "deb-src [signed-by=/etc/apt/keyrings/nginx_signing.gpg] https://nginx.org/packages/mainline/debian bookworm nginx" >> /etc/apt/sources.list
 
 # install dependencies
 RUN apt-get update && apt-get install -y nginx bc logrotate gettext-base && \
