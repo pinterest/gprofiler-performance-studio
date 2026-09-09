@@ -102,20 +102,68 @@ const formatHeartbeat = (value) => {
     }
 };
 
-const buildProfileUrl = (host, service, view) => {
+// Build a profiles-view deep link for a status row. Each scope maps to the
+// filters the profiles view supports: the exact `service` param, exact Host name
+// (hn,is), a "Contains" Container name match (cn,has) that joins the available
+// container/deployment/namespace parts, and an exact process for the process scope.
+const buildScopeProfileUrl = (row, scope, view) => {
     const baseUrl = `${window.location.protocol}//${window.location.host}`;
-    const params = {
-        filter: `hn,is,${host}`,
-        gtab: '1',
-        pm: '1',
-        rtms: '1',
-        service,
-        time: '1h',
-        view,
-        wp: '100',
-    };
+    const params = { gtab: '1', pm: '1', rtms: '1', time: '1h', wp: '100', service: row.service, view };
+    const rules = [];
+    const namespace = row.namespace || '';
+    const deployment = row.workloadName || '';
+    const container = row.containerName || '';
+    // Join only the available parts with "_" (skip empties to avoid "__").
+    const containsValue = (parts) => parts.filter(Boolean).join('_');
+
+    if (scope === 'namespace') {
+        const value = containsValue([namespace]);
+        if (value) rules.push(`cn,has,${value}`);
+    } else if (scope === 'host') {
+        if (row.host) rules.push(`hn,is,${row.host}`);
+    } else if (scope === 'pod') {
+        if (row.host) rules.push(`hn,is,${row.host}`);
+        const value = containsValue([deployment, namespace]);
+        if (value) rules.push(`cn,has,${value}`);
+    } else if (scope === 'container') {
+        if (row.host) rules.push(`hn,is,${row.host}`);
+        const value = containsValue([container, deployment, namespace]);
+        if (value) rules.push(`cn,has,${value}`);
+    } else if (scope === 'process') {
+        if (row.host) rules.push(`hn,is,${row.host}`);
+        // Flamegraph process nodes use the 15-char kernel comm, so match that prefix.
+        if (row.processName) params.p = row.processName.slice(0, 15);
+    }
+    // service scope: exact service via the `service` param only, no RQL rule.
+    if (rules.length) {
+        params.filter = rules.join(',a,'); // ",a," is the profiles-view AND separator
+    }
     return `${baseUrl}${PAGES.profiles.to}?${new URLSearchParams(params).toString()}`;
 };
+
+const makeProfileColumn = (scope) => ({
+    field: 'profile',
+    headerName: 'profile',
+    flex: 1.2,
+    sortable: false,
+    renderCell: (params) => {
+        const { service, profilingStatus } = params.row;
+        if (!service || profilingStatus !== 'active') {
+            return '';
+        }
+
+        return (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                <a href={buildScopeProfileUrl(params.row, scope, 'flamegraph')} target="_blank" rel="noopener noreferrer">
+                    View Continuous Profile
+                </a>
+                <a href={buildScopeProfileUrl(params.row, scope, 'adhoc')} target="_blank" rel="noopener noreferrer">
+                    View Adhoc Profile
+                </a>
+            </Box>
+        );
+    },
+});
 
 const getScopeColumns = (scope) => {
     const sharedTimestampColumn = {
@@ -143,6 +191,7 @@ const getScopeColumns = (scope) => {
             ...sharedStatusColumns,
             sharedTimestampColumn,
             { field: 'agentVersion', headerName: 'version', flex: 0.8, sortable: true },
+            makeProfileColumn('service'),
         ];
     }
 
@@ -156,6 +205,7 @@ const getScopeColumns = (scope) => {
             { field: 'processCount', headerName: 'processes', flex: 0.8, sortable: true },
             ...sharedStatusColumns,
             sharedTimestampColumn,
+            makeProfileColumn('namespace'),
         ];
     }
 
@@ -169,29 +219,7 @@ const getScopeColumns = (scope) => {
             { field: 'commandType', headerName: 'command type', flex: 0.8, sortable: true },
             { field: 'profilingStatus', headerName: 'profiling status', flex: 0.9, sortable: true },
             sharedTimestampColumn,
-            {
-                field: 'profile',
-                headerName: 'profile',
-                flex: 1.2,
-                sortable: false,
-                renderCell: (params) => {
-                    const { host, service, commandType, profilingStatus } = params.row;
-                    if (commandType !== 'start' || profilingStatus !== 'active' || !host || !service) {
-                        return '';
-                    }
-
-                    return (
-                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-                            <a href={buildProfileUrl(host, service, 'flamegraph')} target="_blank" rel="noopener noreferrer">
-                                View Continuous Profile
-                            </a>
-                            <a href={buildProfileUrl(host, service, 'adhoc')} target="_blank" rel="noopener noreferrer">
-                                View Adhoc Profile
-                            </a>
-                        </Box>
-                    );
-                },
-            },
+            makeProfileColumn('host'),
         ];
     }
 
@@ -205,6 +233,7 @@ const getScopeColumns = (scope) => {
             { field: 'processCount', headerName: 'processes', flex: 0.8, sortable: true },
             ...sharedStatusColumns,
             sharedTimestampColumn,
+            makeProfileColumn('pod'),
         ];
     }
 
@@ -217,6 +246,7 @@ const getScopeColumns = (scope) => {
             { field: 'processCount', headerName: 'processes', flex: 0.8, sortable: true },
             ...sharedStatusColumns,
             sharedTimestampColumn,
+            makeProfileColumn('container'),
         ];
     }
 
@@ -229,6 +259,7 @@ const getScopeColumns = (scope) => {
         { field: 'host', headerName: 'host', flex: 1, sortable: true },
         ...sharedStatusColumns,
         sharedTimestampColumn,
+        makeProfileColumn('process'),
     ];
 };
 
@@ -274,6 +305,18 @@ const scopeEntityLabel = (scope) => {
     return lookup[scope] || 'entities';
 };
 
+const scopeActiveLabel = (scope) => {
+    const lookup = {
+        service: 'Active Services',
+        namespace: 'Active Namespaces',
+        host: 'Active Hosts',
+        pod: 'Active Pods',
+        container: 'Active Containers',
+        process: 'Active Processes',
+    };
+    return lookup[scope] || 'Active Entities';
+};
+
 const rowDisplayName = (row, scope) => {
     if (scope === 'service') return row.service;
     if (scope === 'namespace') return `${row.namespace}`;
@@ -292,7 +335,6 @@ const ProfilingStatusPage = () => {
     const [scopeCounts, setScopeCounts] = useState({});
     const [loading, setLoading] = useState(false);
     const [selectionModel, setSelectionModel] = useState([]);
-    const [activeCount, setActiveCount] = useState(0);
     const [totalCount, setTotalCount] = useState(0);
     const [page, setPage] = useState(0);
     const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
@@ -410,7 +452,6 @@ const ProfilingStatusPage = () => {
                 const normalizedRows = (data.rows || []).map((row) => formatRowForScope(row, scope));
                 setRows(normalizedRows);
                 setScopeCounts(data.tabCounts || data.tab_counts || {});
-                setActiveCount(data.activeHosts || data.active_hosts || 0);
                 setTotalCount(data.totalCount || data.total_count || normalizedRows.length);
                 setLoading(false);
             })
@@ -629,10 +670,10 @@ const ProfilingStatusPage = () => {
                 </Box>
                 <Box sx={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                        Active Hosts
+                        {scopeActiveLabel(activeScope)}
                     </Typography>
                     <Typography variant="subtitle1" sx={{ fontWeight: 700, color: '#16a34a' }}>
-                        {(activeCount || 0).toLocaleString()} of {(totalCount || 0).toLocaleString()}
+                        {(scopeCounts[activeScope] ?? totalCount ?? 0).toLocaleString()}
                     </Typography>
                 </Box>
             </Box>
