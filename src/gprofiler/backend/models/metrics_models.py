@@ -353,11 +353,32 @@ class ProfilingInventoryStatusRequest(BaseModel):
     profiling_status: Optional[List[str]] = None
     command_type: Optional[List[str]] = None
     pids: Optional[List[int]] = None
+    page: int = 0
+    page_size: int = 50
+    sort_by: Optional[str] = None
+    sort_order: str = "asc"
 
     @validator("scope")
     def validate_scope(cls, v):
         if v not in ["service", "namespace", "host", "pod", "container", "process"]:
             raise ValueError('scope must be one of "service", "namespace", "host", "pod", "container", or "process"')
+        return v
+
+    @validator("page")
+    def validate_page(cls, v):
+        return v if v and v > 0 else 0
+
+    @validator("page_size")
+    def validate_page_size(cls, v):
+        if not v or v <= 0:
+            return 50
+        return min(v, 200)
+
+    @validator("sort_order")
+    def validate_sort_order(cls, v):
+        v = (v or "asc").lower()
+        if v not in ("asc", "desc"):
+            raise ValueError('sort_order must be "asc" or "desc"')
         return v
 
 
@@ -396,4 +417,6 @@ class ProfilingInventoryStatusResponse(CamelModel):
     rows: List[ProfilingInventoryStatus]
     tab_counts: Dict[str, int]
     active_hosts: int
-    total_count: int
+    total_count: int  # total groups matching the filter (not just the current page)
+    page: int
+    page_size: int

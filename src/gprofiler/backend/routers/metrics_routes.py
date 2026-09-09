@@ -143,6 +143,10 @@ def profiling_inventory_status_params(
     profiling_status: Optional[List[str]] = Query(None, description="Filter by profiling status(es)"),
     command_type: Optional[List[str]] = Query(None, description="Filter by command type(s)"),
     pids: Optional[List[int]] = Query(None, description="Filter by PIDs"),
+    page: int = Query(0, ge=0, description="Zero-based page index"),
+    page_size: int = Query(50, ge=1, le=200, description="Rows per page (max 200)"),
+    sort_by: Optional[str] = Query(None, description="Column to sort by (defaults to scope key order)"),
+    sort_order: str = Query("asc", description="Sort direction: asc or desc"),
 ) -> ProfilingInventoryStatusRequest:
     return ProfilingInventoryStatusRequest(
         scope=scope,
@@ -158,6 +162,10 @@ def profiling_inventory_status_params(
         profiling_status=profiling_status,
         command_type=command_type,
         pids=pids,
+        page=page,
+        page_size=page_size,
+        sort_by=sort_by,
+        sort_order=sort_order,
     )
 
 
@@ -1092,6 +1100,10 @@ def get_profiling_workload_status(
         command_types=profiling_params.command_type,
         pids=profiling_params.pids,
         exact_match=profiling_params.exact_match,
+        page=profiling_params.page,
+        page_size=profiling_params.page_size,
+        sort_by=profiling_params.sort_by,
+        sort_order=profiling_params.sort_order,
     )
 
 

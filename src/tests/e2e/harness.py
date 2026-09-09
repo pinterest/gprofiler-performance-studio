@@ -125,12 +125,26 @@ def send_heartbeat(client: Client, **kwargs: Any) -> Dict[str, Any]:
 
 
 def get_workload_status(
-    client: Client, scope: str = "host", service_name: Optional[str] = None
+    client: Client,
+    scope: str = "host",
+    service_name: Optional[str] = None,
+    page: Optional[int] = None,
+    page_size: Optional[int] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = None,
 ) -> Dict[str, Any]:
     params: Dict[str, Any] = {"scope": scope}
     if service_name:
         params["service_name"] = service_name
         params["exact_match"] = "true"
+    if page is not None:
+        params["page"] = page
+    if page_size is not None:
+        params["page_size"] = page_size
+    if sort_by is not None:
+        params["sort_by"] = sort_by
+    if sort_order is not None:
+        params["sort_order"] = sort_order
     resp = client.get(WORKLOAD_STATUS, params=params)
     resp.raise_for_status()
     return resp.json()

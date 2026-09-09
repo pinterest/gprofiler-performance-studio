@@ -324,3 +324,58 @@ def test_at_s15_partial_inventory(client):
     assert tabs["process"] == 1
     # No invented pod relationships.
     assert tabs["pod"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# Pagination & server-side sorting (AT-S16 .. AT-S17)
+# --------------------------------------------------------------------------- #
+
+def test_at_s16_host_scope_pagination(client):
+    """AT-S16: host scope is paginated; pages are disjoint and total_count is the full match."""
+    service = h.unique("s16")
+    hosts = sorted(h.unique("host") for _ in range(5))
+    for host in hosts:
+        h.send_heartbeat(
+            client,
+            hostname=host,
+            service_name=service,
+            containers=[h.container("app", [h.process(1234)])],
+        )
+
+    first = h.get_workload_status(
+        client, scope="host", service_name=service, page=0, page_size=2, sort_by="hostname", sort_order="asc"
+    )
+    assert first["totalCount"] == 5
+    assert len(h.rows_for(first, service)) == 2
+
+    seen = []
+    for page in range(3):
+        status = h.get_workload_status(
+            client, scope="host", service_name=service, page=page, page_size=2, sort_by="hostname", sort_order="asc"
+        )
+        seen.extend(r["hostname"] for r in h.rows_for(status, service))
+
+    # All five hosts appear exactly once across the three pages (no overlap, no drops).
+    assert sorted(seen) == hosts
+
+
+def test_at_s17_host_scope_sorting(client):
+    """AT-S17: sort_order flips the first row (server-side sort over the full set)."""
+    service = h.unique("s17")
+    hosts = sorted(h.unique("host") for _ in range(3))
+    for host in hosts:
+        h.send_heartbeat(
+            client,
+            hostname=host,
+            service_name=service,
+            containers=[h.container("app", [h.process(1234)])],
+        )
+
+    asc = h.get_workload_status(
+        client, scope="host", service_name=service, page=0, page_size=1, sort_by="hostname", sort_order="asc"
+    )
+    desc = h.get_workload_status(
+        client, scope="host", service_name=service, page=0, page_size=1, sort_by="hostname", sort_order="desc"
+    )
+    assert h.rows_for(asc, service)[0]["hostname"] == hosts[0]
+    assert h.rows_for(desc, service)[0]["hostname"] == hosts[-1]

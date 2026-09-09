@@ -14,7 +14,7 @@ import {
     Typography,
 } from '@mui/material';
 import queryString from 'query-string';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useHistory, useLocation } from 'react-router-dom';
 
 import { DATA_URLS } from '../../api/urls';
@@ -51,6 +51,29 @@ const EMPTY_FILTERS = {
     processName: '',
     commandType: '',
     status: '',
+};
+
+const DEFAULT_PAGE_SIZE = 50;
+
+// DataGrid column field (camelCase) -> backend sort_by key (snake_case). Only
+// mapped fields are sent; anything else is ignored (backend also whitelists).
+const SORT_FIELD_MAP = {
+    service: 'service_name',
+    hostname: 'hostname',
+    namespace: 'namespace',
+    podName: 'pod_name',
+    containerName: 'container_name',
+    workloadName: 'workload_name',
+    processName: 'process_name',
+    pid: 'pid',
+    heartbeatTimestamp: 'heartbeat_timestamp',
+    profilingStatus: 'profiling_status',
+    agentVersion: 'agent_version',
+    hostCount: 'host_count',
+    namespaceCount: 'namespace_count',
+    podCount: 'pod_count',
+    containerCount: 'container_count',
+    processCount: 'process_count',
 };
 
 const readField = (row, camelKey, snakeKey = camelKey) => row[camelKey] ?? row[snakeKey];
@@ -271,6 +294,16 @@ const ProfilingStatusPage = () => {
     const [selectionModel, setSelectionModel] = useState([]);
     const [activeCount, setActiveCount] = useState(0);
     const [totalCount, setTotalCount] = useState(0);
+    const [page, setPage] = useState(0);
+    const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+    const [sortModel, setSortModel] = useState([]);
+    // Refs mirror the paging/sort state so the stable fetch callback and the
+    // 30s refresh can read current values without being re-created on change.
+    const pageRef = useRef(0);
+    const pageSizeRef = useRef(DEFAULT_PAGE_SIZE);
+    const sortRef = useRef([]);
+    // Monotonic request id so a slow response for a stale page/scope is dropped.
+    const requestSeq = useRef(0);
     const [filters, setFilters] = useState(EMPTY_FILTERS);
     const [appliedFilters, setAppliedFilters] = useState(EMPTY_FILTERS);
     const [enablePerfSpect, setEnablePerfSpect] = useState(false);
@@ -343,7 +376,10 @@ const ProfilingStatusPage = () => {
         }
     }, [duration, enablePerfSpect, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
 
-    const fetchProfilingStatus = useCallback((filterParams, scope = activeScope) => {
+    const fetchProfilingStatus = useCallback((filterParams, scope = activeScope, opts = {}) => {
+        const pageArg = opts.page ?? pageRef.current;
+        const pageSizeArg = opts.pageSize ?? pageSizeRef.current;
+        const sortArg = opts.sortModel ?? sortRef.current;
         setLoading(true);
         const params = new URLSearchParams();
         params.append('scope', scope);
@@ -359,9 +395,18 @@ const ProfilingStatusPage = () => {
         if (filterParams.commandType) params.append('command_type', filterParams.commandType);
         if (filterParams.status) params.append('profiling_status', filterParams.status);
 
+        params.append('page', pageArg);
+        params.append('page_size', pageSizeArg);
+        if (sortArg && sortArg.length && SORT_FIELD_MAP[sortArg[0].field]) {
+            params.append('sort_by', SORT_FIELD_MAP[sortArg[0].field]);
+            params.append('sort_order', sortArg[0].sort || 'asc');
+        }
+
+        const seq = ++requestSeq.current;
         fetch(`${DATA_URLS.GET_PROFILING_WORKLOAD_STATUS}?${params.toString()}`)
             .then((res) => res.json())
             .then((data) => {
+                if (seq !== requestSeq.current) return; // a newer request superseded this one
                 const normalizedRows = (data.rows || []).map((row) => formatRowForScope(row, scope));
                 setRows(normalizedRows);
                 setScopeCounts(data.tabCounts || data.tab_counts || {});
@@ -369,8 +414,11 @@ const ProfilingStatusPage = () => {
                 setTotalCount(data.totalCount || data.total_count || normalizedRows.length);
                 setLoading(false);
             })
-            .catch(() => setLoading(false));
+            .catch(() => {
+                if (seq === requestSeq.current) setLoading(false);
+            });
     }, [activeScope]);
+
 
     const updateURL = useCallback((scope, nextFilters) => {
         const searchParams = { scope };
@@ -385,7 +433,9 @@ const ProfilingStatusPage = () => {
     const applyFilters = useCallback(() => {
         setAppliedFilters(filters);
         setSelectionModel([]);
-        fetchProfilingStatus(filters, activeScope);
+        pageRef.current = 0;
+        setPage(0);
+        fetchProfilingStatus(filters, activeScope, { page: 0 });
         updateURL(activeScope, filters);
     }, [activeScope, fetchProfilingStatus, filters, updateURL]);
 
@@ -393,7 +443,9 @@ const ProfilingStatusPage = () => {
         setFilters(EMPTY_FILTERS);
         setAppliedFilters(EMPTY_FILTERS);
         setSelectionModel([]);
-        fetchProfilingStatus(EMPTY_FILTERS, activeScope);
+        pageRef.current = 0;
+        setPage(0);
+        fetchProfilingStatus(EMPTY_FILTERS, activeScope, { page: 0 });
         updateURL(activeScope, EMPTY_FILTERS);
     }, [activeScope, fetchProfilingStatus, updateURL]);
 
@@ -419,7 +471,11 @@ const ProfilingStatusPage = () => {
         setActiveScope(scope);
         setFilters(urlFilters);
         setAppliedFilters(urlFilters);
-        fetchProfilingStatus(urlFilters, scope);
+        pageRef.current = 0;
+        setPage(0);
+        sortRef.current = [];
+        setSortModel([]);
+        fetchProfilingStatus(urlFilters, scope, { page: 0, sortModel: [] });
     }, [fetchProfilingStatus, location.search]);
 
     useEffect(() => {
@@ -432,9 +488,37 @@ const ProfilingStatusPage = () => {
     const handleScopeChange = (_, nextScope) => {
         setActiveScope(nextScope);
         setSelectionModel([]);
-        fetchProfilingStatus(appliedFilters, nextScope);
+        pageRef.current = 0;
+        setPage(0);
+        sortRef.current = [];
+        setSortModel([]);
+        fetchProfilingStatus(appliedFilters, nextScope, { page: 0, sortModel: [] });
         updateURL(nextScope, appliedFilters);
     };
+
+    const handlePageChange = useCallback((newPage) => {
+        pageRef.current = newPage;
+        setPage(newPage);
+        setSelectionModel([]); // selection is per-page (Gmail-style)
+        fetchProfilingStatus(appliedFilters, activeScope, { page: newPage });
+    }, [activeScope, appliedFilters, fetchProfilingStatus]);
+
+    const handlePageSizeChange = useCallback((newSize) => {
+        pageSizeRef.current = newSize;
+        setPageSize(newSize);
+        pageRef.current = 0;
+        setPage(0);
+        setSelectionModel([]);
+        fetchProfilingStatus(appliedFilters, activeScope, { page: 0, pageSize: newSize });
+    }, [activeScope, appliedFilters, fetchProfilingStatus]);
+
+    const handleSortModelChange = useCallback((model) => {
+        sortRef.current = model;
+        setSortModel(model);
+        pageRef.current = 0;
+        setPage(0);
+        fetchProfilingStatus(appliedFilters, activeScope, { page: 0, sortModel: model });
+    }, [activeScope, appliedFilters, fetchProfilingStatus]);
 
     const buildRequests = useCallback((action, selectedRows) => buildProfilingRequests(action, selectedRows, {
         scope: activeScope,
@@ -579,16 +663,23 @@ const ProfilingStatusPage = () => {
                         columns={columns}
                         data={rows}
                         isLoading={loading}
-                        pageSize={50}
+                        pageSize={pageSize}
                         rowHeight={50}
-                        autoPageSize
+                        paginationMode="server"
+                        rowCount={totalCount}
+                        page={page}
+                        onPageChange={handlePageChange}
+                        onPageSizeChange={handlePageSizeChange}
+                        sortingMode="server"
+                        sortModel={sortModel}
+                        onSortModelChange={handleSortModelChange}
                         checkboxSelection
                         onSelectionModelChange={setSelectionModel}
                         selectionModel={selectionModel}
                     />
                     <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-                        Showing {rows.length} {scopeEntityLabel(activeScope)}
-                        {selectionModel.length ? ` \u00b7 ${selectionModel.length} selected` : ''}
+                        Showing {rows.length} of {totalCount} {scopeEntityLabel(activeScope)}
+                        {selectionModel.length ? ` \u00b7 ${selectionModel.length} selected on this page` : ''}
                     </Typography>
                 </Box>
 
