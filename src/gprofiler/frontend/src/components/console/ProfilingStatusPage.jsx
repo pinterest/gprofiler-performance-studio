@@ -104,28 +104,35 @@ const formatHeartbeat = (value) => {
 
 // Build a profiles-view deep link for a status row. Each scope maps to the
 // filters the profiles view supports: the exact `service` param, exact Host name
-// (hn,is), a "Contains" Container name match (cn,has) that encodes the
-// namespace/deployment/container, and an exact process for the process scope.
+// (hn,is), a "Contains" Container name match (cn,has) that joins the available
+// container/deployment/namespace parts, and an exact process for the process scope.
 const buildScopeProfileUrl = (row, scope, view) => {
     const baseUrl = `${window.location.protocol}//${window.location.host}`;
     const params = { gtab: '1', pm: '1', rtms: '1', time: '1h', wp: '100', service: row.service, view };
     const rules = [];
     const namespace = row.namespace || '';
     const deployment = row.workloadName || '';
+    const container = row.containerName || '';
+    // Join only the available parts with "_" (skip empties to avoid "__").
+    const containsValue = (parts) => parts.filter(Boolean).join('_');
 
     if (scope === 'namespace') {
-        if (namespace) rules.push(`cn,has,_${namespace}`);
+        const value = containsValue([namespace]);
+        if (value) rules.push(`cn,has,${value}`);
     } else if (scope === 'host') {
         if (row.host) rules.push(`hn,is,${row.host}`);
     } else if (scope === 'pod') {
         if (row.host) rules.push(`hn,is,${row.host}`);
-        rules.push(`cn,has,_${deployment}_${namespace}`);
+        const value = containsValue([deployment, namespace]);
+        if (value) rules.push(`cn,has,${value}`);
     } else if (scope === 'container') {
         if (row.host) rules.push(`hn,is,${row.host}`);
-        rules.push(`cn,has,${row.containerName || ''}_${deployment}_${namespace}`);
+        const value = containsValue([container, deployment, namespace]);
+        if (value) rules.push(`cn,has,${value}`);
     } else if (scope === 'process') {
         if (row.host) rules.push(`hn,is,${row.host}`);
-        if (row.processName) params.p = row.processName;
+        // Flamegraph process nodes use the 15-char kernel comm, so match that prefix.
+        if (row.processName) params.p = row.processName.slice(0, 15);
     }
     // service scope: exact service via the `service` param only, no RQL rule.
     if (rules.length) {
