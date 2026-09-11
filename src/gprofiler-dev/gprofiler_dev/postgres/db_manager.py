@@ -1958,29 +1958,36 @@ class DBManager(metaclass=Singleton):
         filter_where = " AND ".join(conditions) if conditions else "TRUE"
 
         cte = f"""
-        WITH latest_commands AS (
+        WITH fresh_hosts AS MATERIALIZED (
+            -- Restrict to the active fleet FIRST and materialize it, so grouping/sorting
+            -- downstream can never drive a full-index scan over the (heavily stale)
+            -- HostHeartbeats table. This is the difference between ~1s and a timeout.
             SELECT
-                pc.hostname,
-                pc.service_name,
-                pc.command_type,
-                pc.status,
-                pc.combined_config,
-                ROW_NUMBER() OVER (PARTITION BY pc.hostname, pc.service_name ORDER BY pc.created_at DESC) AS rn
-            FROM ProfilingCommands pc
-        ),
-        current_commands AS (
-            SELECT hostname, service_name, command_type, status, combined_config
-            FROM latest_commands
-            WHERE rn = 1
-        ),
-        flattened AS (
-            SELECT
+                h.id,
                 h.hostname,
                 host(h.ip_address) AS ip_address,
                 h.service_name,
                 h.agent_version,
                 h.run_mode,
-                h.heartbeat_timestamp,
+                h.heartbeat_timestamp
+            FROM HostHeartbeats h
+            WHERE h.heartbeat_timestamp > NOW() - INTERVAL '2 minutes'
+              AND {service_filter}
+        ),
+        current_commands AS (
+            -- ProfilingCommands is UNIQUE (hostname, service_name), so it is already
+            -- one row per host/service; no window/dedup needed.
+            SELECT hostname, service_name, command_type, status, combined_config
+            FROM ProfilingCommands
+        ),
+        flattened AS (
+            SELECT
+                fh.hostname,
+                fh.ip_address,
+                fh.service_name,
+                fh.agent_version,
+                fh.run_mode,
+                fh.heartbeat_timestamp,
                 hc.container_name,
                 hc.namespace,
                 hc.pod_name,
@@ -2013,13 +2020,11 @@ class DBManager(metaclass=Singleton):
                         END
                     ELSE c.status::text
                 END AS profiling_status
-            FROM HostHeartbeats h
+            FROM fresh_hosts fh
             LEFT JOIN current_commands c
-                ON h.hostname = c.hostname AND h.service_name = c.service_name
-            LEFT JOIN HeartbeatContainers hc ON hc.host_id = h.id
+                ON fh.hostname = c.hostname AND fh.service_name = c.service_name
+            LEFT JOIN HeartbeatContainers hc ON hc.host_id = fh.id
             LEFT JOIN HeartbeatProcesses hp ON hp.container_row_id = hc.id
-            WHERE h.heartbeat_timestamp > NOW() - INTERVAL '2 minutes'
-              AND {service_filter}
         ),
         filtered AS (
             SELECT * FROM flattened WHERE {filter_where}
