@@ -54,6 +54,7 @@ const EMPTY_FILTERS = {
 };
 
 const DEFAULT_PAGE_SIZE = 50;
+const AUTO_REFRESH_INTERVAL_MS = 30000;
 
 // DataGrid column field (camelCase) -> backend sort_by key (snake_case). Only
 // mapped fields are sent; anything else is ignored (backend also whitelists).
@@ -346,6 +347,14 @@ const ProfilingStatusPage = () => {
     const sortRef = useRef([]);
     // Monotonic request id so a slow response for a stale page/scope is dropped.
     const requestSeq = useRef(0);
+    // Timer for the periodic background refresh. It is always cleared and
+    // rescheduled by fetchProfilingStatus itself, so it can never fire concurrently
+    // with (or duplicate) a manual fetch.
+    const autoRefreshTimeoutRef = useRef(null);
+    // The query string of the last history.replace we triggered ourselves, so the
+    // location-sync effect below can tell that apart from a real external navigation
+    // (deep link, browser back/forward) and avoid double-fetching for our own updates.
+    const lastSelfUpdatedSearchRef = useRef(null);
     const [filters, setFilters] = useState(EMPTY_FILTERS);
     const [appliedFilters, setAppliedFilters] = useState(EMPTY_FILTERS);
     const [enablePerfSpect, setEnablePerfSpect] = useState(false);
@@ -418,7 +427,7 @@ const ProfilingStatusPage = () => {
         }
     }, [duration, enablePerfSpect, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
 
-    const fetchProfilingStatus = useCallback((filterParams, scope = activeScope, opts = {}) => {
+    const fetchProfilingStatus = useCallback((filterParams, scope, opts = {}) => {
         const pageArg = opts.page ?? pageRef.current;
         const pageSizeArg = opts.pageSize ?? pageSizeRef.current;
         const sortArg = opts.sortModel ?? sortRef.current;
@@ -444,6 +453,12 @@ const ProfilingStatusPage = () => {
             params.append('sort_order', sortArg[0].sort || 'asc');
         }
 
+        // Cancel any pending background refresh so it can never fire concurrently with
+        // this fetch (manual or auto); the next refresh is (re)scheduled once this settles.
+        if (autoRefreshTimeoutRef.current) {
+            clearTimeout(autoRefreshTimeoutRef.current);
+        }
+
         const seq = ++requestSeq.current;
         fetch(`${DATA_URLS.GET_PROFILING_WORKLOAD_STATUS}?${params.toString()}`)
             .then((res) => res.json())
@@ -457,8 +472,18 @@ const ProfilingStatusPage = () => {
             })
             .catch(() => {
                 if (seq === requestSeq.current) setLoading(false);
+            })
+            .finally(() => {
+                // Only the request that is still current gets to schedule the next
+                // background refresh, using the filters/scope it just displayed.
+                if (seq === requestSeq.current) {
+                    autoRefreshTimeoutRef.current = setTimeout(() => {
+                        fetchProfilingStatus(filterParams, scope);
+                    }, AUTO_REFRESH_INTERVAL_MS);
+                }
             });
-    }, [activeScope]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
 
     const updateURL = useCallback((scope, nextFilters) => {
@@ -468,7 +493,11 @@ const ProfilingStatusPage = () => {
                 searchParams[key] = nextFilters[key];
             }
         });
-        history.replace({ pathname: '/profiling', search: queryString.stringify(searchParams) });
+        const search = queryString.stringify(searchParams);
+        // Remember that we caused this URL change so the location-sync effect below
+        // (deep links / browser back-forward) doesn't also re-fetch for it.
+        lastSelfUpdatedSearchRef.current = search;
+        history.replace({ pathname: '/profiling', search });
     }, [history]);
 
     const applyFilters = useCallback(() => {
@@ -495,6 +524,16 @@ const ProfilingStatusPage = () => {
     }, []);
 
     useEffect(() => {
+        // Skip URL changes we triggered ourselves (applyFilters/clearAllFilters/
+        // handleScopeChange already fetched with the new state); only react here to
+        // real external navigation, such as a deep link or the browser back/forward
+        // buttons, so we don't fire a second, duplicate request for our own updates.
+        const currentSearch = location.search.replace(/^\?/, '');
+        if (lastSelfUpdatedSearchRef.current !== null && currentSearch === lastSelfUpdatedSearchRef.current) {
+            lastSelfUpdatedSearchRef.current = null;
+            return;
+        }
+
         const searchParams = queryString.parse(location.search);
         const scope = searchParams.scope || 'service';
         const urlFilters = {
@@ -520,11 +559,14 @@ const ProfilingStatusPage = () => {
     }, [fetchProfilingStatus, location.search]);
 
     useEffect(() => {
-        const refreshInterval = setInterval(() => {
-            fetchProfilingStatus(appliedFilters, activeScope);
-        }, 30000);
-        return () => clearInterval(refreshInterval);
-    }, [activeScope, appliedFilters, fetchProfilingStatus]);
+        // fetchProfilingStatus reschedules itself after every call (see above); this
+        // only needs to cancel a pending timer if the page unmounts mid-cycle.
+        return () => {
+            if (autoRefreshTimeoutRef.current) {
+                clearTimeout(autoRefreshTimeoutRef.current);
+            }
+        };
+    }, []);
 
     const handleScopeChange = (_, nextScope) => {
         setActiveScope(nextScope);
