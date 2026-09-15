@@ -32,4 +32,5 @@ USER non_root
 
 # cron jobs do not inherit the container env, so psql couldn't find PGHOST/etc.
 # Persist the runtime env to a file that the cron scripts load on each run.
-CMD printenv > /tmp/cron.env && /logrotate_conf.sh && sudo crond && tail -f /var/log/cron/cron.log
+# touch cron.log at runtime: a bind mount over /var/log/cron hides the build-time file.
+CMD printenv > /tmp/cron.env && /logrotate_conf.sh && sudo crond && touch /var/log/cron/cron.log && tail -f /var/log/cron/cron.log
