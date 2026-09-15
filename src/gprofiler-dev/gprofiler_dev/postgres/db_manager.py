@@ -1861,16 +1861,73 @@ class DBManager(metaclass=Singleton):
         "container": "container_name IS NOT NULL",
         "process": "pid IS NOT NULL",
     }
-    # Whitelist of sortable columns -> grouped-query expression. Client input is
+    # Join depth at which each logical column becomes available in the flatten base:
+    # 0 = HostHeartbeats (+ its latest command), 1 = HeartbeatContainers, 2 = HeartbeatProcesses.
+    _WORKLOAD_COLUMN_DEPTH: Dict[str, int] = {
+        "hostname": 0,
+        "ip_address": 0,
+        "service_name": 0,
+        "agent_version": 0,
+        "run_mode": 0,
+        "heartbeat_timestamp": 0,
+        "command_type": 0,
+        "namespace": 1,
+        "pod_name": 1,
+        "container_name": 1,
+        "workload_name": 1,
+        "workload_kind": 1,
+        "process_name": 2,
+        "pid": 2,
+        "profiling_status": 2,
+    }
+    # Minimum base join depth needed to enumerate the distinct entities for each scope.
+    _WORKLOAD_SCOPE_DEPTH: Dict[str, int] = {
+        "service": 0,
+        "host": 0,
+        "namespace": 1,
+        "pod": 1,
+        "container": 1,
+        "process": 2,
+    }
+    # Key column -> base-table qualified expression, used to push the per-entity
+    # correlation down onto the indexed base tables in the hydrate LATERAL.
+    _WORKLOAD_KEY_ALIAS: Dict[str, str] = {
+        "service_name": "fh.service_name",
+        "hostname": "fh.hostname",
+        "namespace": "hc.namespace",
+        "pod_name": "hc.pod_name",
+        "container_name": "hc.container_name",
+        "pid": "hp.pid",
+    }
+    # Whitelist of sortable columns that are NOT scope key columns -> (aggregate expression
+    # over the entity's rows on the wrapped alias ``b``, required base depth). Scope key
+    # columns are sorted directly on the key set and are handled separately. Client input is
     # matched against these keys only, so no caller string reaches the SQL.
-    _WORKLOAD_SORT_COLUMNS: Dict[str, str] = {
-        "service_name": "service_name",
+    _WORKLOAD_SORT_AGG: Dict[str, Tuple[str, int]] = {
+        "hostname": ("(array_agg(b.hostname ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1]", 0),
+        "ip_address": ("(array_agg(b.ip_address ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1]", 0),
+        "namespace": ("(array_agg(b.namespace ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1]", 1),
+        "pod_name": ("(array_agg(b.pod_name ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1]", 1),
+        "container_name": ("(array_agg(b.container_name ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1]", 1),
+        "process_name": ("(array_agg(b.process_name ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1]", 2),
+        "pid": ("(array_agg(b.pid ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1]", 2),
+        "heartbeat_timestamp": ("MAX(b.heartbeat_timestamp)", 0),
+        "profiling_status": ("(array_agg(b.profiling_status ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1]", 2),
+        "agent_version": ("(array_agg(b.agent_version ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1]", 0),
+        "host_count": ("COUNT(DISTINCT b.hostname)", 0),
+        "namespace_count": ("COUNT(DISTINCT b.namespace) FILTER (WHERE b.namespace IS NOT NULL)", 1),
+        "pod_count": ("COUNT(DISTINCT b.pod_name) FILTER (WHERE b.pod_name IS NOT NULL)", 1),
+        "container_count": ("COUNT(DISTINCT b.container_name) FILTER (WHERE b.container_name IS NOT NULL)", 1),
+        "process_count": ("COUNT(DISTINCT (b.pid, b.process_name)) FILTER (WHERE b.pid IS NOT NULL)", 2),
+    }
+    # Sortable column -> output column/alias produced by the grouped aggregation, used by
+    # the single-pass (whole-scope GROUP BY) query path for its ORDER BY.
+    _WORKLOAD_SORT_ALIAS: Dict[str, str] = {
         "hostname": "l_hostname",
         "ip_address": "l_ip_address",
         "namespace": "l_namespace",
         "pod_name": "l_pod_name",
         "container_name": "l_container_name",
-        "workload_name": "l_workload_name",
         "process_name": "l_process_name",
         "pid": "l_pid",
         "heartbeat_timestamp": "l_heartbeat_timestamp",
@@ -1883,122 +1940,9 @@ class DBManager(metaclass=Singleton):
         "process_count": "process_count",
     }
 
-    def _workload_inventory_cte(
-        self,
-        service_names: Optional[List[str]],
-        exact_match: bool,
-        hostnames: Optional[List[str]],
-        ip_addresses: Optional[List[str]],
-        namespaces: Optional[List[str]],
-        pod_names: Optional[List[str]],
-        container_names: Optional[List[str]],
-        workload_names: Optional[List[str]],
-        process_names: Optional[List[str]],
-        profiling_statuses: Optional[List[str]],
-        command_types: Optional[List[str]],
-        pids: Optional[List[int]],
-    ) -> Tuple[str, Dict[str, Any]]:
-        """Build the shared ``WITH ... filtered AS (...)`` CTE for workload inventory.
-
-        The flattened CTE joins HostHeartbeats to the latest per-host command and to the
-        normalized container/process tables, so a host with no containers contributes one
-        row (NULL container/process columns) and every (container, process) pair is one
-        row. All caller-supplied filters are applied inside ``filtered`` so both the
-        tab-count and grouped-row queries operate on the same filtered set.
-        """
-        params: Dict[str, Any] = {}
-        conditions: List[str] = []
-
-        def add_partial(column: str, values: Optional[List[Any]], prefix: str) -> None:
-            if not values:
-                return
-            ors = []
-            for idx, value in enumerate(values):
-                key = f"{prefix}_{idx}"
-                ors.append(f"{column}::text ILIKE %({key})s")
-                params[key] = f"%{value}%"
-            conditions.append("(" + " OR ".join(ors) + ")")
-
-        def add_exact(column: str, values: Optional[List[Any]], prefix: str) -> None:
-            if not values:
-                return
-            ors = []
-            for idx, value in enumerate(values):
-                key = f"{prefix}_{idx}"
-                ors.append(f"LOWER({column}::text) = LOWER(%({key})s)")
-                params[key] = str(value)
-            conditions.append("(" + " OR ".join(ors) + ")")
-
-        service_filter = "TRUE"
-        if service_names:
-            if exact_match:
-                service_filter = "h.service_name = ANY(%(service_names)s)"
-                params["service_names"] = service_names
-            else:
-                ors = []
-                for idx, service_name in enumerate(service_names):
-                    key = f"svc_{idx}"
-                    ors.append(f"h.service_name ILIKE %({key})s")
-                    params[key] = f"%{service_name}%"
-                service_filter = "(" + " OR ".join(ors) + ")"
-
-        add_partial("hostname", hostnames, "host")
-        add_partial("ip_address", ip_addresses, "ip")
-        add_partial("namespace", namespaces, "ns")
-        add_partial("pod_name", pod_names, "pod")
-        add_partial("container_name", container_names, "cont")
-        add_partial("workload_name", workload_names, "wl")
-        add_partial("process_name", process_names, "proc")
-        add_exact("profiling_status", profiling_statuses, "pstat")
-        add_exact("command_type", command_types, "ctype")
-        if pids:
-            conditions.append("pid = ANY(%(pids)s)")
-            params["pids"] = pids
-
-        filter_where = " AND ".join(conditions) if conditions else "TRUE"
-
-        cte = f"""
-        WITH fresh_hosts AS MATERIALIZED (
-            -- Restrict to the active fleet FIRST and materialize it, so grouping/sorting
-            -- downstream can never drive a full-index scan over the (heavily stale)
-            -- HostHeartbeats table. This is the difference between ~1s and a timeout.
-            SELECT
-                h.id,
-                h.hostname,
-                host(h.ip_address) AS ip_address,
-                h.service_name,
-                h.agent_version,
-                h.run_mode,
-                h.heartbeat_timestamp
-            FROM HostHeartbeats h
-            WHERE h.heartbeat_timestamp > NOW() - INTERVAL '2 minutes'
-              AND {service_filter}
-        ),
-        current_commands AS (
-            -- ProfilingCommands is UNIQUE (hostname, service_name), so it is already
-            -- one row per host/service; no window/dedup needed.
-            SELECT hostname, service_name, command_type, status, combined_config
-            FROM ProfilingCommands
-        ),
-        flattened AS (
-            SELECT
-                fh.hostname,
-                fh.ip_address,
-                fh.service_name,
-                fh.agent_version,
-                fh.run_mode,
-                fh.heartbeat_timestamp,
-                hc.container_name,
-                hc.namespace,
-                hc.pod_name,
-                hc.workload_name,
-                hc.workload_kind,
-                hp.pid,
-                hp.process_name,
-                COALESCE(c.command_type, 'N/A') AS command_type,
-                c.status AS command_status,
-                c.combined_config AS combined_config,
-                CASE
+    # Row-level PID-aware profiling status. Only valid at depth >= 2 (needs ``hp.pid``);
+    # references the latest command columns (``c.*``) exposed by ``current_commands``.
+    _WORKLOAD_PROFILING_STATUS_CASE = """CASE
                     WHEN c.status IS NULL THEN 'stopped'
                     WHEN c.command_type = 'start' AND c.status IN ('pending', 'sent', 'completed') THEN
                         -- PID-aware: an active "start" command may target only a subset of
@@ -2019,76 +1963,419 @@ class DBManager(metaclass=Singleton):
                             ELSE 'stopped'
                         END
                     ELSE c.status::text
-                END AS profiling_status
-            FROM fresh_hosts fh
-            LEFT JOIN current_commands c
-                ON fh.hostname = c.hostname AND fh.service_name = c.service_name
-            LEFT JOIN HeartbeatContainers hc ON hc.host_id = fh.id
-            LEFT JOIN HeartbeatProcesses hp ON hp.container_row_id = hc.id
-        ),
-        filtered AS (
-            SELECT * FROM flattened WHERE {filter_where}
-        )
+                END AS profiling_status"""
+
+    def _workload_filter_spec(
+        self,
+        service_names: Optional[List[str]],
+        exact_match: bool,
+        hostnames: Optional[List[str]],
+        ip_addresses: Optional[List[str]],
+        namespaces: Optional[List[str]],
+        pod_names: Optional[List[str]],
+        container_names: Optional[List[str]],
+        workload_names: Optional[List[str]],
+        process_names: Optional[List[str]],
+        profiling_statuses: Optional[List[str]],
+        command_types: Optional[List[str]],
+        pids: Optional[List[int]],
+    ) -> Dict[str, Any]:
+        """Translate the caller-supplied filters into SQL fragments.
+
+        Returns a spec with:
+          * ``service_filter`` – predicate on the raw ``HostHeartbeats h`` alias, pushed
+            into the materialized ``fresh_hosts`` CTE.
+          * ``conditions`` – list of ``(sql, depth)`` predicates on the wrapped base alias
+            ``b`` (standard column names). ``depth`` is the minimum join depth at which the
+            referenced column becomes available.
+          * ``filter_depth`` – deepest ``depth`` among the active predicates.
+          * ``params`` – bound query parameters.
+
+        Every filter is applied identically wherever the base is used (tab counts, the
+        entity key set, and the per-entity aggregation), preserving the previous semantics
+        where all filters lived in a single ``filtered`` CTE.
         """
-        return cte, params
+        params: Dict[str, Any] = {}
+        conditions: List[Tuple[str, int]] = []
+
+        def add_partial(column: str, values: Optional[List[Any]], prefix: str) -> None:
+            if not values:
+                return
+            depth = self._WORKLOAD_COLUMN_DEPTH[column]
+            ors = []
+            for idx, value in enumerate(values):
+                key = f"{prefix}_{idx}"
+                ors.append(f"b.{column}::text ILIKE %({key})s")
+                params[key] = f"%{value}%"
+            conditions.append(("(" + " OR ".join(ors) + ")", depth))
+
+        def add_exact(column: str, values: Optional[List[Any]], prefix: str) -> None:
+            if not values:
+                return
+            depth = self._WORKLOAD_COLUMN_DEPTH[column]
+            ors = []
+            for idx, value in enumerate(values):
+                key = f"{prefix}_{idx}"
+                ors.append(f"LOWER(b.{column}::text) = LOWER(%({key})s)")
+                params[key] = str(value)
+            conditions.append(("(" + " OR ".join(ors) + ")", depth))
+
+        service_filter = "TRUE"
+        if service_names:
+            if exact_match:
+                service_filter = "fh.service_name = ANY(%(service_names)s)"
+                params["service_names"] = service_names
+            else:
+                ors = []
+                for idx, service_name in enumerate(service_names):
+                    key = f"svc_{idx}"
+                    ors.append(f"fh.service_name ILIKE %({key})s")
+                    params[key] = f"%{service_name}%"
+                service_filter = "(" + " OR ".join(ors) + ")"
+
+        add_partial("hostname", hostnames, "host")
+        add_partial("ip_address", ip_addresses, "ip")
+        add_partial("namespace", namespaces, "ns")
+        add_partial("pod_name", pod_names, "pod")
+        add_partial("container_name", container_names, "cont")
+        add_partial("workload_name", workload_names, "wl")
+        add_partial("process_name", process_names, "proc")
+        add_exact("profiling_status", profiling_statuses, "pstat")
+        add_exact("command_type", command_types, "ctype")
+        if pids:
+            conditions.append(("b.pid = ANY(%(pids)s)", self._WORKLOAD_COLUMN_DEPTH["pid"]))
+            params["pids"] = pids
+
+        filter_depth = max((depth for _, depth in conditions), default=0)
+        return {
+            "params": params,
+            "conditions": conditions,
+            "service_filter": service_filter,
+            "filter_depth": filter_depth,
+        }
+
+    def _workload_cte_prefix(self, service_filter: str) -> str:
+        """Shared ``WITH`` prefix: the materialized active fleet and its latest commands."""
+        return f"""
+        WITH fresh_hosts AS MATERIALIZED (
+            -- Restrict to the active fleet FIRST and materialize it, so grouping/sorting
+            -- downstream can never drive a full-index scan over the (heavily stale)
+            -- HostHeartbeats table. This is the difference between ~1s and a timeout.
+            SELECT
+                fh.id,
+                fh.hostname,
+                host(fh.ip_address) AS ip_address,
+                fh.service_name,
+                fh.agent_version,
+                fh.run_mode,
+                fh.heartbeat_timestamp
+            FROM HostHeartbeats fh
+            WHERE fh.heartbeat_timestamp > NOW() - INTERVAL '2 minutes'
+              AND {service_filter}
+        ),
+        current_commands AS (
+            -- ProfilingCommands is UNIQUE (hostname, service_name), so it is already
+            -- one row per host/service; no window/dedup needed.
+            SELECT hostname, service_name, command_type, status, combined_config
+            FROM ProfilingCommands
+        )"""
+
+    def _workload_base_sql(
+        self,
+        depth: int,
+        where_extra: Optional[List[str]] = None,
+        driving: str = "cte",
+        service_filter: str = "TRUE",
+    ) -> str:
+        """Build the flatten sub-SELECT down to ``depth`` (0=host, 1=+container, 2=+process).
+
+        Columns are exposed under stable, unqualified names so a single set of filter and
+        correlation predicates works at any depth. The container/process joins are only
+        added when the depth requires them, so shallow scopes never pay for the full
+        cross-product fan-out.
+
+        ``driving`` selects the host source:
+          * ``"cte"`` – scan the materialized ``fresh_hosts`` CTE once. Used for the
+            (single-pass) entity key set and tab counts.
+          * ``"direct"`` – read ``HostHeartbeats`` directly with the freshness + service
+            predicate inline. Used inside the hydrate LATERAL so a correlated
+            ``fh.service_name = p.service_name`` / ``fh.hostname = p.hostname`` predicate
+            in ``where_extra`` uses the HostHeartbeats indexes instead of re-scanning the
+            whole materialized CTE for every page entity.
+        """
+        ip_expr = "host(fh.ip_address) AS ip_address" if driving == "direct" else "fh.ip_address"
+        cols = [
+            "fh.id AS host_id",
+            "fh.hostname",
+            ip_expr,
+            "fh.service_name",
+            "fh.agent_version",
+            "fh.run_mode",
+            "fh.heartbeat_timestamp",
+            "COALESCE(c.command_type, 'N/A') AS command_type",
+            "c.status AS command_status",
+            "c.combined_config AS combined_config",
+        ]
+        joins = [
+            "LEFT JOIN current_commands c ON fh.hostname = c.hostname AND fh.service_name = c.service_name",
+        ]
+        if depth >= 1:
+            cols += ["hc.container_name", "hc.namespace", "hc.pod_name", "hc.workload_name", "hc.workload_kind"]
+            joins.append("LEFT JOIN HeartbeatContainers hc ON hc.host_id = fh.id")
+        if depth >= 2:
+            cols += ["hp.pid", "hp.process_name"]
+            joins.append("LEFT JOIN HeartbeatProcesses hp ON hp.container_row_id = hc.id")
+            cols.append(self._WORKLOAD_PROFILING_STATUS_CASE)
+        select_list = ",\n                ".join(cols)
+        join_list = "\n            ".join(joins)
+
+        where_terms: List[str] = []
+        if driving == "direct":
+            from_clause = "HostHeartbeats fh"
+            where_terms.append("fh.heartbeat_timestamp > NOW() - INTERVAL '2 minutes'")
+            where_terms.append(service_filter)
+        else:
+            from_clause = "fresh_hosts fh"
+        if where_extra:
+            where_terms.extend(where_extra)
+        where_sql = ("\n            WHERE " + " AND ".join(where_terms)) if where_terms else ""
+        return f"""SELECT
+                {select_list}
+            FROM {from_clause}
+            {join_list}{where_sql}"""
+
+    @staticmethod
+    def _workload_where(conditions: List[Tuple[str, int]], extra: Optional[List[str]] = None) -> str:
+        terms = [sql for sql, _ in conditions]
+        if extra:
+            terms.extend(extra)
+        return (" WHERE " + " AND ".join(terms)) if terms else ""
+
+    @staticmethod
+    def _workload_agg_columns() -> str:
+        """The per-group aggregate SELECT list (references the wrapped base alias ``b``).
+
+        Shared by both the entity-first LATERAL hydrate and the single-pass GROUP BY, so
+        the two code paths return byte-identical row shapes. ``l_*`` columns are the latest
+        (by heartbeat) representative for the group; the counts are per-scope cardinalities.
+        """
+        return """
+                COUNT(DISTINCT b.hostname) AS host_count,
+                COUNT(DISTINCT b.namespace) FILTER (WHERE b.namespace IS NOT NULL) AS namespace_count,
+                COUNT(DISTINCT b.pod_name) FILTER (WHERE b.pod_name IS NOT NULL) AS pod_count,
+                COUNT(DISTINCT b.container_name) FILTER (WHERE b.container_name IS NOT NULL) AS container_count,
+                COUNT(DISTINCT (b.pid, b.process_name)) FILTER (WHERE b.pid IS NOT NULL) AS process_count,
+                array_agg(DISTINCT b.pid) FILTER (WHERE b.pid IS NOT NULL) AS pids,
+                (array_agg(b.hostname ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_hostname,
+                (array_agg(b.ip_address ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_ip_address,
+                (array_agg(b.namespace ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_namespace,
+                (array_agg(b.pod_name ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_pod_name,
+                (array_agg(b.container_name ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_container_name,
+                (array_agg(b.workload_name ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_workload_name,
+                (array_agg(b.workload_kind ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_workload_kind,
+                (array_agg(b.process_name ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_process_name,
+                (array_agg(b.pid ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_pid,
+                (array_agg(b.command_type ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_command_type,
+                (array_agg(b.command_status ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_command_status,
+                (array_agg(b.combined_config ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_combined_config,
+                bool_or(b.profiling_status = 'active') AS any_active,
+                (array_agg(b.profiling_status ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_profiling_status,
+                (array_agg(b.agent_version ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_agent_version,
+                (array_agg(b.run_mode ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_run_mode,
+                MAX(b.heartbeat_timestamp) AS l_heartbeat_timestamp"""
+
+    def _workload_tab_counts(self, spec: Dict[str, Any]) -> Tuple[Dict[str, int], int]:
+        """Compute the six scope tab counts + active host total using tiered queries.
+
+        Instead of one pass of seven ``COUNT(DISTINCT tuple)`` over the full
+        host x container x process flatten (which times out once the child tables are
+        populated), each count is computed from the shallowest base that exposes its
+        columns, using ``COUNT(*) FROM (SELECT DISTINCT ...)`` (a hash-distinct that is far
+        cheaper than ``COUNT(DISTINCT tuple)``). All filters are still applied at every
+        tier, so the counts match the previous single-pass semantics.
+        """
+        prefix = self._workload_cte_prefix(spec["service_filter"])
+        params = spec["params"]
+        conditions = spec["conditions"]
+        filter_depth = spec["filter_depth"]
+
+        # Tier A (host/service/active): base at host depth (or deeper if filters require it).
+        base_a = self._workload_base_sql(max(0, filter_depth))
+        where_a = self._workload_where(conditions)
+        query_a = prefix + f""",
+        fa AS MATERIALIZED (
+            SELECT b.service_name, b.hostname FROM ({base_a}) b{where_a}
+        )
+        SELECT
+            (SELECT COUNT(DISTINCT service_name) FROM fa) AS c_service,
+            (SELECT COUNT(*) FROM (SELECT DISTINCT service_name, hostname FROM fa) d) AS c_host,
+            (SELECT COUNT(DISTINCT hostname) FROM fa) AS active_hosts
+        """
+        row_a = (self.db.execute(query_a, params, one_value=False, return_dict=True, fetch_all=True) or [{}])[0] or {}
+
+        # Tier B (namespace/pod/container): base at container depth.
+        base_b = self._workload_base_sql(max(1, filter_depth))
+        where_b = self._workload_where(conditions)
+        query_b = prefix + f""",
+        fb AS MATERIALIZED (
+            SELECT b.service_name, b.hostname, b.namespace, b.pod_name, b.container_name
+            FROM ({base_b}) b{where_b}
+        )
+        SELECT
+            (SELECT COUNT(*) FROM (SELECT DISTINCT service_name, namespace FROM fb WHERE namespace IS NOT NULL) d) AS c_namespace,
+            (SELECT COUNT(*) FROM (SELECT DISTINCT service_name, namespace, pod_name FROM fb WHERE pod_name IS NOT NULL) d) AS c_pod,
+            (SELECT COUNT(*) FROM (SELECT DISTINCT service_name, hostname, namespace, pod_name, container_name FROM fb WHERE container_name IS NOT NULL) d) AS c_container
+        """
+        row_b = (self.db.execute(query_b, params, one_value=False, return_dict=True, fetch_all=True) or [{}])[0] or {}
+
+        # Tier C (process): base at process depth. ``(host_id, pid)`` is 1:1 with
+        # ``(service_name, hostname, pid)`` (unique_host_heartbeat) but distinct on the two
+        # integer columns is dramatically cheaper than on the wide text tuple.
+        base_c = self._workload_base_sql(max(2, filter_depth))
+        where_c = self._workload_where(conditions, extra=["b.pid IS NOT NULL"])
+        query_c = prefix + f""",
+        fc AS MATERIALIZED (
+            SELECT b.host_id, b.pid FROM ({base_c}) b{where_c}
+        )
+        SELECT (SELECT COUNT(*) FROM (SELECT DISTINCT host_id, pid FROM fc) d) AS c_process
+        """
+        row_c = (self.db.execute(query_c, params, one_value=False, return_dict=True, fetch_all=True) or [{}])[0] or {}
+
+        tab_counts = {
+            "service": row_a.get("c_service") or 0,
+            "namespace": row_b.get("c_namespace") or 0,
+            "host": row_a.get("c_host") or 0,
+            "pod": row_b.get("c_pod") or 0,
+            "container": row_b.get("c_container") or 0,
+            "process": row_c.get("c_process") or 0,
+        }
+        active_hosts = row_a.get("active_hosts") or 0
+        return tab_counts, active_hosts
 
     def _query_workload_groups(
         self,
         scope: str,
-        cte: str,
-        params: Dict[str, Any],
+        spec: Dict[str, Any],
         page: int = 0,
         page_size: int = 50,
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
     ) -> Tuple[List[Dict[str, Any]], int]:
         key_cols = self._WORKLOAD_SCOPE_KEYS.get(scope, self._WORKLOAD_SCOPE_KEYS["process"])
-        guard = self._WORKLOAD_SCOPE_NULL_GUARD.get(scope)
-        where_clause = f"WHERE {guard}" if guard else ""
-        group_by = ", ".join(key_cols)
+        scope_depth = self._WORKLOAD_SCOPE_DEPTH.get(scope, 2)
+        conditions = spec["conditions"]
+        filter_depth = spec["filter_depth"]
+        params = dict(spec["params"])
 
-        # Deterministic ORDER BY: the optional client sort first, then the full
-        # group-key tuple as a tiebreaker so LIMIT/OFFSET pages never overlap or
-        # drop rows. Only whitelisted expressions reach the SQL.
+        # ------------------------------------------------------------------ strategy
+        # Two aggregation strategies, chosen by whether the scope keys on a specific host:
+        #   * hostname IN key (host/container/process): "entity-first". Enumerate the page
+        #     of entities from the shallow key set, then hydrate ONLY that page via a
+        #     LATERAL that is bounded to a single host (indexed) per row. Great for the many
+        #     small entities of these scopes (the default host view is ~0.1s of query time).
+        #   * hostname NOT IN key (service/namespace/pod): "single-pass". These scopes have
+        #     comparatively few, large entities that each span many hosts, so a per-entity
+        #     LATERAL would re-scan whole services repeatedly. Instead compute every group
+        #     in one GROUP BY over the flatten (a couple of seconds) and paginate the result.
         direction = "DESC" if str(sort_order).lower() == "desc" else "ASC"
-        order_terms: List[str] = []
-        sort_expr = self._WORKLOAD_SORT_COLUMNS.get(sort_by) if sort_by else None
-        if sort_expr:
-            order_terms.append(f"{sort_expr} {direction} NULLS LAST")
-        order_terms.extend(f"{col} ASC NULLS LAST" for col in key_cols)
-        order_by = "ORDER BY " + ", ".join(order_terms)
+        agg_columns = self._workload_agg_columns()
+        guard_col = key_cols[-1] if scope in self._WORKLOAD_SCOPE_NULL_GUARD else None
+        use_entity_first = "hostname" in key_cols
 
-        query = cte + f"""
+        if use_entity_first:
+            # ---------- ordering: page the key set, sorting on a key or (materialized) aggregate
+            sort_agg_expr: Optional[str] = None
+            sort_depth = 0
+            order_pairs: List[Tuple[str, str]] = []
+            if sort_by and sort_by in key_cols:
+                order_pairs.append((sort_by, direction))
+                order_pairs.extend((col, "ASC") for col in key_cols if col != sort_by)
+            elif sort_by and sort_by in self._WORKLOAD_SORT_AGG:
+                sort_agg_expr, sort_depth = self._WORKLOAD_SORT_AGG[sort_by]
+                order_pairs.append(("__sort", direction))
+                order_pairs.extend((col, "ASC") for col in key_cols)
+            else:
+                order_pairs.extend((col, "ASC") for col in key_cols)
+
+            # ---------- entity key/summary set (shallowest base that exposes key + filters + sort)
+            page_depth = max(scope_depth, filter_depth, sort_depth)
+            guard_extra = [f"b.{guard_col} IS NOT NULL"] if guard_col else []
+            base_page = self._workload_base_sql(page_depth)
+            summary_where = self._workload_where(conditions, extra=guard_extra)
+            summary_select = ", ".join(f"b.{col}" for col in key_cols)
+            if sort_agg_expr:
+                summary_select += f", {sort_agg_expr} AS __sort"
+            group_by = ", ".join(f"b.{col}" for col in key_cols)
+            page_order = ", ".join(f"{col} {dir_} NULLS LAST" for col, dir_ in order_pairs)
+
+            # ---------- per-entity hydrate. Only host-level keys are correlated (with ``=``)
+            # inside the base sub-SELECT so the plan drives from the HostHeartbeats
+            # service_name/hostname indexes; finer keys are NULL-safe residual filters on the
+            # host-bounded set (never pushed onto child tables, which would let the planner
+            # drive from a global index scan and explode on common namespaces).
+            host_key_corr: List[str] = []
+            residual_corr: List[str] = []
+            for col in key_cols:
+                if self._WORKLOAD_COLUMN_DEPTH[col] == 0:
+                    host_key_corr.append(f"{self._WORKLOAD_KEY_ALIAS[col]} = p.{col}")
+                else:
+                    residual_corr.append(f"b.{col} IS NOT DISTINCT FROM p.{col}")
+            base_full = self._workload_base_sql(
+                2, where_extra=host_key_corr, driving="direct", service_filter=spec["service_filter"]
+            )
+            lateral_terms = residual_corr + [sql for sql, _ in conditions]
+            lateral_where = ("\n            WHERE " + " AND ".join(lateral_terms)) if lateral_terms else ""
+            final_order = ", ".join(f"p.{col} {dir_} NULLS LAST" for col, dir_ in order_pairs)
+            page_key_select = ", ".join(f"p.{col}" for col in key_cols)
+
+            query = self._workload_cte_prefix(spec["service_filter"]) + f""",
+        entity_summary AS MATERIALIZED (
+            SELECT {summary_select}
+            FROM ({base_page}) b{summary_where}
+            GROUP BY {group_by}
+        ),
+        page AS (
+            SELECT * FROM entity_summary
+            ORDER BY {page_order}
+            LIMIT %(page_size)s OFFSET %(offset)s
+        )
         SELECT
-            {group_by},
-            COUNT(DISTINCT hostname) AS host_count,
-            COUNT(DISTINCT namespace) FILTER (WHERE namespace IS NOT NULL) AS namespace_count,
-            COUNT(DISTINCT pod_name) FILTER (WHERE pod_name IS NOT NULL) AS pod_count,
-            COUNT(DISTINCT container_name) FILTER (WHERE container_name IS NOT NULL) AS container_count,
-            COUNT(DISTINCT (pid, process_name)) FILTER (WHERE pid IS NOT NULL) AS process_count,
-            array_agg(DISTINCT pid) FILTER (WHERE pid IS NOT NULL) AS pids,
-            (array_agg(hostname ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_hostname,
-            (array_agg(ip_address ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_ip_address,
-            (array_agg(namespace ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_namespace,
-            (array_agg(pod_name ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_pod_name,
-            (array_agg(container_name ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_container_name,
-            (array_agg(workload_name ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_workload_name,
-            (array_agg(workload_kind ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_workload_kind,
-            (array_agg(process_name ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_process_name,
-            (array_agg(pid ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_pid,
-            (array_agg(command_type ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_command_type,
-            (array_agg(command_status ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_command_status,
-            (array_agg(combined_config ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_combined_config,
-            bool_or(profiling_status = 'active') AS any_active,
-            (array_agg(profiling_status ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_profiling_status,
-            (array_agg(agent_version ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_agent_version,
-            (array_agg(run_mode ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_run_mode,
-            MAX(heartbeat_timestamp) AS l_heartbeat_timestamp,
+            {page_key_select},
+            agg.*,
+            (SELECT COUNT(*) FROM entity_summary) AS total_groups
+        FROM page p
+        LEFT JOIN LATERAL (
+            SELECT{agg_columns}
+            FROM ({base_full}) b
+            {lateral_where}
+        ) agg ON true
+        ORDER BY {final_order}
+        """
+        else:
+            # ---------- single-pass: one GROUP BY over the flatten, paginated. ORDER BY
+            # references the grouped output columns (key columns or ``l_*``/count aliases).
+            sort_out_col = None
+            if sort_by and sort_by in key_cols:
+                sort_out_col = sort_by
+            elif sort_by and sort_by in self._WORKLOAD_SORT_ALIAS:
+                sort_out_col = self._WORKLOAD_SORT_ALIAS[sort_by]
+            order_terms = [f"{sort_out_col} {direction} NULLS LAST"] if sort_out_col else []
+            order_terms.extend(f"{col} ASC NULLS LAST" for col in key_cols if col != sort_out_col)
+            single_order = ", ".join(order_terms)
+
+            guard_extra = [f"b.{guard_col} IS NOT NULL"] if guard_col else []
+            base_single = self._workload_base_sql(2)
+            single_where = self._workload_where(conditions, extra=guard_extra)
+            key_select = ", ".join(f"b.{col}" for col in key_cols)
+            group_by = ", ".join(f"b.{col}" for col in key_cols)
+
+            query = self._workload_cte_prefix(spec["service_filter"]) + f"""
+        SELECT
+            {key_select},{agg_columns},
             COUNT(*) OVER () AS total_groups
-        FROM filtered
-        {where_clause}
+        FROM ({base_single}) b{single_where}
         GROUP BY {group_by}
-        {order_by}
+        ORDER BY {single_order}
         LIMIT %(page_size)s OFFSET %(offset)s
         """
 
@@ -2171,7 +2458,7 @@ class DBManager(metaclass=Singleton):
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
     ) -> Dict[str, Any]:
-        cte, params = self._workload_inventory_cte(
+        spec = self._workload_filter_spec(
             service_names=service_names,
             exact_match=exact_match,
             hostnames=hostnames,
@@ -2186,32 +2473,12 @@ class DBManager(metaclass=Singleton):
             pids=pids,
         )
 
-        # Tab counts and active-host total in a single pass over the filtered set.
-        tab_query = cte + """
-        SELECT
-            COUNT(DISTINCT service_name) AS c_service,
-            COUNT(DISTINCT (service_name, namespace)) FILTER (WHERE namespace IS NOT NULL) AS c_namespace,
-            COUNT(DISTINCT (service_name, hostname)) AS c_host,
-            COUNT(DISTINCT (service_name, namespace, pod_name)) FILTER (WHERE pod_name IS NOT NULL) AS c_pod,
-            COUNT(DISTINCT (service_name, hostname, namespace, pod_name, container_name)) FILTER (WHERE container_name IS NOT NULL) AS c_container,
-            COUNT(DISTINCT (service_name, hostname, pid)) FILTER (WHERE pid IS NOT NULL) AS c_process,
-            COUNT(DISTINCT hostname) FILTER (WHERE hostname IS NOT NULL) AS active_hosts
-        FROM filtered
-        """
-        tab_rows = self.db.execute(tab_query, params, one_value=False, return_dict=True, fetch_all=True)
-        counts = (tab_rows or [{}])[0] or {}
-        tab_counts = {
-            "service": counts.get("c_service") or 0,
-            "namespace": counts.get("c_namespace") or 0,
-            "host": counts.get("c_host") or 0,
-            "pod": counts.get("c_pod") or 0,
-            "container": counts.get("c_container") or 0,
-            "process": counts.get("c_process") or 0,
-        }
-        active_hosts = counts.get("active_hosts") or 0
+        # Tab counts / active-host total: tiered so each count runs over the shallowest
+        # base that exposes its columns (see _workload_tab_counts).
+        tab_counts, active_hosts = self._workload_tab_counts(spec)
 
         rows, total_count = self._query_workload_groups(
-            scope, cte, params, page=page, page_size=page_size, sort_by=sort_by, sort_order=sort_order
+            scope, spec, page=page, page_size=page_size, sort_by=sort_by, sort_order=sort_order
         )
 
         return {
