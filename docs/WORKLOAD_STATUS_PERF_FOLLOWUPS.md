@@ -31,55 +31,77 @@ in `filtered`).
 
 ---
 
-## Follow-up (b) — entity-first pagination
+## Follow-up (b) — entity-first pagination  ✅ shipped (as a hybrid)
 
-**Idea:** page the *driving entity* first, then aggregate only the page. For each scope,
-select the page of grouping-key tuples from the minimal driving table (e.g. `fresh_hosts`
-for host/service; `HeartbeatContainers ⋈ fresh_hosts` for namespace/pod/container;
-`HeartbeatProcesses ⋈ …` for process) with `ORDER BY … LIMIT/OFFSET`, then compute the
-per-row counts/metadata via `LATERAL` joins for just those ≤`page_size` entities. Get
-`total_count` from a single `COUNT(*)` over the driving set and drop `COUNT(*) OVER ()`.
+**Original idea:** page the *driving entity* first, then aggregate only the page via
+`LATERAL` joins for just those ≤`page_size` entities; get `total_count` from a single
+`COUNT(*)` over the driving set and drop `COUNT(*) OVER ()`.
 
-**Measured (prod, host scope):** ~1.4s → **~159ms**.
+**What changed since this was written:** the workload agent rolled out, so
+`HeartbeatContainers` (~316K) and `HeartbeatProcesses` (~1.08M) are now populated and the
+flatten is ~1.08M rows (was ~34K when only hosts existed). Pure entity-first is a big win
+for scopes with *many small* entities but *regresses* for scopes with *few large* entities
+(a page of 50 services still covers most of the fleet, and each per-entity `LATERAL`
+re-scans a whole service). So (b) shipped as a **hybrid**, chosen per scope:
 
-**Risk / effort:** query-only, but higher correctness risk than (a): filters must be pushed
-to the correct level (the tricky case is a *deep filter at a shallow scope*, e.g.
-`scope=host` with a `process_name` filter must still join processes to decide which hosts
-qualify). Per-scope specialization → more surface area. **Gate on the `AT-S1..S17`
-workload-acceptance tests against a seeded DB before rollout.**
+- **Entity-first** (`host`, `container`, `process` — many small entities): page the key set,
+  then hydrate only that page via a `LATERAL` that reads `HostHeartbeats` **directly**
+  (indexed on `service_name`/`hostname`). Only host-level keys are correlated with `=`;
+  finer keys are NULL-safe residual filters (never pushed onto child tables, or the planner
+  drives from a global `idx_hb_containers_namespace` scan and explodes on `default`/
+  `kube-system`).
+- **Single-pass** (`namespace`, `pod` — few/large, PID-aware): one `GROUP BY` over the
+  flatten, paginated (the guard `namespace/pod_name IS NOT NULL` prunes the fan-out).
+- **Two-grain single-pass** (`service`): counts + latest metadata at the container grain
+  (~316K rows), `process_count` via `COUNT(*) FROM (SELECT DISTINCT …) GROUP BY`, and
+  `any_active` at the **host** grain — provably identical to the PID-aware value for service
+  scope (verified 0/460 services differ on prod). Falls back to plain single-pass under a
+  process-tier filter.
 
-## Follow-up (c) — targeted `tab_counts`
+**Measured (prod, page 0):** grouped `host` ~10s → **~0.6s**; `container` ~2.0s;
+`process` ~3.7s; `namespace` ~3.5s; `pod` ~4.1s; `service` ~16s → **~6.4s**.
 
-**Idea:** the tab-count query currently runs one flatten with **7 `COUNT(DISTINCT …)`**
-(~900ms even at 34K rows, with temp spill). Replace with targeted per-tier counts that
-share the `fresh_hosts` CTE:
+**Gate:** query-only, but higher correctness risk than (a) (filter push-down level,
+NULL-safe intermediate keys, the service `any_active` equivalence). Validated read-only on
+prod against authoritative counts; still gate on the `AT-S1..S17` workload-acceptance tests.
 
-- `service` / `host` / `active_hosts` → from `fresh_hosts` only (no child joins).
-- `namespace` / `pod` / `container` → `HeartbeatContainers ⋈ fresh_hosts` (2-way).
-- `process` → `HeartbeatProcesses ⋈ HeartbeatContainers ⋈ fresh_hosts` (single `DISTINCT`).
+## Follow-up (c) — targeted `tab_counts`  ✅ shipped
 
-Optionally **cache** `tab_counts` for a short TTL (they change slowly; the freshness window
-is already 2 min) and/or compute them only when scope/filters change, not on every page.
+The single 7×`COUNT(DISTINCT …)` pass timed out once the child tables filled. Replaced with
+targeted per-tier counts sharing the `fresh_hosts` CTE:
 
-**Expected gain:** ~900ms → a few hundred ms (or ~0 when cached). Query-only.
+- `service` / `host` / `active_hosts` → from `fresh_hosts` only.
+- `namespace` / `pod` / `container` → `HeartbeatContainers ⋈ fresh_hosts`.
+- `process` → 3-way join, distinct on the integer `(host_id, pid)`.
 
-## Follow-up — retention cleanup (root cause)
+Each count uses `COUNT(*) FROM (SELECT DISTINCT …)` (hash-distinct) instead of
+`COUNT(DISTINCT tuple)` (sort-per-aggregate) — the process count alone went
+**13.2s → 0.84s**. All filters still apply at every tier.
 
-The unbounded growth of `HostHeartbeats` (and, once the workload agent rolls out,
-`HeartbeatContainers` / `HeartbeatProcesses`) is the structural driver: 95% of rows are
-stale. A periodic cleanup that deletes hosts whose `heartbeat_timestamp` is older than a
-retention threshold (child tables cascade via FK) would shrink the table ~20×.
+**Measured (prod):** **timeout → ~4s** (tier A ~0.4s + B ~1.1s + C ~0.8s). Short-TTL caching
+was *not* added and remains an option if the tabs need to feel instant.
 
-- The `~116ms` parallel seq scan to extract the fresh set drops to ~10ms.
+## Follow-up — retention cleanup (root cause)  ⏳ outstanding
+
+The unbounded growth of `HostHeartbeats` / `HeartbeatContainers` / `HeartbeatProcesses` is
+the structural driver: ~95% of `HostHeartbeats` rows are stale, and the child tables now
+carry ~1.08M live-plus-stale rows. A periodic cleanup that deletes hosts whose
+`heartbeat_timestamp` is older than a retention threshold (child tables cascade via FK)
+would shrink the base tables ~20×.
+
+- The parallel seq scan to extract the fresh set drops from ~100ms to ~10ms.
 - Every scan, index, and autovacuum on these tables gets ~20× cheaper.
+- It is the single change that would bring the heavier scopes (`service`, `pod`) back to
+  sub-second and keep them there as the fleet grows.
 - Natural home: the `deploy/periodic_tasks` container (cron), matching the existing
   aggregation/logrotate jobs.
 
-**Expected gain:** with (b)+(c)+retention combined, the endpoint should land in the
-**tens of ms** range at current scale.
+## Status / suggested order
 
-## Suggested order
+1. **(a)** — shipped (killed the original host-scan timeout; PR #95).
+2. **(c) tiered `tab_counts`** — shipped (timeout → ~4s).
+3. **(b) hybrid entity-first / single-pass / two-grain** — shipped (default `host` view
+   ~10s → ~0.6s; all scopes under the timeout).
+4. **Retention job** — outstanding; the biggest remaining structural win, benefits every
+   scope and is what would bring `service` (~6.4s) and `pod` (~4.1s) back to sub-second.
 
-1. **(a)** — shipped (kills the timeout).
-2. **Retention job** — biggest structural win, benefits everything.
-3. **(b)+(c)** — brings steady-state latency to ~150ms, gated on the acceptance tests.
