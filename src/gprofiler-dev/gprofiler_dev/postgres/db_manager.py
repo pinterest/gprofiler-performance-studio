@@ -2252,6 +2252,117 @@ class DBManager(metaclass=Singleton):
         active_hosts = row_a.get("active_hosts") or 0
         return tab_counts, active_hosts
 
+    def _build_workload_row(
+        self, db_row: Dict[str, Any], scope: str, key_cols: List[str]
+    ) -> Dict[str, Any]:
+        """Build one API row dict from a grouped/summary DB row.
+
+        Shared by the live grouped query and the precomputed-summary reader; both
+        expose the same column names (key cols + ``l_*``/count aggregates).
+        """
+        key_values = [db_row.get(col) for col in key_cols]
+        row_id = "|".join("" if value is None else str(value) for value in key_values)
+        command_metadata = self._extract_command_metadata(
+            db_row.get("l_combined_config"),
+            db_row.get("l_command_type"),
+            db_row.get("l_command_status"),
+        )
+        # Prefer the PID-aware, row-level status computed in SQL over the host-level
+        # command status. A group is "active" when any of its rows are actively
+        # targeted (whole-host command or a matching PID); otherwise fall back to the
+        # latest row status so entities on a host that is only partially profiled
+        # (e.g. one container) are not incorrectly shown as active.
+        profiling_status = "active" if db_row.get("any_active") else db_row.get("l_profiling_status")
+        if not profiling_status:
+            profiling_status = command_metadata.get("profiling_status")
+        host_count = db_row.get("host_count") or 0
+        return {
+            "id": row_id,
+            "scope": scope,
+            "service_name": db_row.get("service_name"),
+            "namespace": db_row.get("l_namespace"),
+            "hostname": db_row.get("l_hostname"),
+            "ip_address": db_row.get("l_ip_address"),
+            "pod_name": db_row.get("l_pod_name"),
+            "container_name": db_row.get("l_container_name"),
+            "workload_name": db_row.get("l_workload_name"),
+            "workload_kind": db_row.get("l_workload_kind"),
+            "process_name": db_row.get("l_process_name"),
+            "pid": db_row.get("l_pid"),
+            "pids": sorted(db_row.get("pids") or []),
+            "active_hosts": host_count,
+            "host_count": host_count,
+            "namespace_count": db_row.get("namespace_count") or 0,
+            "pod_count": db_row.get("pod_count") or 0,
+            "container_count": db_row.get("container_count") or 0,
+            "process_count": db_row.get("process_count") or 0,
+            "command_type": command_metadata.get("command_type"),
+            "profiling_status": profiling_status,
+            "profiling_mode": command_metadata.get("profiling_mode"),
+            "frequency": command_metadata.get("frequency"),
+            "profiler_summary": command_metadata.get("profiler_summary"),
+            "heartbeat_timestamp": db_row.get("l_heartbeat_timestamp"),
+            "agent_version": db_row.get("l_agent_version"),
+            "run_mode": db_row.get("l_run_mode"),
+        }
+
+    # Scopes whose grouped rows are precomputed into workload_scope_summary.
+    _WORKLOAD_SUMMARY_SCOPES = frozenset({"service", "namespace", "pod"})
+
+    def _precomputed_tab_counts(self) -> Optional[Tuple[Dict[str, int], int]]:
+        """Read the six tab counts + active_hosts from the precomputed store.
+
+        Returns ``None`` when the store is unavailable -- not built yet (fresh
+        deploy before the first refresh) or the migration has not been applied --
+        so callers transparently fall back to the live computation.
+        """
+        try:
+            rows = self.db.execute(
+                "SELECT scope, count FROM workload_tab_counts",
+                {}, one_value=False, return_dict=True, fetch_all=True,
+            )
+        except Exception:
+            # Store missing/unavailable -> fall back to the live path.
+            return None
+        if not rows:
+            return None
+        by_scope = {r["scope"]: r["count"] for r in rows}
+        tab_counts = {
+            "service": by_scope.get("service") or 0,
+            "namespace": by_scope.get("namespace") or 0,
+            "host": by_scope.get("host") or 0,
+            "pod": by_scope.get("pod") or 0,
+            "container": by_scope.get("container") or 0,
+            "process": by_scope.get("process") or 0,
+        }
+        return tab_counts, (by_scope.get("active_hosts") or 0)
+
+    def _precomputed_scope_rows(
+        self, scope: str, page: int, page_size: int, sort_by: Optional[str], sort_order: str
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """Read a page of grouped rows for a coarse scope from workload_scope_summary."""
+        key_cols = self._WORKLOAD_SCOPE_KEYS.get(scope, self._WORKLOAD_SCOPE_KEYS["service"])
+        direction = "DESC" if str(sort_order).lower() == "desc" else "ASC"
+        sort_col = None
+        if sort_by and sort_by in key_cols:
+            sort_col = sort_by
+        elif sort_by and sort_by in self._WORKLOAD_SORT_ALIAS:
+            sort_col = self._WORKLOAD_SORT_ALIAS[sort_by]
+        # Deterministic order: requested sort (if any) then the precomputed key order.
+        order_by = (f"{sort_col} {direction} NULLS LAST, sort_seq ASC" if sort_col else "sort_seq ASC")
+        query = f"""
+        SELECT *, COUNT(*) OVER () AS total_groups
+        FROM workload_scope_summary
+        WHERE scope = %(scope)s
+        ORDER BY {order_by}
+        LIMIT %(page_size)s OFFSET %(offset)s
+        """
+        params = {"scope": scope, "page_size": page_size, "offset": page * page_size}
+        db_rows = self.db.execute(query, params, one_value=False, return_dict=True, fetch_all=True)
+        total_count = db_rows[0]["total_groups"] if db_rows else 0
+        rows = [self._build_workload_row(db_row, scope, key_cols) for db_row in db_rows or []]
+        return rows, total_count
+
     def _query_workload_groups(
         self,
         scope: str,
@@ -2460,59 +2571,7 @@ class DBManager(metaclass=Singleton):
         group_params = {**params, "page_size": page_size, "offset": page * page_size}
         db_rows = self.db.execute(query, group_params, one_value=False, return_dict=True, fetch_all=True)
         total_count = db_rows[0]["total_groups"] if db_rows else 0
-        rows: List[Dict[str, Any]] = []
-        for db_row in db_rows or []:
-
-            key_values = [db_row.get(col) for col in key_cols]
-            row_id = "|".join("" if value is None else str(value) for value in key_values)
-            command_metadata = self._extract_command_metadata(
-                db_row.get("l_combined_config"),
-                db_row.get("l_command_type"),
-                db_row.get("l_command_status"),
-            )
-            # Prefer the PID-aware, row-level status computed in SQL over the host-level
-            # command status. A group is "active" when any of its rows are actively
-            # targeted (whole-host command or a matching PID); otherwise fall back to the
-            # latest row status so entities on a host that is only partially profiled
-            # (e.g. one container) are not incorrectly shown as active.
-            profiling_status = (
-                "active" if db_row.get("any_active") else db_row.get("l_profiling_status")
-            )
-            if not profiling_status:
-                profiling_status = command_metadata.get("profiling_status")
-            host_count = db_row.get("host_count") or 0
-            rows.append(
-                {
-                    "id": row_id,
-                    "scope": scope,
-                    "service_name": db_row.get("service_name"),
-                    "namespace": db_row.get("l_namespace"),
-                    "hostname": db_row.get("l_hostname"),
-                    "ip_address": db_row.get("l_ip_address"),
-                    "pod_name": db_row.get("l_pod_name"),
-                    "container_name": db_row.get("l_container_name"),
-                    "workload_name": db_row.get("l_workload_name"),
-                    "workload_kind": db_row.get("l_workload_kind"),
-                    "process_name": db_row.get("l_process_name"),
-                    "pid": db_row.get("l_pid"),
-                    "pids": sorted(db_row.get("pids") or []),
-                    "active_hosts": host_count,
-                    "host_count": host_count,
-                    "namespace_count": db_row.get("namespace_count") or 0,
-                    "pod_count": db_row.get("pod_count") or 0,
-                    "container_count": db_row.get("container_count") or 0,
-                    "process_count": db_row.get("process_count") or 0,
-                    "command_type": command_metadata.get("command_type"),
-                    "profiling_status": profiling_status,
-                    "profiling_mode": command_metadata.get("profiling_mode"),
-                    "frequency": command_metadata.get("frequency"),
-                    "profiler_summary": command_metadata.get("profiler_summary"),
-                    "heartbeat_timestamp": db_row.get("l_heartbeat_timestamp"),
-                    "agent_version": db_row.get("l_agent_version"),
-                    "run_mode": db_row.get("l_run_mode"),
-                }
-            )
-
+        rows = [self._build_workload_row(db_row, scope, key_cols) for db_row in db_rows or []]
         # Ordering and pagination are done in SQL (see order_by/LIMIT above).
         return rows, total_count
 
@@ -2551,8 +2610,34 @@ class DBManager(metaclass=Singleton):
             pids=pids,
         )
 
-        # Tab counts / active-host total: tiered so each count runs over the shallowest
-        # base that exposes its columns (see _workload_tab_counts).
+        # Fast path: with no filters, serve from the precomputed store (rebuilt every
+        # ~30s by the periodic worker). Counts + coarse-scope rows come from the Layer 2
+        # summaries; host/container/process rows still use the (fast) live grouped query.
+        # Falls back to the fully live path when the store has not been built yet.
+        no_filters = not spec["conditions"] and spec["service_filter"] == "TRUE"
+        if no_filters:
+            precomputed = self._precomputed_tab_counts()
+            if precomputed is not None:
+                tab_counts, active_hosts = precomputed
+                if scope in self._WORKLOAD_SUMMARY_SCOPES:
+                    rows, total_count = self._precomputed_scope_rows(
+                        scope, page, page_size, sort_by, sort_order
+                    )
+                else:
+                    rows, total_count = self._query_workload_groups(
+                        scope, spec, page=page, page_size=page_size, sort_by=sort_by, sort_order=sort_order
+                    )
+                return {
+                    "scope": scope,
+                    "rows": rows,
+                    "tab_counts": tab_counts,
+                    "active_hosts": active_hosts,
+                    "total_count": total_count,
+                    "page": page,
+                    "page_size": page_size,
+                }
+
+        # Filtered (or store-not-built) path: tiered counts + live grouped query.
         tab_counts, active_hosts = self._workload_tab_counts(spec)
 
         rows, total_count = self._query_workload_groups(
