@@ -30,4 +30,6 @@ RUN echo "non_root ALL=(ALL) NOPASSWD: $(which crond)" >> /etc/sudoers
 
 USER non_root
 
-CMD /logrotate_conf.sh && sudo crond && tail -f /var/log/cron.log
+# cron jobs do not inherit the container env, so psql couldn't find PGHOST/etc.
+# Persist the runtime env to a file that the cron scripts load on each run.
+CMD printenv > /tmp/cron.env && /logrotate_conf.sh && sudo crond && tail -f /var/log/cron.log
