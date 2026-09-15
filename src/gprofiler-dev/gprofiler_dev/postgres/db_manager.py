@@ -2281,6 +2281,13 @@ class DBManager(metaclass=Singleton):
         agg_columns = self._workload_agg_columns()
         guard_col = key_cols[-1] if scope in self._WORKLOAD_SCOPE_NULL_GUARD else None
         use_entity_first = "hostname" in key_cols
+        # `service` has no host key and few/large groups, but (unlike namespace/pod) its
+        # groups span whole hosts, so its per-group counts can be computed at the cheap
+        # container grain and its `any_active` at the host grain -- for service scope that
+        # is provably identical to the PID-aware value (a command's target PIDs always
+        # belong to the service's own hosts). Only when no process-tier filter is present
+        # (which would need the process grain to stay correct).
+        use_two_grain = scope == "service" and filter_depth < 2
 
         if use_entity_first:
             # ---------- ordering: page the key set, sorting on a key or (materialized) aggregate
@@ -2350,6 +2357,77 @@ class DBManager(metaclass=Singleton):
             {lateral_where}
         ) agg ON true
         ORDER BY {final_order}
+        """
+        elif use_two_grain:
+            # ---------- two-grain single-pass (service scope). Counts + latest metadata at
+            # the container grain (~316K rows), process_count via the cheap
+            # COUNT(*) FROM (SELECT DISTINCT ...) trick, and any_active at the host grain
+            # (identical to PID-aware for service scope). Avoids aggregating the full
+            # ~1.08M process flatten -> ~16s down to ~4s on prod. Process-grain
+            # representatives (l_process_name/l_pid/pids) are not shown at service scope and
+            # are returned NULL/empty.
+            sort_out_col = None
+            if sort_by and sort_by in key_cols:
+                sort_out_col = sort_by
+            elif sort_by and sort_by in self._WORKLOAD_SORT_ALIAS:
+                sort_out_col = self._WORKLOAD_SORT_ALIAS[sort_by]
+            order_terms = [f"{sort_out_col} {direction} NULLS LAST"] if sort_out_col else []
+            order_terms.extend(f"{col} ASC NULLS LAST" for col in key_cols if col != sort_out_col)
+            two_order = ", ".join(order_terms)
+
+            cbase = self._workload_base_sql(1)
+            cwhere = self._workload_where(conditions)
+            pbase = self._workload_base_sql(2)
+            pwhere = self._workload_where(conditions, extra=["b.pid IS NOT NULL"])
+
+            query = self._workload_cte_prefix(spec["service_filter"]) + f""",
+        cagg AS (
+            SELECT
+                b.service_name,
+                COUNT(DISTINCT b.hostname) AS host_count,
+                COUNT(DISTINCT b.namespace) FILTER (WHERE b.namespace IS NOT NULL) AS namespace_count,
+                COUNT(DISTINCT b.pod_name) FILTER (WHERE b.pod_name IS NOT NULL) AS pod_count,
+                COUNT(DISTINCT b.container_name) FILTER (WHERE b.container_name IS NOT NULL) AS container_count,
+                NULL::integer[] AS pids,
+                (array_agg(b.hostname ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_hostname,
+                (array_agg(b.ip_address ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_ip_address,
+                (array_agg(b.namespace ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_namespace,
+                (array_agg(b.pod_name ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_pod_name,
+                (array_agg(b.container_name ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_container_name,
+                (array_agg(b.workload_name ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_workload_name,
+                (array_agg(b.workload_kind ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_workload_kind,
+                NULL::text AS l_process_name,
+                NULL::integer AS l_pid,
+                (array_agg(b.command_type ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_command_type,
+                (array_agg(b.command_status ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_command_status,
+                (array_agg(b.combined_config ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_combined_config,
+                bool_or(b.command_type = 'start' AND b.command_status IN ('pending', 'sent', 'completed')) AS any_active,
+                NULL::text AS l_profiling_status,
+                (array_agg(b.agent_version ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_agent_version,
+                (array_agg(b.run_mode ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_run_mode,
+                MAX(b.heartbeat_timestamp) AS l_heartbeat_timestamp,
+                COUNT(*) OVER () AS total_groups
+            FROM ({cbase}) b{cwhere}
+            GROUP BY b.service_name
+        ),
+        pcount AS (
+            SELECT service_name, COUNT(*) AS process_count
+            FROM (SELECT DISTINCT b.service_name, b.pid, b.process_name FROM ({pbase}) b{pwhere}) d
+            GROUP BY service_name
+        )
+        SELECT
+            c.service_name,
+            c.host_count, c.namespace_count, c.pod_count, c.container_count,
+            COALESCE(pc.process_count, 0) AS process_count,
+            c.pids, c.l_hostname, c.l_ip_address, c.l_namespace, c.l_pod_name, c.l_container_name,
+            c.l_workload_name, c.l_workload_kind, c.l_process_name, c.l_pid,
+            c.l_command_type, c.l_command_status, c.l_combined_config, c.any_active,
+            c.l_profiling_status, c.l_agent_version, c.l_run_mode, c.l_heartbeat_timestamp,
+            c.total_groups
+        FROM cagg c
+        LEFT JOIN pcount pc ON pc.service_name = c.service_name
+        ORDER BY {two_order}
+        LIMIT %(page_size)s OFFSET %(offset)s
         """
         else:
             # ---------- single-pass: one GROUP BY over the flatten, paginated. ORDER BY

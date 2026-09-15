@@ -61,12 +61,22 @@ The strategy is chosen by whether the scope keys on a specific host
   `service_name`/`hostname`), correlating only the host-level keys with `=`; finer keys
   are applied as NULL-safe residual filters (see "Planner notes"). `total_count` is a
   single `COUNT(*)` over the key set; `COUNT(*) OVER ()` is dropped.
-- **Single-pass** (`service`, `namespace`, `pod` — few / large entities): one `GROUP BY`
-  over the flatten, paginated. A per-entity `LATERAL` here would re-scan whole services
-  repeatedly, so a single scan that computes every group is faster.
+- **Single-pass** (`namespace`, `pod` — few / large entities): one `GROUP BY` over the
+  flatten, paginated. A per-entity `LATERAL` here would re-scan whole services repeatedly,
+  so a single scan that computes every group is faster.
+- **Two-grain single-pass** (`service`): the counts + latest metadata are computed at the
+  cheap container grain (~316K rows), `process_count` via `COUNT(*) FROM (SELECT DISTINCT
+  …) GROUP BY`, and `any_active` at the host grain. For **service scope only**, host-grain
+  `any_active` is provably identical to the PID-aware value — a command's target PIDs
+  always belong to that service's own hosts (verified on prod: 0/460 services differ). This
+  avoids aggregating the full ~1.08M process flatten. Process-grain representatives
+  (`l_process_name`/`l_pid`/`pids`) are not shown at service scope and are returned
+  NULL/empty. When a process-tier filter is present it falls back to the plain single-pass
+  to stay correct.
 
-Both paths share the exact same aggregate SELECT list (`_workload_agg_columns`), so they
-return byte-identical row shapes, and the Python post-processing is unchanged.
+The entity-first and single-pass paths share the exact same aggregate SELECT list
+(`_workload_agg_columns`), so they return byte-identical row shapes; the Python
+post-processing is unchanged for every path.
 
 ### Results (PROD, page 0, default sort)
 
@@ -78,7 +88,7 @@ return byte-identical row shapes, and the Python post-processing is unchanged.
 | grouped `pod` | — | ~3.1s |
 | grouped `container` | — | ~1.8s |
 | grouped `process` | — | ~3.5s |
-| grouped `service` | ~11–17s | ~16s (see "Known limits") |
+| grouped `service` | ~11–17s | ~6.4s |
 
 \* A naive entity-first `namespace` hydrate timed out because the planner drove from a
 global `idx_hb_containers_namespace` scan on common namespaces; the hybrid avoids this.
@@ -105,6 +115,9 @@ Spot-checked new output against independent authoritative aggregations:
 - Tiered `tab_counts` — exact (`service/host/active/ns/pod/container/process` all matched).
 - Single-pass `namespace` scope — exact (small drift only in a busy namespace between runs,
   which is expected: the 2-minute fresh window is live and counts churn run-to-run).
+- Two-grain `service` scope — `container_count` exact; `host_count`/`process_count` differ
+  only by live-window churn on a huge busy service; `any_active` matches the PID-aware value
+  (0/460 services differ).
 
 ## Testing
 
@@ -118,12 +131,13 @@ Spot-checked new output against independent authoritative aggregations:
 
 ## Known limits / follow-ups
 
-- `scope=service` single-pass is still ~16s (regressed from ~1.4s pre-child-tables because
-  it aggregates the whole fleet into ~460 groups). It is under the 30s timeout but is the
-  heaviest scope. Two future options: (1) compute its per-group counts with the
-  `COUNT(*) FROM (SELECT DISTINCT …) GROUP BY` trick (prototyped at ~2.5s for the process
-  count), or (2) the **retention cleanup** named in the follow-ups doc, which shrinks the
-  base tables ~20× and benefits every scope.
+- `scope=service` is ~6.4s (down from ~16s, still up from ~1.4s pre-child-tables). The
+  remaining cost is the container-grain latest-metadata `array_agg`s; the structural fix is
+  the **retention cleanup** named in the follow-ups doc, which shrinks the base tables ~20×
+  and benefits every scope.
 - Sorting a large-entity scope by a deep aggregate column (e.g. `container` by
   `process_name`) forces the key set to the full flatten (~11s); this is a non-default,
   user-initiated path.
+- The two-grain `service` path returns NULL/empty for `l_process_name`/`l_pid`/`pids`
+  (never shown at service scope) and computes `any_active` at the host grain (identical to
+  PID-aware for service scope). Namespace/pod keep the fully PID-aware single-pass.
