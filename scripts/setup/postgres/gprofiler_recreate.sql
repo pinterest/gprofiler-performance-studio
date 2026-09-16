@@ -335,6 +335,12 @@ CREATE TABLE HeartbeatProcesses (
 CREATE INDEX idx_hb_processes_container_row_id ON HeartbeatProcesses (container_row_id);
 CREATE INDEX idx_hb_processes_process_name ON HeartbeatProcesses (process_name);
 
+-- Cache a block of ids per backend so high-frequency heartbeat inserts don't
+-- contend on the sequence buffer lock (see migrations/increase_heartbeat_sequence_cache.sql).
+ALTER SEQUENCE hostheartbeats_id_seq      CACHE 500;
+ALTER SEQUENCE heartbeatcontainers_id_seq CACHE 500;
+ALTER SEQUENCE heartbeatprocesses_id_seq  CACHE 500;
+
 -- Profiling Requests Table (simplified)
 CREATE TABLE ProfilingRequests (
     ID bigserial PRIMARY KEY,
