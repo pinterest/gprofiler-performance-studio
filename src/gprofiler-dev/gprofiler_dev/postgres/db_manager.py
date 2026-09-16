@@ -981,45 +981,72 @@ class DBManager(metaclass=Singleton):
         if not normalized:
             return
 
-        # Upsert containers, rewriting a row only when its metadata actually changed.
+        # Container tuples, reused by the insert-new and update-changed passes below.
+        container_rows = [
+            (
+                host_id,
+                container["container_id"],
+                container.get("container_name"),
+                container.get("runtime"),
+                container.get("namespace"),
+                container.get("pod_name"),
+                container.get("workload_name"),
+                container.get("workload_kind"),
+            )
+            for container in normalized
+        ]
+
+        # Insert only genuinely-new containers. A blanket INSERT ... ON CONFLICT would
+        # evaluate the id DEFAULT (nextval) for every proposed row before resolving the
+        # conflict, burning a sequence value per unchanged container re-reported each
+        # beat. Filtering to non-existing rows means nextval fires only for real inserts;
+        # ON CONFLICT DO NOTHING still guards the rare concurrent-insert race.
         psycopg2.extras.execute_values(
             cursor,
             """
             INSERT INTO HeartbeatContainers (
                 host_id, container_id, container_name, runtime, namespace,
                 pod_name, workload_name, workload_kind, updated_at
-            ) VALUES %s
-            ON CONFLICT (host_id, container_id) DO UPDATE SET
-                container_name = EXCLUDED.container_name,
-                runtime        = EXCLUDED.runtime,
-                namespace      = EXCLUDED.namespace,
-                pod_name       = EXCLUDED.pod_name,
-                workload_name  = EXCLUDED.workload_name,
-                workload_kind  = EXCLUDED.workload_kind,
-                updated_at     = CURRENT_TIMESTAMP
-            WHERE (
-                HeartbeatContainers.container_name, HeartbeatContainers.runtime,
-                HeartbeatContainers.namespace, HeartbeatContainers.pod_name,
-                HeartbeatContainers.workload_name, HeartbeatContainers.workload_kind
-            ) IS DISTINCT FROM (
-                EXCLUDED.container_name, EXCLUDED.runtime, EXCLUDED.namespace,
-                EXCLUDED.pod_name, EXCLUDED.workload_name, EXCLUDED.workload_kind
             )
+            SELECT v.host_id, v.container_id, v.container_name, v.runtime, v.namespace,
+                   v.pod_name, v.workload_name, v.workload_kind, CURRENT_TIMESTAMP
+            FROM (VALUES %s) AS v(host_id, container_id, container_name, runtime,
+                                  namespace, pod_name, workload_name, workload_kind)
+            WHERE NOT EXISTS (
+                SELECT 1 FROM HeartbeatContainers hc
+                WHERE hc.host_id = v.host_id AND hc.container_id = v.container_id
+            )
+            ON CONFLICT (host_id, container_id) DO NOTHING
             """,
-            [
-                (
-                    host_id,
-                    container["container_id"],
-                    container.get("container_name"),
-                    container.get("runtime"),
-                    container.get("namespace"),
-                    container.get("pod_name"),
-                    container.get("workload_name"),
-                    container.get("workload_kind"),
-                )
-                for container in normalized
-            ],
-            template="(%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)",
+            container_rows,
+            template="(%s::bigint, %s::text, %s::text, %s::text, %s::text, %s::text, %s::text, %s::text)",
+        )
+
+        # Rewrite metadata only for containers that actually changed.
+        psycopg2.extras.execute_values(
+            cursor,
+            """
+            UPDATE HeartbeatContainers hc SET
+                container_name = v.container_name,
+                runtime        = v.runtime,
+                namespace      = v.namespace,
+                pod_name       = v.pod_name,
+                workload_name  = v.workload_name,
+                workload_kind  = v.workload_kind,
+                updated_at     = CURRENT_TIMESTAMP
+            FROM (VALUES %s) AS v(host_id, container_id, container_name, runtime,
+                                  namespace, pod_name, workload_name, workload_kind)
+            WHERE hc.host_id = v.host_id AND hc.container_id = v.container_id
+              AND (
+                hc.container_name, hc.runtime, hc.namespace, hc.pod_name,
+                hc.workload_name, hc.workload_kind
+              ) IS DISTINCT FROM (
+                v.container_name, v.runtime, v.namespace, v.pod_name,
+                v.workload_name, v.workload_kind
+              )
+            """,
+            container_rows,
+            template="(%s::bigint, %s::text, %s::text, %s::text, %s::text, %s::text, %s::text, %s::text)",
         )
 
         # Map every reported container_id to its stable row id (changed or not) so
@@ -1063,17 +1090,39 @@ class DBManager(metaclass=Singleton):
         if not process_rows:
             return
 
-        # Upsert processes, rewriting a row only when its name actually changed.
+        # Insert only genuinely-new (container_row_id, pid) rows. A blanket
+        # INSERT ... ON CONFLICT evaluates the id DEFAULT (nextval) for every proposed
+        # row before resolving the conflict, so the ~all-unchanged processes re-reported
+        # each beat burned a sequence value each (~58k nextval/s fleet-wide -> sequence
+        # buffer lock contention). Filtering to non-existing rows means nextval fires
+        # only for real inserts; ON CONFLICT DO NOTHING guards the concurrent-insert race.
         psycopg2.extras.execute_values(
             cursor,
             """
             INSERT INTO HeartbeatProcesses (container_row_id, pid, process_name)
-            VALUES %s
-            ON CONFLICT (container_row_id, pid) DO UPDATE SET
-                process_name = EXCLUDED.process_name
-            WHERE HeartbeatProcesses.process_name IS DISTINCT FROM EXCLUDED.process_name
+            SELECT v.container_row_id, v.pid, v.process_name
+            FROM (VALUES %s) AS v(container_row_id, pid, process_name)
+            WHERE NOT EXISTS (
+                SELECT 1 FROM HeartbeatProcesses hp
+                WHERE hp.container_row_id = v.container_row_id AND hp.pid = v.pid
+            )
+            ON CONFLICT (container_row_id, pid) DO NOTHING
             """,
             process_rows,
+            template="(%s::bigint, %s::int, %s::text)",
+        )
+
+        # Rewrite names only for rows whose process_name actually changed.
+        psycopg2.extras.execute_values(
+            cursor,
+            """
+            UPDATE HeartbeatProcesses hp SET process_name = v.process_name
+            FROM (VALUES %s) AS v(container_row_id, pid, process_name)
+            WHERE hp.container_row_id = v.container_row_id AND hp.pid = v.pid
+              AND hp.process_name IS DISTINCT FROM v.process_name
+            """,
+            process_rows,
+            template="(%s::bigint, %s::int, %s::text)",
         )
 
     def get_host_heartbeat(self, hostname: str) -> Optional[Dict]:
