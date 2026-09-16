@@ -86,28 +86,71 @@ Stay under the database's `max_connections`. On the current Aurora cluster
 | `CONN_PER_THREAD=TRUE`, 8 workers, pool 20 | 160 | 960 |
 | `CONN_PER_THREAD=FALSE`, 24 workers | 24 | 144 |
 
+## Sizing for load (Little's Law)
+
+The number of DB operations in flight at once is `L = λ × W`, where `λ` is the
+request rate and `W` is how long each request holds a connection. Your total
+provisioned concurrency (`replicas × workers × threads_per_worker`) must exceed
+`L`, with headroom for bursts.
+
+The dominant driver here is the agent heartbeat: **30k hosts × 1 per 30 s ≈
+1000 heartbeat QPS**. Each heartbeat is write-heavy — `upsert_host_heartbeat`
+(host upsert + container/process diff-sync) plus a profiling-command lookup and
+possible status updates — so `W` is on the order of tens of milliseconds:
+
+| Heartbeat hold time `W` | Busy connections `L` at 1000 QPS |
+| --- | --- |
+| 30 ms | 30 |
+| 50 ms | 50 |
+| 100 ms | 100 |
+| 150 ms | 150 |
+
+Add read traffic on top. Coarse read scopes now serve from the store in ~10 ms
+(negligible), but the **live fine scopes hold a connection for seconds**
+(container ~4 s, process ~8 s), so each concurrent fine-scope request consumes
+several connection-seconds. Budget generously for these.
+
+Target total provisioned concurrency at **2–3× the computed `L`** so bursts and
+slow reads don't exhaust the pool. Measure `W` from your own metrics
+(`pg_stat_activity`, request latency) and re-derive — the table is a starting
+estimate.
+
+> **Connections enable parallelism, they do not create DB throughput.** 1000
+> write-heavy heartbeats/s is real load on the Aurora writer regardless of how
+> many connections you open. If the writer saturates (CPU, lock/WAL), the fix is
+> to cut per-heartbeat cost (batch the inventory writes) or scale the DB — not to
+> add more connections.
+
 ## Recommended production settings
 
-Start here, then adjust based on load:
+Start here, then adjust based on measured `W` and replica count:
 
 ```bash
 # Remove the per-worker serialization (primary fix).
 GPROFILER_POSTGRES_CONN_PER_THREAD=TRUE
 
-# Bound connections-per-worker so total stays comfortably under max_connections.
-GPROFILER_WEBAPP_THREAD_POOL_SIZE=20
+# Per-worker connection cap. Sized for ~1000 heartbeat QPS with headroom.
+GPROFILER_WEBAPP_THREAD_POOL_SIZE=40
 
-# Optional: add process-level concurrency if still throughput-bound.
-# (Workers are I/O-bound, so exceeding core count is fine.)
-GUNICORN_PROCESS_COUNT=8
+# Process-level concurrency. Workers are I/O-bound on the DB, so exceeding
+# core count is fine; raise if still throughput-bound.
+GUNICORN_PROCESS_COUNT=16
 ```
 
-With this, each replica can run up to `8 × 20 = 160` DB operations in parallel
-instead of `8`, which keeps fast read endpoints responsive even while heavy
-heartbeat writes are in flight. If you scale replicas hard, recompute the
-connection total against `max_connections` and lower
-`GPROFILER_WEBAPP_THREAD_POOL_SIZE` if needed (or add a pooler such as
-pgbouncer).
+This gives `16 × 40 = 640` parallel DB slots **per replica**. Across replicas,
+check the total against `max_connections`:
+
+| Config | Conns/replica | 3 replicas | 6 replicas |
+| --- | --- | --- | --- |
+| `CONN_PER_THREAD=TRUE`, 8 workers, pool 40 | 320 | 960 | 1920 |
+| `CONN_PER_THREAD=TRUE`, 16 workers, pool 40 | 640 | 1920 | 3840 |
+| `CONN_PER_THREAD=TRUE`, 16 workers, pool 20 | 320 | 960 | 1920 |
+
+At `max_connections = 5000` even the largest row leaves headroom, but if you
+scale replicas hard, keep `replicas × workers × pool` under the limit (with
+margin for the periodic tasks and admin connections) — lower
+`GPROFILER_WEBAPP_THREAD_POOL_SIZE` or add a pooler (pgbouncer) if you approach
+it.
 
 ## Verifying
 
