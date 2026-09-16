@@ -95,7 +95,6 @@ class Singleton(type):
 
 class DBManager(metaclass=Singleton):
     def __init__(self):
-        self.db = get_postgres_db()
         self.machine_types: Dict[Tuple[str, str], int] = {}
         self.machine_types_ids: Dict[int, int] = {}
         self.profiler_versions: Dict[Tuple[int, int, int], int] = {}
@@ -116,6 +115,14 @@ class DBManager(metaclass=Singleton):
         self.last_seen_updates: Dict[str : time.time] = defaultdict(
             lambda: time.time() - (LAST_SEEN_UPDATES_INTERVAL_MINUTES + 1) * 60
         )
+
+    @property
+    def db(self):
+        # Resolve per access: this Singleton is process-wide, so caching one
+        # connection would re-serialize every thread on its lock. get_postgres_db()
+        # hands each thread its own connection when GPROFILER_POSTGRES_CONN_PER_THREAD
+        # is set (and the shared instance otherwise).
+        return get_postgres_db()
 
     def get_libc(self, libc_type, libc_version):
         key = (libc_type, libc_version)
