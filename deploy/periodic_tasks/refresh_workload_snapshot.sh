@@ -16,13 +16,10 @@
 # limitations under the License.
 #
 
-# Rebuilds the precomputed workload_status store (Layer 1 snapshot + Layer 2
-# summaries/counts) and atomically swaps it in. cron invokes this once per
-# minute; it calls the refresh twice, ~WORKLOAD_SNAPSHOT_REFRESH_INTERVAL apart,
-# so the effective refresh cadence is ~30s while staying within cron's 1-minute
-# minimum granularity.
-
-INTERVAL="${WORKLOAD_SNAPSHOT_REFRESH_INTERVAL:-30}"
+# Rebuilds the precomputed workload_status Layer 2 (tab counts + coarse-scope
+# summaries) and atomically swaps it in. cron invokes this once per minute (~60s
+# cadence). The procedure self-guards with an advisory lock, so an in-progress
+# build is never queued behind -- a concurrent invocation simply skips.
 
 # cron jobs do not inherit the container env; load the DB connection vars the
 # container start-up persisted (see periodic_tasks/Dockerfile).
@@ -34,12 +31,6 @@ if [ -f /tmp/cron.env ]; then
     done < /tmp/cron.env
 fi
 
-refresh() {
-    psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
-        -c "CALL refresh_workload_snapshot()"
-}
-
 echo "workload snapshot refresh started ($(date -u +%FT%TZ))"
-refresh
-sleep "$INTERVAL"
-refresh
+psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
+    -c "CALL refresh_workload_snapshot()"
