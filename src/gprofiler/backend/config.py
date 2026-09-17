@@ -60,7 +60,7 @@ BACKEND_ROOT = os.path.dirname(os.path.realpath(__file__))
 MAX_PROFILING_REQUEST_HOSTS = int(os.getenv("MAX_PROFILING_REQUEST_HOSTS", 20))
 
 # Per-worker threadpool size for sync route handlers (Starlette/anyio default: 40).
-# With GPROFILER_POSTGRES_CONN_PER_THREAD=TRUE each thread holds its own DB connection,
-# so total DB connections ~= gunicorn workers * this value * replicas. 0 keeps the default.
+# Caps concurrent requests per worker; requests beyond GPROFILER_POSTGRES_POOL_SIZE
+# wait for a pooled DB connection. 0 keeps the framework default.
 WEBAPP_THREAD_POOL_SIZE = int(os.getenv("GPROFILER_WEBAPP_THREAD_POOL_SIZE", 0))
 MAX_SIMULTANEOUS_PROFILING_HOSTS_PERCENT = int(os.getenv("MAX_SIMULTANEOUS_PROFILING_HOSTS", 10))
