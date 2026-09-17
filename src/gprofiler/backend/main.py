@@ -22,6 +22,7 @@ from backend import config, routers
 from backend.utils.metrics_publisher import MetricsPublisher
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, Response
+from gprofiler_dev import config as dev_config
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,18 @@ async def startup_event():
     if config.WEBAPP_THREAD_POOL_SIZE > 0:
         anyio.to_thread.current_default_thread_limiter().total_tokens = config.WEBAPP_THREAD_POOL_SIZE
         logger.info("Webapp threadpool size set to %s", config.WEBAPP_THREAD_POOL_SIZE)
+
+    # Start the async heartbeat writer (per worker) so it's flushing before beats arrive.
+    if dev_config.HEARTBEAT_ASYNC_WRITES:
+        from gprofiler_dev.heartbeat_writer import get_heartbeat_writer
+        from gprofiler_dev.postgres.db_manager import DBManager
+
+        get_heartbeat_writer(DBManager())
+        logger.info(
+            "Async heartbeat writer started (flush=%ss, max_hosts=%s)",
+            dev_config.HEARTBEAT_FLUSH_INTERVAL_SEC,
+            dev_config.HEARTBEAT_BUFFER_MAX_HOSTS,
+        )
 
     # Initialize MetricsPublisher
     metrics_publisher = MetricsPublisher(

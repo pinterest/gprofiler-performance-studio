@@ -56,6 +56,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 from gprofiler_dev import S3ProfileDal
 from gprofiler_dev import config as _dev_config
+from gprofiler_dev.heartbeat_writer import get_heartbeat_writer
 from gprofiler_dev.postgres.db_manager import DBManager
 
 # Adhoc profiling models
@@ -786,8 +787,10 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
         db_manager = DBManager()
 
         try:
-            # 1. Update host heartbeat information in PostgreSQL DB
-            db_manager.upsert_host_heartbeat(
+            # 1. Persist the host heartbeat + normalized inventory. By default this is buffered
+            # off the request thread and flushed in coalesced batches by the async writer; the
+            # command lookup below stays synchronous so the agent still gets its command now.
+            heartbeat_fields = dict(
                 hostname=heartbeat.hostname,
                 ip_address=heartbeat.ip_address,
                 service_name=heartbeat.service_name,
@@ -803,6 +806,10 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                 heartbeat_timestamp=heartbeat.timestamp,
                 supported_perf_events=heartbeat.perf_supported_events,  # Use agent field name
             )
+            if _dev_config.HEARTBEAT_ASYNC_WRITES:
+                get_heartbeat_writer(db_manager).submit(heartbeat_fields)
+            else:
+                db_manager.upsert_host_heartbeat(**heartbeat_fields)
 
             # 1b. Auto-subscribe newly-registered hosts to an active service-wide
             # profiling session. Hosts that join a service after a service-scoped
