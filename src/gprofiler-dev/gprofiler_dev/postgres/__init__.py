@@ -21,16 +21,13 @@ from gprofiler_dev import config
 from gprofiler_dev.postgres.postgresdb import PostgresDB
 
 _DB_INSTANCE: Optional[PostgresDB] = None
-THREAD_LOCAL = threading.local()
 _DB_LOCK = threading.RLock()
 
 
 def get_postgres_db() -> PostgresDB:
-    if config.POSTGRES_CONN_PER_THREAD:
-        if getattr(THREAD_LOCAL, "postgres_conn", None) is None:
-            THREAD_LOCAL.postgres_conn = PostgresDB()
-        return THREAD_LOCAL.postgres_conn
-
+    # One bounded connection pool per process, shared across all worker threads.
+    # (Per-thread connections were removed: unbounded, one per thread, they stormed
+    # the DB on deploy.)
     global _DB_INSTANCE
 
     if _DB_INSTANCE is None:

@@ -40,8 +40,8 @@ app = FastAPI(openapi_url="/api/v1/openapi.json", docs_url="/api/v1/docs")
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on application startup."""
-    # Size the sync-route threadpool per worker; also caps DB connections/worker
-    # when GPROFILER_POSTGRES_CONN_PER_THREAD=TRUE.
+    # Size the sync-route threadpool per worker (max concurrent requests/worker);
+    # DB concurrency is bounded separately by the connection pool (GPROFILER_POSTGRES_POOL_SIZE).
     if config.WEBAPP_THREAD_POOL_SIZE > 0:
         anyio.to_thread.current_default_thread_limiter().total_tokens = config.WEBAPP_THREAD_POOL_SIZE
         logger.info("Webapp threadpool size set to %s", config.WEBAPP_THREAD_POOL_SIZE)

@@ -31,6 +31,10 @@ PG_PORT = os.getenv("GPROFILER_POSTGRES_PORT", 5432)
 PG_PASSWORD = os.getenv("GPROFILER_POSTGRES_PASSWORD")
 POSTGRES_CONN_PER_THREAD = os.getenv("GPROFILER_POSTGRES_CONN_PER_THREAD", "FALSE").upper() == "TRUE"
 PG_CONNECT_TIMEOUT = int(os.getenv("GPROFILER_POSTGRES_CONNECT_TIMEOUT", 3))
+# Bounded per-process connection pool: max live connections and how long a caller waits
+# for a free one before erroring. Total DB connections ~= replicas * workers * pool size.
+POSTGRES_POOL_SIZE = int(os.getenv("GPROFILER_POSTGRES_POOL_SIZE", 10))
+POSTGRES_POOL_ACQUIRE_TIMEOUT = int(os.getenv("GPROFILER_POSTGRES_POOL_ACQUIRE_TIMEOUT", 10))
 
 INSTANCE_RUNS_LRU_CACHE_LIMIT = os.getenv("INSTANCE_RUNS_LRU_CACHE_LIMIT", 1000)
 PROFILER_PROCESSES_LRU_CACHE_LIMIT = os.getenv("PROFILER_PROCESSES_LRU_CACHE_LIMIT", 1000)
