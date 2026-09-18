@@ -949,6 +949,69 @@ class DBManager(metaclass=Singleton):
                 self._sync_host_inventory(cursor, host_id, containers or [])
         return True
 
+    def bulk_upsert_host_heartbeats(self, payloads: List[Dict[str, Any]]) -> int:
+        """Batched form of ``upsert_host_heartbeat`` for the async heartbeat writer.
+
+        One transaction upserts every host in the batch (bulk ``execute_values``) and then
+        syncs each host's inventory, collapsing what were N per-request write transactions
+        into a single commit. Callers must pre-coalesce so (hostname, service_name) is unique
+        within the batch (ON CONFLICT cannot affect the same row twice in one statement).
+        """
+        if not payloads:
+            return 0
+        now = datetime.now()
+        rows = [
+            (
+                p["hostname"],
+                p["ip_address"],
+                p["service_name"],
+                p.get("agent_version"),
+                p.get("run_mode"),
+                p.get("namespace"),
+                p.get("pod_name"),
+                p.get("last_command_id"),
+                p.get("received_command_ids"),
+                p.get("executed_command_ids"),
+                p.get("status", "active"),
+                p.get("heartbeat_timestamp") or now,
+                p.get("supported_perf_events"),
+            )
+            for p in payloads
+        ]
+        insert = """
+            INSERT INTO HostHeartbeats (
+                hostname, ip_address, service_name, agent_version, run_mode, namespace, pod_name,
+                last_command_id, received_command_ids, executed_command_ids,
+                status, heartbeat_timestamp, supported_perf_events, created_at, updated_at
+            ) VALUES %s
+            ON CONFLICT (hostname, service_name) DO UPDATE SET
+                ip_address = EXCLUDED.ip_address,
+                agent_version = EXCLUDED.agent_version,
+                run_mode = EXCLUDED.run_mode,
+                namespace = EXCLUDED.namespace,
+                pod_name = EXCLUDED.pod_name,
+                last_command_id = EXCLUDED.last_command_id,
+                received_command_ids = EXCLUDED.received_command_ids,
+                executed_command_ids = EXCLUDED.executed_command_ids,
+                status = EXCLUDED.status,
+                heartbeat_timestamp = EXCLUDED.heartbeat_timestamp,
+                supported_perf_events = EXCLUDED.supported_perf_events,
+                updated_at = CURRENT_TIMESTAMP
+            RETURNING id, hostname, service_name
+        """
+        template = (
+            "(%s, %s::inet, %s, %s, %s, %s, %s, %s::uuid, %s::uuid[], %s::uuid[], "
+            "%s::HostStatus, %s, %s::text[], CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        )
+        with self.db.transaction() as cursor:
+            returned = psycopg2.extras.execute_values(cursor, insert, rows, template=template, fetch=True)
+            host_id_by_key = {(r[1], r[2]): r[0] for r in returned}
+            for p in payloads:
+                host_id = host_id_by_key.get((p["hostname"], p["service_name"]))
+                if host_id is not None:
+                    self._sync_host_inventory(cursor, host_id, p.get("containers") or [])
+        return len(payloads)
+
     def _sync_host_inventory(self, cursor, host_id: int, containers: List[Dict[str, Any]]) -> None:
         """Diff the normalized inventory for a host against the latest heartbeat snapshot.
 
