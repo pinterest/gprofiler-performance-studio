@@ -17,7 +17,7 @@
 import time
 from contextlib import contextmanager
 from logging import getLogger
-from threading import BoundedSemaphore
+from threading import RLock
 from typing import Union
 
 import psycopg2
@@ -40,17 +40,12 @@ class DBConflict(Exception):
 class PostgresDB:
     def __init__(self):
         self.logger = getLogger(__name__)
-        maxconn = max(1, config.POSTGRES_POOL_SIZE)
-        minconn = min(1, maxconn)
-        self._acquire_timeout = config.POSTGRES_POOL_ACQUIRE_TIMEOUT
-        # BoundedSemaphore adds blocking backpressure on top of the pool: getconn()
-        # raises once maxconn is reached, so we gate leases here and make excess threads
-        # wait for a free connection instead of erroring or opening more (which is what
-        # stormed the DB when every thread held its own connection).
-        self._slots = BoundedSemaphore(maxconn)
-        self._pool = psycopg2.pool.ThreadedConnectionPool(
-            minconn,
-            maxconn,
+        self._thread_unsafe_conn = None
+        self._conn_lock = RLock()
+        self._reconnect()
+
+    def _reconnect(self):
+        conn = psycopg2.connect(
             dbname=config.PG_DB_NAME,
             user=config.PG_USER,
             host=config.PG_HOST,
@@ -58,32 +53,12 @@ class PostgresDB:
             password=config.PG_PASSWORD,
             connect_timeout=config.PG_CONNECT_TIMEOUT,
         )
+        self._thread_unsafe_conn = conn
 
     @contextmanager
-    def _lease(self):
-        """Borrow a pooled connection for the duration of the block.
-
-        Blocks (up to the acquire timeout) when all pooled connections are in use, so
-        the process never exceeds POSTGRES_POOL_SIZE connections and never storms the DB
-        with new connects. Broken connections are discarded so the pool replaces them.
-        """
-        if not self._slots.acquire(timeout=self._acquire_timeout):
-            raise psycopg2.OperationalError("timed out waiting for a pooled DB connection")
-        conn = None
-        broken = False
-        try:
-            conn = self._pool.getconn()
-            yield conn
-        except (psycopg2.OperationalError, psycopg2.InterfaceError):
-            broken = True
-            raise
-        finally:
-            if conn is not None:
-                try:
-                    self._pool.putconn(conn, close=broken)
-                except Exception:
-                    pass
-            self._slots.release()
+    def get_locked_conn(self):
+        with self._conn_lock:
+            yield self._thread_unsafe_conn
 
     @contextmanager
     def transaction(self, return_dict: bool = False):
@@ -93,25 +68,34 @@ class PostgresDB:
         when a logical write spans several statements that must be atomic (e.g. a
         parent upsert followed by dependent child writes).
 
-        Unlike ``execute`` this does not retry mid-transaction (a context manager can
-        only yield once); the pool hands out a healthy connection and, on a connection
-        error, the lease discards it so the pool replaces it next time.
+        Unlike ``execute`` this does not retry mid-transaction (a context manager
+        can only yield once), so it probes the connection up front and reconnects
+        once if it is dead before handing out the cursor.
         """
-        with self._lease() as conn:
-            cursor = conn.cursor(
-                cursor_factory=psycopg2.extras.RealDictCursor if return_dict else None
-            )
-            try:
-                yield cursor
-                conn.commit()
-            except Exception:
+        with self._conn_lock:
+            with self.get_locked_conn() as current_conn:
                 try:
-                    conn.rollback()
+                    if current_conn.closed:
+                        self._reconnect()
+                        current_conn = self._thread_unsafe_conn
                 except Exception:
-                    pass
-                raise
-            finally:
-                cursor.close()
+                    self._reconnect()
+                    current_conn = self._thread_unsafe_conn
+
+                cursor = current_conn.cursor(
+                    cursor_factory=psycopg2.extras.RealDictCursor if return_dict else None
+                )
+                try:
+                    yield cursor
+                    current_conn.commit()
+                except Exception:
+                    try:
+                        current_conn.rollback()
+                    except Exception:
+                        pass
+                    raise
+                finally:
+                    cursor.close()
 
     @staticmethod
     def _execute(
@@ -142,40 +126,45 @@ class PostgresDB:
         return_dict: bool = False,
         fetch_all: bool = False,
     ):
-        max_retries = 3
-        for i in range(max_retries):
-            try:
-                with self._lease() as conn:
-                    with conn.cursor(
-                        cursor_factory=psycopg2.extras.RealDictCursor if return_dict else None
-                    ) as cursor:
-                        try:
-                            out = self._execute(
-                                cursor,
-                                sql_query,
-                                args,
-                                has_value,
-                                execute_values=execute_values,
-                                fetch_all=fetch_all,
-                            )
-                            conn.commit()
-                            if one_value and not return_dict and not fetch_all:
-                                return out[0] if out else None
-                            if fetch_all and return_dict:
-                                return [dict(d) for d in out]
-                            return dict(out) if return_dict and out is not None else out
-                        except Exception:
+        max_retires = 3
+        with self._conn_lock:
+            for i in range(max_retires):
+                try:
+                    with self.get_locked_conn() as current_conn:
+                        with current_conn.cursor(
+                            cursor_factory=psycopg2.extras.RealDictCursor if return_dict else None
+                        ) as cursor:
                             try:
-                                conn.rollback()
+                                out = self._execute(
+                                    cursor,
+                                    sql_query,
+                                    args,
+                                    has_value,
+                                    execute_values=execute_values,
+                                    fetch_all=fetch_all,
+                                )
+                                current_conn.commit()
+                                if one_value and not return_dict and not fetch_all:
+                                    return out[0] if out else None
+                                if fetch_all and return_dict:
+                                    return [dict(d) for d in out]
+                                return dict(out) if return_dict and out is not None else out
                             except Exception:
-                                pass
-                            raise
-            except (psycopg2.OperationalError, psycopg2.InterfaceError):
-                if i < max_retries - 1:
-                    time.sleep(1)
-                    self.logger.error("Retrying DB operation after a connection error (#%s)", i)
-                    continue
-                raise
+                                try:
+                                    current_conn.rollback()
+                                except Exception:
+                                    pass
+                                raise
+                except (psycopg2.OperationalError, psycopg2.InterfaceError):
+                    if i < max_retires - 1:
+                        time.sleep(1)
+                        try:
+                            self.logger.error(f"Trying to reconnect #{i}")
+                            self._reconnect()
+                        except Exception:
+                            self.logger.exception(f"Failed trying to reconnect #{i}")
+                        continue
+                    raise
 
     def add_or_fetch(self, select: str, key: tuple, insert: str, value: tuple = None, check_conflict=True):
         """Using the select query, finds the ID of the key. If not found, uses insert query to insert value.
