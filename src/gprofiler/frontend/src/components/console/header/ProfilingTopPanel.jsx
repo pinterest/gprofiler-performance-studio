@@ -413,8 +413,7 @@ const ProfilingTopPanel = ({
                                 <Box sx={{ ml: 3 }}>
                                     <Typography variant='body2' sx={{ fontSize: '0.75rem', fontWeight: 500, mb: 1 }}>
                                         Time Mode:
-                                    </Typography>
-                                    <RadioGroup
+                                    </Typography>                                    <RadioGroup
                                         value={profilerConfigs.async_profiler?.time || 'cpu'}
                                         onChange={(e) => handleAsyncProfilerConfigChange('time', e.target.value)}>
                                         <Tooltip title='CPU time profiling - only when thread is running' placement='right' arrow>
@@ -483,6 +482,22 @@ const ProfilingTopPanel = ({
                                             </Tooltip>
                                         </Box>
                                     )}
+                                    <Tooltip
+                                        title="Per-thread profiling: splits collapsed stacks by thread name (async-profiler 'threads' output). Needed for Spark task attribution but adds cardinality/overhead."
+                                        placement='right'
+                                        arrow>
+                                        <FormControlLabel
+                                            control={
+                                                <Checkbox
+                                                    checked={profilerConfigs.async_profiler?.per_thread || false}
+                                                    onChange={(e) => handleAsyncProfilerConfigChange('per_thread', e.target.checked)}
+                                                    size='small'
+                                                />
+                                            }
+                                            label={<Typography variant='body2' sx={{ fontSize: '0.75rem' }}>Per-Thread</Typography>}
+                                            sx={{ mt: 1 }}
+                                        />
+                                    </Tooltip>
                                 </Box>
                             )}
                         </Box>

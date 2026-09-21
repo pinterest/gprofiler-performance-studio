@@ -370,7 +370,8 @@ const ProfilingStatusPage = () => {
         async_profiler: {
             enabled: true,
             time: 'cpu', // 'cpu', 'itimer', 'wall', 'auto', 'alloc'
-            alloc_interval: '2MB' // used only when time === 'alloc'
+            alloc_interval: '2MB', // used only when time === 'alloc'
+            per_thread: false // split collapsed stacks by thread name (async-profiler 'threads' output)
         },
         pyperf: 'enabled', // 'enabled', 'disabled'
         pyspy: 'enabled_fallback', // 'enabled_fallback', 'enabled', 'disabled'
@@ -887,7 +888,7 @@ const ProfilingStatusPage = () => {
                                                 profilerConfigs.async_profiler.time === 'auto' ? 'Auto' :
                                                 profilerConfigs.async_profiler.time === 'alloc' ? `Allocation (${profilerConfigs.async_profiler.alloc_interval || '2MB'})` :
                                                 'CPU Time'
-                                            })`
+                                            }${profilerConfigs.async_profiler.per_thread ? ', Per-Thread' : ''})`
                                             : 'Disabled'
                                     }</Typography>
                                     <Typography variant="body2">• Pyperf (Python): {profilerConfigs.pyperf === 'enabled' ? 'Enabled' : 'Disabled'}</Typography>
