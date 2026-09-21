@@ -961,11 +961,9 @@ class DBManager(metaclass=Singleton):
         """
         if not payloads:
             return 0
-        # Deterministic lock order: sort by the conflict key so concurrent flushes from other
-        # workers acquire the same HostHeartbeats rows in the same order and serialize instead
-        # of deadlocking. A deadlock aborts the transaction and drops the whole batch (thousands
-        # of hosts), which is what starved the persist rate and stretched heartbeat freshness.
-        payloads = sorted(payloads, key=lambda p: (p["hostname"], p["service_name"]))
+        # Do NOT sort by the conflict key: identical ordering across all workers trades occasional
+        # deadlocks for a lock convoy, since each flush holds the hot rows through the long per-host
+        # inventory sync. Keep the natural order and rely on the bounded deadlock-retry below.
         now = datetime.now()
         rows = [
             (
@@ -1010,9 +1008,9 @@ class DBManager(metaclass=Singleton):
             "(%s, %s::inet, %s, %s, %s, %s, %s, %s::uuid, %s::uuid[], %s::uuid[], "
             "%s::HostStatus, %s, %s::text[], CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
         )
-        # Sorted rows make same-order deadlocks impossible, but a deadlock can still arise
-        # against the inventory child tables; retry a few times before giving up so a
-        # transient conflict doesn't discard the whole coalesced batch.
+        # Concurrent flushes can deadlock on the parent upsert or the inventory child tables;
+        # retry a few times before giving up so a transient conflict doesn't discard the whole
+        # coalesced batch (dropping it would lose every host in the batch until the next beat).
         for attempt in range(3):
             try:
                 with self.db.transaction() as cursor:
