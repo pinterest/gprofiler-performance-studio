@@ -15,6 +15,7 @@
 #
 
 import os
+import re
 
 REDIRECT_DOMAIN = os.getenv("REDIRECT_DOMAIN")
 
@@ -55,3 +56,20 @@ S3_PATH_PREFIX = os.getenv("S3_PATH_PREFIX", "").strip("/")
 S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL")
 
 ACTIVE_HOST_HEARTBEAT_MAX_DELTA_HOURS = int(os.getenv("ACTIVE_HOST_HEARTBEAT_MAX_DELTA_HOURS", 24))
+
+
+def _validated_sql_interval(value: str, default: str) -> str:
+    # This value is interpolated directly into SQL interval literals, so restrict it to a
+    # simple "<n> <unit>" form (allowlist) to keep it injection-safe.
+    candidate = (value or "").strip()
+    if re.fullmatch(r"\d+\s+(second|seconds|minute|minutes|hour|hours)", candidate, re.IGNORECASE):
+        return candidate
+    return default
+
+
+# How recent a host's last heartbeat must be to count as "fresh"/active in the live workload
+# views and the precompute store build. Loosened from 2m: at full-fleet scale the async writer
+# spreads each host's timestamp refresh over ~15m, so a tighter window undercounts the fleet.
+WORKLOAD_FRESH_INTERVAL = _validated_sql_interval(
+    os.getenv("GPROFILER_WORKLOAD_FRESH_INTERVAL", "15 minutes"), "15 minutes"
+)

@@ -1008,7 +1008,7 @@ CREATE OR REPLACE VIEW workload_tab_counts AS SELECT * FROM workload_tab_counts_
 -- provably identical to the PID-aware value; for namespace/pod it can over-mark
 -- only under PID-targeted commands, which are effectively unused in practice.
 
-CREATE OR REPLACE PROCEDURE refresh_workload_snapshot(IN fresh_interval interval DEFAULT '2 minutes')
+CREATE OR REPLACE PROCEDURE refresh_workload_snapshot(IN fresh_interval interval DEFAULT '15 minutes')
     LANGUAGE plpgsql
 AS $procedure$
 DECLARE

@@ -19,6 +19,7 @@ import json
 import threading
 import time
 import uuid
+import psycopg2.errors
 import psycopg2.extras
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -29,6 +30,7 @@ from gprofiler_dev.config import (
     ACTIVE_HOST_HEARTBEAT_MAX_DELTA_HOURS,
     INSTANCE_RUNS_LRU_CACHE_LIMIT,
     PROFILER_PROCESSES_LRU_CACHE_LIMIT,
+    WORKLOAD_FRESH_INTERVAL,
 )
 from gprofiler_dev.lru_cache_impl import LRUCache
 from gprofiler_dev.postgres import get_postgres_db
@@ -959,6 +961,11 @@ class DBManager(metaclass=Singleton):
         """
         if not payloads:
             return 0
+        # Deterministic lock order: sort by the conflict key so concurrent flushes from other
+        # workers acquire the same HostHeartbeats rows in the same order and serialize instead
+        # of deadlocking. A deadlock aborts the transaction and drops the whole batch (thousands
+        # of hosts), which is what starved the persist rate and stretched heartbeat freshness.
+        payloads = sorted(payloads, key=lambda p: (p["hostname"], p["service_name"]))
         now = datetime.now()
         rows = [
             (
@@ -1003,13 +1010,27 @@ class DBManager(metaclass=Singleton):
             "(%s, %s::inet, %s, %s, %s, %s, %s, %s::uuid, %s::uuid[], %s::uuid[], "
             "%s::HostStatus, %s, %s::text[], CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
         )
-        with self.db.transaction() as cursor:
-            returned = psycopg2.extras.execute_values(cursor, insert, rows, template=template, fetch=True)
-            host_id_by_key = {(r[1], r[2]): r[0] for r in returned}
-            for p in payloads:
-                host_id = host_id_by_key.get((p["hostname"], p["service_name"]))
-                if host_id is not None:
-                    self._sync_host_inventory(cursor, host_id, p.get("containers") or [])
+        # Sorted rows make same-order deadlocks impossible, but a deadlock can still arise
+        # against the inventory child tables; retry a few times before giving up so a
+        # transient conflict doesn't discard the whole coalesced batch.
+        for attempt in range(3):
+            try:
+                with self.db.transaction() as cursor:
+                    returned = psycopg2.extras.execute_values(cursor, insert, rows, template=template, fetch=True)
+                    host_id_by_key = {(r[1], r[2]): r[0] for r in returned}
+                    for p in payloads:
+                        host_id = host_id_by_key.get((p["hostname"], p["service_name"]))
+                        if host_id is not None:
+                            self._sync_host_inventory(cursor, host_id, p.get("containers") or [])
+                return len(payloads)
+            except psycopg2.errors.DeadlockDetected:
+                if attempt == 2:
+                    raise
+                self.db.logger.warning(
+                    "bulk heartbeat upsert deadlock for %s hosts, retrying (attempt %s)",
+                    len(payloads),
+                    attempt + 1,
+                )
         return len(payloads)
 
     def _sync_host_inventory(self, cursor, host_id: int, containers: List[Dict[str, Any]]) -> None:
@@ -1284,13 +1305,13 @@ class DBManager(metaclass=Singleton):
         normalized_requested_events = [normalize_perf_event_name(event) for event in requested_events]
         
         # Build query to get hosts and their supported events
-        query = """
+        query = f"""
         SELECT 
             hostname, 
             supported_perf_events
         FROM HostHeartbeats
         WHERE service_name = %(service_name)s
-          AND heartbeat_timestamp >= NOW() - INTERVAL '2 minutes'
+          AND heartbeat_timestamp >= NOW() - INTERVAL '{WORKLOAD_FRESH_INTERVAL}'
         """
         
         values = {"service_name": service_name}
@@ -2189,7 +2210,7 @@ class DBManager(metaclass=Singleton):
                 fh.run_mode,
                 fh.heartbeat_timestamp
             FROM HostHeartbeats fh
-            WHERE fh.heartbeat_timestamp > NOW() - INTERVAL '2 minutes'
+            WHERE fh.heartbeat_timestamp > NOW() - INTERVAL '{WORKLOAD_FRESH_INTERVAL}'
               AND {service_filter}
         ),
         current_commands AS (
@@ -2251,7 +2272,7 @@ class DBManager(metaclass=Singleton):
         where_terms: List[str] = []
         if driving == "direct":
             from_clause = "HostHeartbeats fh"
-            where_terms.append("fh.heartbeat_timestamp > NOW() - INTERVAL '2 minutes'")
+            where_terms.append(f"fh.heartbeat_timestamp > NOW() - INTERVAL '{WORKLOAD_FRESH_INTERVAL}'")
             where_terms.append(service_filter)
         else:
             from_clause = "fresh_hosts fh"
@@ -2787,7 +2808,7 @@ class DBManager(metaclass=Singleton):
         finer scopes resolve to per-host PID sets.
         """
         entities = target_entities or [{"service_name": service_name}]
-        recency = "h.heartbeat_timestamp > NOW() - INTERVAL '2 minutes'"
+        recency = f"h.heartbeat_timestamp > NOW() - INTERVAL '{WORKLOAD_FRESH_INTERVAL}'"
 
         if target_scope in ("service", "host"):
             query = (
@@ -2921,7 +2942,7 @@ class DBManager(metaclass=Singleton):
             List of dictionaries with host status information
         """
         # Build the query with CTEs for better readability and performance
-        query = """
+        query = f"""
         WITH latest_commands AS (
             SELECT
                 pc.hostname,
@@ -2956,9 +2977,9 @@ class DBManager(metaclass=Singleton):
         LEFT JOIN current_commands c
             ON h.hostname = c.hostname AND h.service_name = c.service_name
         WHERE 1=1
-            -- Only show hosts that sent heartbeat in last 2 minutes (recently active)
+            -- Only show hosts that sent a heartbeat within the fresh window (recently active)
             -- This improves page load performance by filtering out stale/inactive hosts
-            AND h.heartbeat_timestamp > NOW() - INTERVAL '2 minutes'
+            AND h.heartbeat_timestamp > NOW() - INTERVAL '{WORKLOAD_FRESH_INTERVAL}'
         """
 
         values: Dict[str, Any] = {}

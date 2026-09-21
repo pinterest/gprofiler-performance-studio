@@ -26,11 +26,20 @@
 if [ -f /tmp/cron.env ]; then
     while IFS='=' read -r _k _v; do
         case "$_k" in
-            PGHOST|PGPORT|PGUSER|PGPASSWORD|PGDATABASE) export "$_k=$_v" ;;
+            PGHOST|PGPORT|PGUSER|PGPASSWORD|PGDATABASE|GPROFILER_WORKLOAD_FRESH_INTERVAL) export "$_k=$_v" ;;
         esac
     done < /tmp/cron.env
 fi
 
-echo "workload snapshot refresh started ($(date -u +%FT%TZ))"
+# Freshness window for "active" hosts; keep in sync with the webapp's
+# GPROFILER_WORKLOAD_FRESH_INTERVAL so the store and live views agree. Restrict to a
+# simple "<n> <unit>" form (allowlist) since it is interpolated into the CALL literal.
+FRESH_INTERVAL="${GPROFILER_WORKLOAD_FRESH_INTERVAL:-15 minutes}"
+if ! printf '%s' "$FRESH_INTERVAL" | grep -Eqi '^[0-9]+ (second|seconds|minute|minutes|hour|hours)$'; then
+    echo "invalid GPROFILER_WORKLOAD_FRESH_INTERVAL='$FRESH_INTERVAL', using '15 minutes'"
+    FRESH_INTERVAL="15 minutes"
+fi
+
+echo "workload snapshot refresh started ($(date -u +%FT%TZ)) fresh_interval='$FRESH_INTERVAL'"
 psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
-    -c "CALL refresh_workload_snapshot()"
+    -c "CALL refresh_workload_snapshot(INTERVAL '$FRESH_INTERVAL')"
