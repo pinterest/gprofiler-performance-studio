@@ -954,16 +954,17 @@ class DBManager(metaclass=Singleton):
     def bulk_upsert_host_heartbeats(self, payloads: List[Dict[str, Any]]) -> int:
         """Batched form of ``upsert_host_heartbeat`` for the async heartbeat writer.
 
-        One transaction upserts every host in the batch (bulk ``execute_values``) and then
-        syncs each host's inventory, collapsing what were N per-request write transactions
-        into a single commit. Callers must pre-coalesce so (hostname, service_name) is unique
-        within the batch (ON CONFLICT cannot affect the same row twice in one statement).
+        Runs as two short transactions instead of one long one: first a bulk parent upsert
+        (``HostHeartbeats``), then a set-based inventory sync for the whole batch. The hot
+        parent rows every freshness query reads are therefore locked only for the fast
+        upsert, not for the duration of the inventory diff -- which is what let the old
+        per-host, single-transaction path pile up into deadlocks / a lock convoy at scale.
+
+        Callers must pre-coalesce so (hostname, service_name) is unique within the batch
+        (ON CONFLICT cannot affect the same row twice in one statement).
         """
         if not payloads:
             return 0
-        # Do NOT sort by the conflict key: identical ordering across all workers trades occasional
-        # deadlocks for a lock convoy, since each flush holds the hot rows through the long per-host
-        # inventory sync. Keep the natural order and rely on the bounded deadlock-retry below.
         now = datetime.now()
         rows = [
             (
@@ -1008,28 +1009,246 @@ class DBManager(metaclass=Singleton):
             "(%s, %s::inet, %s, %s, %s, %s, %s, %s::uuid, %s::uuid[], %s::uuid[], "
             "%s::HostStatus, %s, %s::text[], CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
         )
-        # Concurrent flushes can deadlock on the parent upsert or the inventory child tables;
-        # retry a few times before giving up so a transient conflict doesn't discard the whole
-        # coalesced batch (dropping it would lose every host in the batch until the next beat).
-        for attempt in range(3):
+
+        # Transaction 1: parent upsert only, so the hot HostHeartbeats rows are locked briefly.
+        # The short lock window makes the residual (unsorted) deadlock rare; retry the rare one.
+        host_id_by_key: Dict[Tuple[str, str], int] = {}
+
+        def _upsert_hosts(cursor) -> None:
+            returned = psycopg2.extras.execute_values(cursor, insert, rows, template=template, fetch=True)
+            host_id_by_key.clear()
+            host_id_by_key.update({(r[1], r[2]): r[0] for r in returned})
+
+        self._write_with_deadlock_retry("bulk heartbeat host upsert", _upsert_hosts, hosts=len(payloads))
+
+        # Transaction 2: bulked inventory. The parent freshness is already committed, so if the
+        # inventory can't land after retries we skip it (it re-syncs next beat) instead of failing
+        # the flush and losing the freshness update for the whole batch.
+        try:
+            self._write_with_deadlock_retry(
+                "bulk heartbeat inventory sync",
+                lambda cursor: self._bulk_sync_inventory(cursor, payloads, host_id_by_key),
+                hosts=len(payloads),
+            )
+        except psycopg2.errors.DeadlockDetected:
+            self.db.logger.warning(
+                "bulk heartbeat inventory sync deadlocked for %s hosts after retries; skipping "
+                "inventory this flush (freshness persisted, re-syncs next beat)",
+                len(payloads),
+            )
+        return len(payloads)
+
+    def _write_with_deadlock_retry(self, label: str, work, hosts: int, attempts: int = 3) -> None:
+        """Run ``work(cursor)`` in one transaction, retrying the whole transaction on deadlock."""
+        for attempt in range(attempts):
             try:
                 with self.db.transaction() as cursor:
-                    returned = psycopg2.extras.execute_values(cursor, insert, rows, template=template, fetch=True)
-                    host_id_by_key = {(r[1], r[2]): r[0] for r in returned}
-                    for p in payloads:
-                        host_id = host_id_by_key.get((p["hostname"], p["service_name"]))
-                        if host_id is not None:
-                            self._sync_host_inventory(cursor, host_id, p.get("containers") or [])
-                return len(payloads)
+                    work(cursor)
+                return
             except psycopg2.errors.DeadlockDetected:
-                if attempt == 2:
+                if attempt == attempts - 1:
                     raise
                 self.db.logger.warning(
-                    "bulk heartbeat upsert deadlock for %s hosts, retrying (attempt %s)",
-                    len(payloads),
-                    attempt + 1,
+                    "%s deadlock for %s hosts, retrying (attempt %s)", label, hosts, attempt + 1
                 )
-        return len(payloads)
+
+    def _bulk_sync_inventory(
+        self, cursor, payloads: List[Dict[str, Any]], host_id_by_key: Dict[Tuple[str, str], int]
+    ) -> None:
+        """Set-based inventory diff for the whole batch (containers + processes).
+
+        Equivalent to ``_sync_host_inventory`` per host, but expressed as a fixed handful of
+        statements over the entire batch (prune / insert-new / update-changed for containers,
+        then the same for processes) instead of O(hosts x containers) round-trips -- so the
+        inventory transaction stays short and holds few locks. Insert/update stay guarded
+        (insert-only-new, update-only-changed) so unchanged inventory produces zero row writes.
+        """
+        host_ids: List[int] = []
+        container_rows: List[Tuple[Any, ...]] = []
+        keep_c_host_ids: List[int] = []
+        keep_c_cids: List[str] = []
+        processes_by_ckey: Dict[Tuple[int, str], List[Tuple[int, Any]]] = {}
+
+        for p in payloads:
+            host_id = host_id_by_key.get((p["hostname"], p["service_name"]))
+            if host_id is None:
+                continue
+            host_ids.append(host_id)
+            seen_cids: Set[str] = set()
+            for container in p.get("containers") or []:
+                if not isinstance(container, dict):
+                    continue
+                cid = container.get("container_id")
+                if cid is None or cid in seen_cids:
+                    continue
+                seen_cids.add(cid)
+                container_rows.append(
+                    (
+                        host_id,
+                        cid,
+                        container.get("container_name"),
+                        container.get("runtime"),
+                        container.get("namespace"),
+                        container.get("pod_name"),
+                        container.get("workload_name"),
+                        container.get("workload_kind"),
+                    )
+                )
+                keep_c_host_ids.append(host_id)
+                keep_c_cids.append(cid)
+                seen_pids: Set[int] = set()
+                plist: List[Tuple[int, Any]] = []
+                for process in container.get("processes") or []:
+                    if not isinstance(process, dict):
+                        continue
+                    pid = process.get("pid")
+                    if pid is None or not str(pid).isdigit():
+                        continue
+                    pid = int(pid)
+                    if pid in seen_pids:
+                        continue
+                    seen_pids.add(pid)
+                    plist.append((pid, process.get("process_name")))
+                processes_by_ckey[(host_id, cid)] = plist
+
+        if not host_ids:
+            return
+
+        # Prune containers these hosts no longer report (also reclaims legacy NULL-id rows).
+        cursor.execute(
+            """
+            DELETE FROM HeartbeatContainers hc
+            WHERE hc.host_id = ANY(%(host_ids)s::bigint[])
+              AND NOT EXISTS (
+                SELECT 1 FROM unnest(%(keep_host_ids)s::bigint[], %(keep_cids)s::text[])
+                             AS keep(host_id, container_id)
+                WHERE keep.host_id = hc.host_id AND keep.container_id = hc.container_id
+              )
+            """,
+            {"host_ids": host_ids, "keep_host_ids": keep_c_host_ids, "keep_cids": keep_c_cids},
+        )
+
+        if container_rows:
+            # Insert only genuinely-new containers so nextval fires only for real inserts.
+            psycopg2.extras.execute_values(
+                cursor,
+                """
+                INSERT INTO HeartbeatContainers (
+                    host_id, container_id, container_name, runtime, namespace,
+                    pod_name, workload_name, workload_kind, updated_at
+                )
+                SELECT v.host_id, v.container_id, v.container_name, v.runtime, v.namespace,
+                       v.pod_name, v.workload_name, v.workload_kind, CURRENT_TIMESTAMP
+                FROM (VALUES %s) AS v(host_id, container_id, container_name, runtime,
+                                      namespace, pod_name, workload_name, workload_kind)
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM HeartbeatContainers hc
+                    WHERE hc.host_id = v.host_id AND hc.container_id = v.container_id
+                )
+                ON CONFLICT (host_id, container_id) DO NOTHING
+                """,
+                container_rows,
+                template="(%s::bigint, %s::text, %s::text, %s::text, %s::text, %s::text, %s::text, %s::text)",
+                page_size=1000,
+            )
+            # Rewrite metadata only for containers that actually changed.
+            psycopg2.extras.execute_values(
+                cursor,
+                """
+                UPDATE HeartbeatContainers hc SET
+                    container_name = v.container_name,
+                    runtime        = v.runtime,
+                    namespace      = v.namespace,
+                    pod_name       = v.pod_name,
+                    workload_name  = v.workload_name,
+                    workload_kind  = v.workload_kind,
+                    updated_at     = CURRENT_TIMESTAMP
+                FROM (VALUES %s) AS v(host_id, container_id, container_name, runtime,
+                                      namespace, pod_name, workload_name, workload_kind)
+                WHERE hc.host_id = v.host_id AND hc.container_id = v.container_id
+                  AND (
+                    hc.container_name, hc.runtime, hc.namespace, hc.pod_name,
+                    hc.workload_name, hc.workload_kind
+                  ) IS DISTINCT FROM (
+                    v.container_name, v.runtime, v.namespace, v.pod_name,
+                    v.workload_name, v.workload_kind
+                  )
+                """,
+                container_rows,
+                template="(%s::bigint, %s::text, %s::text, %s::text, %s::text, %s::text, %s::text, %s::text)",
+                page_size=1000,
+            )
+
+        # Map every reported (host_id, container_id) to its stable row id so processes can attach.
+        row_id_by_ckey: Dict[Tuple[int, str], int] = {}
+        if keep_c_cids:
+            cursor.execute(
+                "SELECT id, host_id, container_id FROM HeartbeatContainers "
+                "WHERE host_id = ANY(%(host_ids)s::bigint[]) AND container_id = ANY(%(cids)s::text[])",
+                {"host_ids": host_ids, "cids": keep_c_cids},
+            )
+            row_id_by_ckey = {(hid, cid): rid for rid, hid, cid in cursor.fetchall()}
+
+        container_row_ids: List[int] = []
+        process_rows: List[Tuple[int, int, Any]] = []
+        keep_p_crids: List[int] = []
+        keep_p_pids: List[int] = []
+        for (host_id, cid), plist in processes_by_ckey.items():
+            crid = row_id_by_ckey.get((host_id, cid))
+            if crid is None:
+                continue
+            container_row_ids.append(crid)
+            for pid, pname in plist:
+                process_rows.append((crid, pid, pname))
+                keep_p_crids.append(crid)
+                keep_p_pids.append(pid)
+
+        if not container_row_ids:
+            return
+
+        # Prune processes these containers no longer report.
+        cursor.execute(
+            """
+            DELETE FROM HeartbeatProcesses hp
+            WHERE hp.container_row_id = ANY(%(crids)s::bigint[])
+              AND NOT EXISTS (
+                SELECT 1 FROM unnest(%(keep_crids)s::bigint[], %(keep_pids)s::int[])
+                             AS keep(container_row_id, pid)
+                WHERE keep.container_row_id = hp.container_row_id AND keep.pid = hp.pid
+              )
+            """,
+            {"crids": container_row_ids, "keep_crids": keep_p_crids, "keep_pids": keep_p_pids},
+        )
+
+        if process_rows:
+            psycopg2.extras.execute_values(
+                cursor,
+                """
+                INSERT INTO HeartbeatProcesses (container_row_id, pid, process_name)
+                SELECT v.container_row_id, v.pid, v.process_name
+                FROM (VALUES %s) AS v(container_row_id, pid, process_name)
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM HeartbeatProcesses hp
+                    WHERE hp.container_row_id = v.container_row_id AND hp.pid = v.pid
+                )
+                ON CONFLICT (container_row_id, pid) DO NOTHING
+                """,
+                process_rows,
+                template="(%s::bigint, %s::int, %s::text)",
+                page_size=1000,
+            )
+            psycopg2.extras.execute_values(
+                cursor,
+                """
+                UPDATE HeartbeatProcesses hp SET process_name = v.process_name
+                FROM (VALUES %s) AS v(container_row_id, pid, process_name)
+                WHERE hp.container_row_id = v.container_row_id AND hp.pid = v.pid
+                  AND hp.process_name IS DISTINCT FROM v.process_name
+                """,
+                process_rows,
+                template="(%s::bigint, %s::int, %s::text)",
+                page_size=1000,
+            )
 
     def _sync_host_inventory(self, cursor, host_id: int, containers: List[Dict[str, Any]]) -> None:
         """Diff the normalized inventory for a host against the latest heartbeat snapshot.
