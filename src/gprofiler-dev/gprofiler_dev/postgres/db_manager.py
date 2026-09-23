@@ -1114,15 +1114,23 @@ class DBManager(metaclass=Singleton):
         if not host_ids:
             return
 
+        # Allow the prune anti-joins below to build hashed SubPlans even for large coalesced
+        # batches; a too-small work_mem would drop them back to a quadratic per-row plan.
+        cursor.execute("SET LOCAL work_mem = '64MB'")
+
         # Prune containers these hosts no longer report (also reclaims legacy NULL-id rows).
+        # Tuple NOT IN (not a correlated NOT EXISTS over unnest) so the planner builds a hashed
+        # SubPlan -- O(1) per candidate -- instead of a per-container quadratic Merge Anti Join.
         cursor.execute(
             """
             DELETE FROM HeartbeatContainers hc
             WHERE hc.host_id = ANY(%(host_ids)s::bigint[])
-              AND NOT EXISTS (
-                SELECT 1 FROM unnest(%(keep_host_ids)s::bigint[], %(keep_cids)s::text[])
-                             AS keep(host_id, container_id)
-                WHERE keep.host_id = hc.host_id AND keep.container_id = hc.container_id
+              AND (
+                hc.container_id IS NULL
+                OR (hc.host_id, hc.container_id) NOT IN (
+                    SELECT host_id, container_id
+                    FROM unnest(%(keep_host_ids)s::bigint[], %(keep_cids)s::text[]) AS keep(host_id, container_id)
+                )
               )
             """,
             {"host_ids": host_ids, "keep_host_ids": keep_c_host_ids, "keep_cids": keep_c_cids},
@@ -1206,15 +1214,16 @@ class DBManager(metaclass=Singleton):
         if not container_row_ids:
             return
 
-        # Prune processes these containers no longer report.
+        # Prune processes these containers no longer report. Tuple NOT IN -> hashed SubPlan
+        # (O(1) per candidate) instead of the quadratic Merge Anti Join a correlated NOT EXISTS
+        # over unnest planned to. pid is always non-null here, so NOT IN has no NULL pitfall.
         cursor.execute(
             """
             DELETE FROM HeartbeatProcesses hp
             WHERE hp.container_row_id = ANY(%(crids)s::bigint[])
-              AND NOT EXISTS (
-                SELECT 1 FROM unnest(%(keep_crids)s::bigint[], %(keep_pids)s::int[])
-                             AS keep(container_row_id, pid)
-                WHERE keep.container_row_id = hp.container_row_id AND keep.pid = hp.pid
+              AND (hp.container_row_id, hp.pid) NOT IN (
+                SELECT container_row_id, pid
+                FROM unnest(%(keep_crids)s::bigint[], %(keep_pids)s::int[]) AS keep(container_row_id, pid)
               )
             """,
             {"crids": container_row_ids, "keep_crids": keep_p_crids, "keep_pids": keep_p_pids},
