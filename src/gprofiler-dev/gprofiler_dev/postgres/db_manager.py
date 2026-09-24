@@ -1897,39 +1897,28 @@ class DBManager(metaclass=Singleton):
         (and was not cancelled). This is what lets hosts that register *after* a
         service-wide profiling request auto-join the in-progress profile.
         """
-        start_query = """
-        SELECT request_id, created_at
+        # Single round-trip: the newest non-cancelled service-scoped continuous start that is
+        # strictly newer than the newest service-scoped stop (if any). Replaces two queries.
+        query = """
+        SELECT request_id
         FROM ProfilingRequests
         WHERE service_name = %(service_name)s
           AND request_type = 'start'
           AND continuous = TRUE
           AND COALESCE(additional_args->>'target_scope', 'host') = 'service'
           AND status != 'cancelled'
+          AND created_at > COALESCE((
+              SELECT MAX(created_at)
+              FROM ProfilingRequests
+              WHERE service_name = %(service_name)s
+                AND request_type = 'stop'
+                AND COALESCE(additional_args->>'target_scope', 'host') = 'service'
+          ), '-infinity'::timestamptz)
         ORDER BY created_at DESC
         LIMIT 1
         """
-        start_row = self.db.execute(
-            start_query, {"service_name": service_name}, one_value=True, return_dict=True
-        )
-        if not start_row:
-            return None
-
-        stop_query = """
-        SELECT created_at
-        FROM ProfilingRequests
-        WHERE service_name = %(service_name)s
-          AND request_type = 'stop'
-          AND COALESCE(additional_args->>'target_scope', 'host') = 'service'
-        ORDER BY created_at DESC
-        LIMIT 1
-        """
-        stop_row = self.db.execute(
-            stop_query, {"service_name": service_name}, one_value=True, return_dict=True
-        )
-        if stop_row and stop_row["created_at"] >= start_row["created_at"]:
-            return None
-
-        return str(start_row["request_id"])
+        row = self.db.execute(query, {"service_name": service_name}, one_value=True, return_dict=True)
+        return str(row["request_id"]) if row else None
 
     def auto_subscribe_host_to_service(self, hostname: str, service_name: str) -> bool:
         """Enroll a host into its service's active service-wide profiling.
@@ -1942,13 +1931,13 @@ class DBManager(metaclass=Singleton):
         actions (including stops) are preserved.
 
         Returns True if a new subscription command was created for the host.
+
+        Precondition: call only for a host with no current command. The heartbeat path
+        already fetches the command (to deliver it) and only invokes this when there is
+        none, so re-reading it here would just duplicate that query on the hot path.
         """
         subscription_request_id = self.get_active_service_subscription(service_name)
         if not subscription_request_id:
-            return False
-
-        current_command = self.get_current_profiling_command(hostname, service_name)
-        if current_command is not None:
             return False
 
         command_id = str(uuid.uuid4())

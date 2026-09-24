@@ -811,29 +811,36 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
             else:
                 db_manager.upsert_host_heartbeat(**heartbeat_fields)
 
-            # 1b. Auto-subscribe newly-registered hosts to an active service-wide
-            # profiling session. Hosts that join a service after a service-scoped
-            # request was issued (e.g. cluster autoscaling) are enrolled here so
-            # users do not have to re-select the service.
-            try:
-                if db_manager.auto_subscribe_host_to_service(
-                    hostname=heartbeat.hostname,
-                    service_name=heartbeat.service_name,
-                ):
-                    logger.info(
-                        f"Auto-subscribed host {heartbeat.hostname} to active service-wide "
-                        f"profiling for service {heartbeat.service_name}"
-                    )
-            except Exception as e:
-                logger.warning(
-                    f"Auto-subscribe check failed for {heartbeat.hostname}/{heartbeat.service_name}: {e}"
-                )
-
-            # 2. Check for current profiling command for this host/service
+            # 2. Look up this host's current command once. The agent needs it on every beat,
+            # and it also gates auto-subscribe (only hosts *without* a command are candidates),
+            # so fetching it first lets the hot path skip the service-wide subscription lookup
+            # entirely whenever a command already exists.
             current_command = db_manager.get_current_profiling_command(
                 hostname=heartbeat.hostname,
                 service_name=heartbeat.service_name,
             )
+
+            # 2b. Auto-subscribe newly-registered hosts (e.g. nodes added by autoscaling after a
+            # service-scoped request) to an active service-wide profiling session. Only hosts with
+            # no command yet can be enrolled, so this stays off the hot path.
+            if current_command is None:
+                try:
+                    if db_manager.auto_subscribe_host_to_service(
+                        hostname=heartbeat.hostname,
+                        service_name=heartbeat.service_name,
+                    ):
+                        current_command = db_manager.get_current_profiling_command(
+                            hostname=heartbeat.hostname,
+                            service_name=heartbeat.service_name,
+                        )
+                        logger.info(
+                            f"Auto-subscribed host {heartbeat.hostname} to active service-wide "
+                            f"profiling for service {heartbeat.service_name}"
+                        )
+                except Exception as e:
+                    logger.warning(
+                        f"Auto-subscribe check failed for {heartbeat.hostname}/{heartbeat.service_name}: {e}"
+                    )
 
             if current_command:
                 success = True
