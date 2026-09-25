@@ -1,152 +1,167 @@
 # Webapp DB Concurrency Tuning
 
-Environment variables that control how much database work the webapp
-(`gprofiler_frontend` container) can do in parallel, and how to set them in
-production.
+Environment variables that control how the webapp (`gprofiler_frontend`
+container) opens and reuses PostgreSQL connections, how much DB work it does in
+parallel, and how it behaves when the database is briefly unreachable.
 
-## Background: why this matters
+## Background: the connection model
 
 The webapp runs under **gunicorn** with **`uvicorn.workers.UvicornWorker`**
 (async workers). The API route handlers are synchronous `def` functions, so
 Starlette runs each request in a **per-worker threadpool** (anyio default: 40
 threads).
 
-Database access goes through `PostgresDB`, which holds a **bounded, per-process
-connection pool** (`psycopg2.pool.ThreadedConnectionPool` plus a semaphore for
-blocking backpressure). Worker threads borrow a connection for the duration of a
-query/transaction and return it:
+Database access goes through `PostgresDB` (`src/gprofiler-dev/gprofiler_dev/postgres/`).
+Each `PostgresDB` instance owns **one** psycopg2 connection guarded by an
+`RLock`, so calls on a given instance are serialized. How many `PostgresDB`
+instances (and therefore connections) a worker creates is selected by
+`GPROFILER_POSTGRES_CONN_PER_THREAD`:
+
+- **`FALSE` (default) — one shared connection per worker process.** A single
+  process-wide `PostgresDB` is shared by all request threads; the `RLock`
+  serializes DB access. Connections per worker ≈ **1**.
+- **`TRUE` — one connection per request thread.** Each thread gets its own
+  thread-local `PostgresDB`, so DB access runs in parallel across threads, but a
+  worker can open up to `GPROFILER_WEBAPP_THREAD_POOL_SIZE` connections.
 
 ```
 worker process
   ├─ ~40 request threads accepted concurrently
-  └─ pool of N connections  ← threads borrow/return; >N wait (backpressure)
+  └─ CONN_PER_THREAD=FALSE → 1 shared, lock-serialized connection
+     CONN_PER_THREAD=TRUE  → up to (threadpool size) connections, one per thread
 ```
 
-This gives real read/write parallelism **up to the pool size** while capping how
-many connections each process opens. When the pool is fully in use, extra threads
-wait for a free connection (up to the acquire timeout) instead of opening more.
-That cap is what matters at scale: an earlier per-thread design (one unbounded
-connection per thread) worked in a single process but, once every worker thread
-across the fleet opened its own connection, **stormed the Aurora writer** —
-connection establishment backed up to 20+ s, hitting 100% ACU and ~1.6k
-connections and failing heartbeats. The pool bounds and reuses connections so that
-cannot happen.
+The per-thread mode gives real read/write parallelism but multiplies
+connections. At fleet scale this is the dominant risk: with every worker thread
+across every replica opening its own connection, connection **establishment** can
+back up and storm the Aurora writer (connections pile up in `FIN-WAIT-2`, new
+`connect()`s time out). See "Reconnect, retry & timeouts" for the guardrails, and
+"Connection math" for sizing.
+
+> **Historical note.** A bounded in-process pool
+> (`psycopg2.pool.ThreadedConnectionPool` + semaphore) was prototyped and then
+> **reverted**: request threads that block in Python *while holding* a pooled
+> connection starve the semaphore process-wide. `GPROFILER_POSTGRES_POOL_SIZE` /
+> `GPROFILER_POSTGRES_POOL_ACQUIRE_TIMEOUT` are still parsed in `config.py` but
+> are **not wired into the connection path** today. The durable direction for
+> hard-capping connections is an **external pooler** (PgBouncer transaction mode
+> or RDS Proxy), which pools at the network layer without the in-process wedge.
 
 ## The knobs
 
 | Environment variable | Where read | Default | Effect |
 | --- | --- | --- | --- |
-| `GPROFILER_POSTGRES_POOL_SIZE` | `src/gprofiler-dev/gprofiler_dev/config.py` | `10` | Max DB connections in each process's pool = max parallel DB ops per worker. |
-| `GPROFILER_POSTGRES_POOL_ACQUIRE_TIMEOUT` | `src/gprofiler-dev/gprofiler_dev/config.py` | `10` (seconds) | How long a thread waits for a free pooled connection before the request errors. |
-| `GUNICORN_PROCESS_COUNT` | `src/gprofiler/run.sh` | `nproc` | Number of gunicorn worker **processes** per replica. Each process has its own pool. |
-| `GPROFILER_WEBAPP_THREAD_POOL_SIZE` | `src/gprofiler/backend/config.py` | `0` (anyio default 40) | Per-worker threadpool size for sync routes = max concurrent requests per worker. Requests beyond the pool size wait for a connection. |
-| `GPROFILER_POSTGRES_CONN_PER_THREAD` | `src/gprofiler-dev/gprofiler_dev/config.py` | `FALSE` | **Deprecated / ignored.** The old per-thread-connection mode; replaced by the bounded pool. |
+| `GPROFILER_POSTGRES_CONN_PER_THREAD` | `src/gprofiler-dev/gprofiler_dev/config.py` | `FALSE` | Connection model selector. `FALSE` = one shared, lock-serialized connection per worker (~1 conn/worker). `TRUE` = one connection per request thread (up to threadpool-size conns/worker). |
+| `GUNICORN_PROCESS_COUNT` | `src/gprofiler/run.sh` | `nproc` | Number of gunicorn worker **processes** per replica. Each process opens its own connection(s). |
+| `GPROFILER_WEBAPP_THREAD_POOL_SIZE` | `src/gprofiler/backend/config.py` | `0` (anyio default 40) | Per-worker threadpool size = max concurrent requests per worker. In `CONN_PER_THREAD=TRUE` mode this is also the per-worker connection ceiling. |
+| `GPROFILER_POSTGRES_CONNECT_TIMEOUT` | `src/gprofiler-dev/gprofiler_dev/config.py` | `10` (seconds) | libpq `connect_timeout` for each connection attempt. |
+| `GPROFILER_POSTGRES_MAX_RETRIES` | `src/gprofiler-dev/gprofiler_dev/config.py` | `3` | Max attempts for `PostgresDB.execute()` on a transient connection error. |
+| `GPROFILER_POSTGRES_RETRY_BACKOFF_BASE` | `src/gprofiler-dev/gprofiler_dev/config.py` | `0.2` (seconds) | Base for exponential backoff between retries. |
+| `GPROFILER_POSTGRES_RETRY_BACKOFF_CAP` | `src/gprofiler-dev/gprofiler_dev/config.py` | `5.0` (seconds) | Upper bound on a single backoff wait. |
+| `GPROFILER_POSTGRES_RETRY_BACKOFF_JITTER` | `src/gprofiler-dev/gprofiler_dev/config.py` | `0.5` (seconds) | Random jitter added to each backoff wait. |
+| `GPROFILER_POSTGRES_POOL_SIZE` | `src/gprofiler-dev/gprofiler_dev/config.py` | `10` | **Currently inactive** (the in-process pool was reverted; see the historical note). |
+| `GPROFILER_POSTGRES_POOL_ACQUIRE_TIMEOUT` | `src/gprofiler-dev/gprofiler_dev/config.py` | `10` | **Currently inactive** (see above). |
 
-### `GPROFILER_POSTGRES_POOL_SIZE` — the primary knob
+### `GPROFILER_POSTGRES_CONN_PER_THREAD` — the connection-model knob
 
-Caps how many DB operations a single worker runs at once (and how many
-connections it opens). Bigger = more parallelism per worker, but more connections
-against the database. Total fleet connections are bounded by
-`replicas × workers × pool size` (see the connection math below), so size it for
-the concurrency you need — not higher.
+`FALSE` trades per-worker parallelism for a hard, tiny connection footprint (one
+serialized connection per worker). `TRUE` gives real parallelism per worker at
+the cost of up to `threadpool` connections each. Total fleet connections scale as
+shown in "Connection math"; keep them well under the database `max_connections`.
 
-### `GPROFILER_POSTGRES_POOL_ACQUIRE_TIMEOUT` — backpressure ceiling
+## Reconnect, retry & timeouts
 
-When every pooled connection is busy, additional request threads wait this long
-for one to free up, then fail fast. Keep it at or below your load-balancer
-timeout so a saturated pool sheds load instead of piling up.
+`PostgresDB.execute()` retries transient connection errors
+(`OperationalError` / `InterfaceError`) up to `GPROFILER_POSTGRES_MAX_RETRIES`
+attempts, reconnecting between tries. Two behaviors matter under load:
 
-### `GUNICORN_PROCESS_COUNT` — process count
+- **`_reconnect()` closes the old connection before opening a new one.** If the
+  stale socket were only dropped for the garbage collector to reclaim, it lingers
+  in `FIN-WAIT-2`; under load thousands accumulate and saturate the database's
+  connection **accept** path. Closing first keeps the socket count bounded.
+- **Backoff is exponential with jitter**, not a fixed sleep. A fixed sleep makes
+  every thread reconnect in lockstep, turning a brief blip into a self-sustaining
+  connection storm. The wait is
+  `min(BASE × 2**attempt, CAP) + random(0, JITTER)`, so retry waves
+  de-synchronize instead of hammering the accept path together.
 
-Each worker process has its own pool, so total connections scale with the worker
-count. Workers are I/O-bound on the DB, so more workers than CPU cores is fine —
-but every worker multiplies the connection total.
+`execute()` also accepts an optional `max_retries` argument so latency-sensitive
+callers can pass a low value (e.g. `1`) to **fail fast and shed load** rather than
+block on reconnect attempts while the accept path is saturated.
 
-### `GPROFILER_WEBAPP_THREAD_POOL_SIZE` — request concurrency per worker
-
-How many sync requests a worker runs at once (anyio default 40). Requests beyond
-`GPROFILER_POSTGRES_POOL_SIZE` simply wait for a pooled connection, so this can
-stay at the default; the DB pool is the real concurrency bound.
+`GPROFILER_POSTGRES_CONNECT_TIMEOUT` defaults to **10 s**: long enough that a
+brief latency blip does not trip a reconnect wave, and well under the gunicorn
+worker timeout (300 s). Pair it with the bounded backoff above rather than
+relying on the timeout in isolation.
 
 ## Connection math
 
 Total DB connections opened by the webapp is bounded by:
 
 ```
-connections ≈ replicas × GUNICORN_PROCESS_COUNT × GPROFILER_POSTGRES_POOL_SIZE
+CONN_PER_THREAD=FALSE:  connections ≈ replicas × GUNICORN_PROCESS_COUNT
+CONN_PER_THREAD=TRUE:   connections ≈ replicas × GUNICORN_PROCESS_COUNT × GPROFILER_WEBAPP_THREAD_POOL_SIZE
 ```
 
-Unlike the old per-thread design this is a hard cap, and connections are reused,
-so there is no establishment storm. Keep the total comfortably under the
-database's `max_connections` (Aurora here is `5000`) with margin for periodic
-tasks and admin sessions. Connection count is necessary but not sufficient — the
-writer must also have the CPU/ACU to service the work (the incident that motivated
-this pool was 100% ACU, not a connection-count limit).
+Keep the total comfortably under the database's `max_connections` (Aurora here is
+`5000`) with margin for periodic tasks and admin sessions. Connection count is
+necessary but not sufficient — the writer must also have the CPU/ACU to service
+the work; a past incident saturated ACU at 100%, not a connection-count limit.
 
-**Examples (per the current prod cluster, `nproc = 8`):**
+**Examples (`nproc = 8`, 6 replicas):**
 
-| Config | Conns/replica | 6 replicas |
-| --- | --- | --- |
-| 8 workers, pool 10 | 80 | 480 |
-| 8 workers, pool 20 | 160 | 960 |
-| 16 workers, pool 10 | 160 | 960 |
+| Config | Conns/worker | Conns/replica | 6 replicas |
+| --- | --- | --- | --- |
+| `CONN_PER_THREAD=FALSE`, 8 workers | 1 | 8 | 48 |
+| `CONN_PER_THREAD=TRUE`, 8 workers, threadpool 40 | up to 40 | up to 320 | up to 1920 |
+
+The gap between those rows is the storm risk the connection model controls.
 
 ## Sizing for load (Little's Law)
 
 The number of DB operations in flight at once is `L = λ × W`, where `λ` is the
-request rate and `W` is how long each request holds a connection. Your total
-provisioned concurrency (`replicas × workers × pool size`) must exceed `L`, with
-headroom for bursts.
+request rate and `W` is how long each request holds a connection. Your available
+concurrency must exceed `L`, with headroom for bursts.
 
-The dominant driver here is the agent heartbeat: **30k hosts × 1 per 30 s ≈
-1000 heartbeat QPS**. Each heartbeat is write-heavy — `upsert_host_heartbeat`
-(host upsert + container/process diff-sync) plus a profiling-command lookup and
-possible status updates — so `W` is on the order of tens of milliseconds:
+- With `CONN_PER_THREAD=TRUE`, per-worker concurrency is the threadpool size.
+- With `CONN_PER_THREAD=FALSE`, DB access is serialized within a worker, so
+  per-worker DB concurrency is effectively **1** — fleet DB concurrency is
+  `replicas × workers`. Keep per-request hold time `W` low (see below) so this
+  serialized path still clears the offered load.
 
-| Heartbeat hold time `W` | Busy connections `L` at 1000 QPS |
-| --- | --- |
-| 30 ms | 30 |
-| 50 ms | 50 |
-| 100 ms | 100 |
-| 150 ms | 150 |
-
-Add read traffic on top. Coarse read scopes now serve from the store in ~10 ms
-(negligible), but the **live fine scopes hold a connection for seconds**
-(container ~4 s, process ~8 s), so each concurrent fine-scope request consumes
-several connection-seconds. Budget generously for these.
-
-Target total provisioned concurrency at **2–3× the computed `L`** so bursts and
-slow reads don't exhaust the pool. Measure `W` from your own metrics
-(`pg_stat_activity`, request latency) and re-derive — the table is a starting
-estimate.
+The dominant driver is the agent heartbeat: **~30k hosts × 1 per 30 s ≈
+1000 heartbeat QPS**. Heartbeat writes are buffered off the request thread by the
+async heartbeat writer (coalesced batch flush), so the request path holds a
+connection only briefly; the flush thread does the batched write. Keep an eye on
+the **live fine read scopes**, which can hold a connection for seconds
+(container ~4 s, process ~8 s) and dominate `W` when used.
 
 > **Connections enable parallelism, they do not create DB throughput.** 1000
 > write-heavy heartbeats/s is real load on the Aurora writer regardless of how
 > many connections you open. If the writer saturates (CPU, lock/WAL), the fix is
-> to cut per-heartbeat cost (batch the inventory writes) or scale the DB — not to
-> add more connections.
+> to cut per-heartbeat cost (batch/coalesce writes) or scale the DB — not to add
+> more connections.
 
 ## Recommended production settings
 
-Start conservative and raise the pool only if you need more parallelism:
+Start with the low-footprint model and only move to per-thread if you measure a
+DB-concurrency bottleneck while the writer still has headroom:
 
 ```bash
-# Bounded connections per worker (max parallel DB ops per worker).
-GPROFILER_POSTGRES_POOL_SIZE=10
+# One shared, lock-serialized connection per worker (~1 conn/worker).
+GPROFILER_POSTGRES_CONN_PER_THREAD=FALSE
 
-# Shed load rather than pile up when the pool is saturated.
-GPROFILER_POSTGRES_POOL_ACQUIRE_TIMEOUT=10
-
-# Process count; total connections = replicas * workers * pool size.
+# Process count; total connections = replicas * workers (in FALSE mode).
 GUNICORN_PROCESS_COUNT=8
+
+# Tolerate a brief blip; fail well under the 300s worker timeout.
+GPROFILER_POSTGRES_CONNECT_TIMEOUT=10
 ```
 
-With 6 replicas × 8 workers × pool 10 = **480** connections max — reused, no
-storm, well under `max_connections`. Because heartbeats are now cheap (the
-inventory sync is diff-only), a modest pool comfortably covers the ~1000
-heartbeat QPS plus reads; raise `GPROFILER_POSTGRES_POOL_SIZE` only if you observe
-threads waiting on the pool (acquire timeouts) while the writer still has ACU
-headroom.
+If you switch to `CONN_PER_THREAD=TRUE` for parallelism, lower
+`GPROFILER_WEBAPP_THREAD_POOL_SIZE` deliberately so
+`replicas × workers × threadpool` stays well under `max_connections`, and watch
+the connection accept path.
 
 ## Verifying
 
@@ -157,4 +172,11 @@ SHOW max_connections;
 SELECT count(*) AS total,
        count(*) FILTER (WHERE state = 'active') AS active
 FROM pg_stat_activity;
+```
+
+On a webapp host, watch the socket states to the DB (a healthy host shows a
+small, stable `ESTAB` count and **no** growing `FIN-WAIT-2`):
+
+```bash
+ss -tan | awk '$5 ~ /:5432$/ {print $1}' | sort | uniq -c
 ```

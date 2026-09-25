@@ -14,11 +14,12 @@
 # limitations under the License.
 #
 
+import random
 import time
 from contextlib import contextmanager
 from logging import getLogger
 from threading import RLock
-from typing import Union
+from typing import Optional, Union
 
 import psycopg2
 import psycopg2.extras
@@ -45,6 +46,20 @@ class PostgresDB:
         self._reconnect()
 
     def _reconnect(self):
+        # Close the previous connection *before* replacing it. Otherwise the old socket is
+        # only reclaimed on GC: it lingers in FIN-WAIT-2 and, under load, thousands pile up
+        # into a connection storm that saturates Aurora's accept path. Closing is best-effort
+        # (the connection is likely already broken, which is why we're reconnecting).
+        old_conn = self._thread_unsafe_conn
+        if old_conn is not None:
+            try:
+                old_conn.close()
+            except Exception:
+                self.logger.debug("Failed to close stale connection during reconnect", exc_info=True)
+        # NOTE: we intentionally keep ``old_conn`` installed until the new connect() succeeds. If
+        # connect() raises (e.g. the accept path is saturated), the retry loop will next touch this
+        # now-closed connection and get a retryable InterfaceError -- rather than a None dereference
+        # that would escape the OperationalError/InterfaceError retry handling.
         conn = psycopg2.connect(
             dbname=config.PG_DB_NAME,
             user=config.PG_USER,
@@ -54,6 +69,18 @@ class PostgresDB:
             connect_timeout=config.PG_CONNECT_TIMEOUT,
         )
         self._thread_unsafe_conn = conn
+
+    @staticmethod
+    def _retry_backoff(attempt: int) -> float:
+        """Bounded exponential backoff with jitter for transient-connection retries.
+
+        Fixed sleeps make every thread reconnect in lockstep, which turns a brief blip into a
+        self-sustaining connection storm. Exponential growth caps the total wait and the random
+        jitter spreads the reconnect attempts out in time so they don't all hammer Aurora's
+        accept path at once.
+        """
+        base = config.PG_RETRY_BACKOFF_BASE * (2 ** attempt)
+        return min(base, config.PG_RETRY_BACKOFF_CAP) + random.uniform(0, config.PG_RETRY_BACKOFF_JITTER)
 
     @contextmanager
     def get_locked_conn(self):
@@ -125,10 +152,16 @@ class PostgresDB:
         execute_values: bool = False,
         return_dict: bool = False,
         fetch_all: bool = False,
+        max_retries: Optional[int] = None,
     ):
-        max_retires = 3
+        # ``max_retries`` is the number of *attempts*. Callers on a latency-sensitive / hot path
+        # (e.g. a request thread) can pass a low value (e.g. 1) to fail fast and shed load instead
+        # of blocking on reconnect waves while the accept path is saturated. Defaults to config.
+        if max_retries is None:
+            max_retries = config.PG_MAX_RETRIES
+        max_retries = max(1, max_retries)
         with self._conn_lock:
-            for i in range(max_retires):
+            for i in range(max_retries):
                 try:
                     with self.get_locked_conn() as current_conn:
                         with current_conn.cursor(
@@ -156,8 +189,10 @@ class PostgresDB:
                                     pass
                                 raise
                 except (psycopg2.OperationalError, psycopg2.InterfaceError):
-                    if i < max_retires - 1:
-                        time.sleep(1)
+                    if i < max_retries - 1:
+                        # Back off with jitter *before* reconnecting so retry waves de-synchronize
+                        # instead of piling more SYNs onto a saturated accept path.
+                        time.sleep(self._retry_backoff(i))
                         try:
                             self.logger.error(f"Trying to reconnect #{i}")
                             self._reconnect()
