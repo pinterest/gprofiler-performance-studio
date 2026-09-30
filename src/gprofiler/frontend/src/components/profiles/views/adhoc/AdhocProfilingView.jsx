@@ -20,7 +20,7 @@ import { SelectorsContext } from '@/states';
 import { FilterTagsContext } from '@/states/filters/FiltersTagsContext';
 import useFetchWithRequest from '@/api/useFetchWithRequest';
 import { DATA_URLS } from '@/api/urls';
-import { stringify } from 'query-string';
+import queryString from 'query-string';
 import { getStartEndDateTimeFromSelection } from '@/api/utils';
 import Flexbox from '@/components/common/layout/Flexbox';
 import { formatDate, TIME_FORMATS } from '@/utils/datetimesUtils';
@@ -38,7 +38,7 @@ const AdhocProfilingView = () => {
 
     const { data: filesData, loading: filesLoading, error: filesError, run: fetchFiles } = useFetchWithRequest(
         {
-            url: `${DATA_URLS.GET_ADHOC_FLAMEGRAPHS}?${stringify({
+            url: `${DATA_URLS.GET_ADHOC_FLAMEGRAPHS}?${queryString.stringify({
                 serviceName: selectedService,
                 ...timeParams,
                 filter: activeFilterTag?.filter ? JSON.stringify(activeFilterTag) : undefined,
@@ -49,7 +49,7 @@ const AdhocProfilingView = () => {
 
     const { data: fileContent, loading: contentLoading, error: contentError, run: fetchFileContent } = useFetchWithRequest(
         {
-            url: `${DATA_URLS.GET_ADHOC_FLAMEGRAPH_CONTENT}?${stringify({
+            url: `${DATA_URLS.GET_ADHOC_FLAMEGRAPH_CONTENT}?${queryString.stringify({
                 serviceName: selectedService,
                 filename: selectedFile?.filename,
             })}`,
