@@ -31,7 +31,20 @@ PG_USER = os.getenv("GPROFILER_POSTGRES_USERNAME")
 PG_PORT = os.getenv("GPROFILER_POSTGRES_PORT", 5432)
 PG_PASSWORD = os.getenv("GPROFILER_POSTGRES_PASSWORD")
 POSTGRES_CONN_PER_THREAD = os.getenv("GPROFILER_POSTGRES_CONN_PER_THREAD", "FALSE").upper() == "TRUE"
-PG_CONNECT_TIMEOUT = int(os.getenv("GPROFILER_POSTGRES_CONNECT_TIMEOUT", 3))
+# Raised from 3s: a 3s connect timeout trips on a brief latency blip and kicks off a reconnect
+# wave (the storm). 10s tolerates a transient hiccup while still failing well under the gunicorn
+# worker timeout (300s). Pair with the bounded backoff/retry below and hot-path fail-fast rather
+# than relying on this value alone.
+PG_CONNECT_TIMEOUT = int(os.getenv("GPROFILER_POSTGRES_CONNECT_TIMEOUT", 10))
+# Retry/backoff for PostgresDB.execute() on transient connection errors.
+# During a connection storm, a fixed sleep + reconnect-per-retry across every thread
+# reconnects in lockstep and amplifies the storm. We cap the attempts and use bounded
+# exponential backoff with jitter so retry waves de-synchronize instead of piling up.
+PG_MAX_RETRIES = int(os.getenv("GPROFILER_POSTGRES_MAX_RETRIES", 3))
+# Base backoff in seconds; wait ~= min(base * 2**attempt, cap) + random(0, jitter).
+PG_RETRY_BACKOFF_BASE = float(os.getenv("GPROFILER_POSTGRES_RETRY_BACKOFF_BASE", "0.2"))
+PG_RETRY_BACKOFF_CAP = float(os.getenv("GPROFILER_POSTGRES_RETRY_BACKOFF_CAP", "5.0"))
+PG_RETRY_BACKOFF_JITTER = float(os.getenv("GPROFILER_POSTGRES_RETRY_BACKOFF_JITTER", "0.5"))
 # Bounded per-process connection pool: max live connections and how long a caller waits
 # for a free one before erroring. Total DB connections ~= replicas * workers * pool size.
 POSTGRES_POOL_SIZE = int(os.getenv("GPROFILER_POSTGRES_POOL_SIZE", 10))
