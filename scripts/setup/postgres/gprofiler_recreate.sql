@@ -288,6 +288,11 @@ CREATE TABLE HostHeartbeats (
     supported_perf_events text[] NULL,
     created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- sha256 of the inventory last synced into HeartbeatContainers/HeartbeatProcesses for
+    -- this host (see migrations/add_inventory_digest_to_hostheartbeats.sql). A beat whose
+    -- inventory hashes to this value does no inventory work. NULL = not yet synced under
+    -- change detection. (Last column so a fresh install matches the migrated layout.)
+    inventory_digest text NULL,
     CONSTRAINT "unique_host_heartbeat" UNIQUE (hostname, service_name)
 );
 
