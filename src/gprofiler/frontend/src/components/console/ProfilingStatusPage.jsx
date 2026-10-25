@@ -334,6 +334,11 @@ const ProfilingStatusPage = () => {
     const [activeScope, setActiveScope] = useState('service');
     const [rows, setRows] = useState([]);
     const [scopeCounts, setScopeCounts] = useState({});
+    // Fresh hosts whose container/process inventory the server has not synced yet (see
+    // inventoryPendingHosts in the workload_status response). Non-zero right after a rollout
+    // while the paced initial sync drains; pods/containers/processes of those hosts are not
+    // yet selectable.
+    const [inventoryPendingHosts, setInventoryPendingHosts] = useState(0);
     const [loading, setLoading] = useState(false);
     const [selectionModel, setSelectionModel] = useState([]);
     const [totalCount, setTotalCount] = useState(0);
@@ -468,6 +473,7 @@ const ProfilingStatusPage = () => {
                 const normalizedRows = (data.rows || []).map((row) => formatRowForScope(row, scope));
                 setRows(normalizedRows);
                 setScopeCounts(data.tabCounts || data.tab_counts || {});
+                setInventoryPendingHosts(data.inventoryPendingHosts ?? data.inventory_pending_hosts ?? 0);
                 setTotalCount(data.totalCount || data.total_count || normalizedRows.length);
                 setLoading(false);
             })
@@ -718,6 +724,11 @@ const ProfilingStatusPage = () => {
                     <Typography variant="subtitle1" sx={{ fontWeight: 700, color: '#16a34a' }}>
                         {(scopeCounts[activeScope] ?? totalCount ?? 0).toLocaleString()}
                     </Typography>
+                    {inventoryPendingHosts > 0 && (
+                        <Typography variant="caption" sx={{ display: 'block', color: '#b45309' }}>
+                            {inventoryPendingHosts.toLocaleString()} hosts' inventory still syncing
+                        </Typography>
+                    )}
                 </Box>
             </Box>
 

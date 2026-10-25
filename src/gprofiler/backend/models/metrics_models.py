@@ -273,6 +273,12 @@ class HeartbeatRequest(BaseModel):
     namespace: Optional[str] = None
     pod_name: Optional[str] = None
     containers: Optional[List[HeartbeatContainerInfo]] = None
+    # Digest of the agent's current inventory (gprofiler_dev.heartbeat_inventory canonical
+    # form). Agents that send it may omit ``containers`` when the server already holds
+    # matching inventory ("digest-only beat"); the server answers ``need_inventory`` so the
+    # agent knows whether to include the full inventory on its next beat. Older agents
+    # leave this None and always send ``containers``.
+    inventory_digest: Optional[str] = None
     last_command_id: Optional[str] = None
     received_command_ids: Optional[List[str]] = None
     executed_command_ids: Optional[List[str]] = None
@@ -288,6 +294,11 @@ class HeartbeatResponse(BaseModel):
     message: str
     profiling_command: Optional[Dict[str, Any]] = None
     command_id: Optional[str] = None
+    # Only set when the agent sent ``inventory_digest``. True = the inventory the server
+    # has committed for this host does not match the agent's digest (never synced, sync
+    # deferred by the budget, or changed) -> the agent must send ``containers`` on its
+    # next beat. False = server holds matching inventory -> digest-only beats are fine.
+    need_inventory: Optional[bool] = None
 
 
 class CommandCompletionRequest(BaseModel):
@@ -417,6 +428,11 @@ class ProfilingInventoryStatusResponse(CamelModel):
     rows: List[ProfilingInventoryStatus]
     tab_counts: Dict[str, int]
     active_hosts: int
+    # Fresh hosts whose container/process inventory has not been synced yet: their sync
+    # is still queued behind GPROFILER_INVENTORY_SYNC_PER_SEC (watch this drain after a
+    # rollout) or their agent never reports inventory. Pod/container/process targeting
+    # cannot see these hosts until it reaches 0 (for hosts that do report inventory).
+    inventory_pending_hosts: int = 0
     total_count: int  # total groups matching the filter (not just the current page)
     page: int
     page_size: int
