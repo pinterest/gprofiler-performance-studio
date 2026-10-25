@@ -121,6 +121,7 @@ erDiagram
         text workload_name
         text workload_kind
         timestamp updated_at
+        integer process_count "rows in HeartbeatProcesses for this container"
     }
     HeartbeatProcesses {
         bigserial id PK
@@ -189,6 +190,19 @@ Each object has two physical generations. `refresh_workload_snapshot()` rebuilds
 the inactive generation, then re-points the views and flips
 `workload_snapshot_meta` **in one transaction**, so a reader never observes a
 partial build and the rebuild never blocks reads.
+
+The rebuild reads `HostHeartbeats` and `HeartbeatContainers` only. Every process
+total it produces (the process tab count and the `process_count` of each
+service / namespace / pod row) is `SUM(HeartbeatContainers.process_count)`, a
+per-container counter the inventory sync writes in the same statement as the
+container row. `HeartbeatProcesses` (about 100 million rows at fleet scale) is
+never scanned by the rebuild, and the live path only reads it when a
+process-level filter (`process_name`, `pids`, `profiling_status`) requires the
+process grain or the scope keys on a single host.
+
+`process_count` everywhere means **the number of processes in the group**
+(one per `(container, pid)` on a fresh host). Two hosts of a service each
+running `java` as pid 100 count as two processes, not one.
 
 Layer 1 (`workload_snapshot`) was designed to serve *filtered* reads from an
 indexed flatten. It is currently not built — dropping it took the rebuild from
@@ -646,6 +660,16 @@ window referenced below is the active-host heartbeat window
 - **AT-S25 — Concurrent refresh is skipped.** *Given* a refresh is already
   running, *When* the periodic task fires again, *Then* the second invocation
   exits without queueing behind the first.
+- **AT-S26 — Per-container counter follows the sync.** *Given* a host's
+  inventory is synced, *When* a container's process list grows, shrinks, or
+  contains a duplicate pid, *Then* `HeartbeatContainers.process_count` equals
+  the number of `HeartbeatProcesses` rows stored for that container after the
+  same transaction.
+- **AT-S27 — Precomputed and live counts agree.** *Given* a fresh inventory,
+  *When* the same scope is read unfiltered (precomputed) and with a filter that
+  matches everything (live), *Then* the process tab count and every row's
+  `process_count` are equal, and equal the total number of processes in the
+  group — identical processes on different hosts are not collapsed.
 
 ## Known Limitations
 

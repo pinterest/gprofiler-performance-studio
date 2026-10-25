@@ -1080,6 +1080,13 @@ class DBManager(metaclass=Singleton):
             return
 
         # Container tuples, reused by the insert-new and update-changed passes below.
+        # process_count is the number of process rows the sync below will leave for the
+        # container (same pid filtering), so it is written in the same guarded statements
+        # as the rest of the container row and never needs a separate COUNT.
+        processes_by_container_id = {
+            container["container_id"]: self._dedup_process_rows(container.get("processes") or [])
+            for container in normalized
+        }
         container_rows = [
             (
                 host_id,
@@ -1090,9 +1097,13 @@ class DBManager(metaclass=Singleton):
                 container.get("pod_name"),
                 container.get("workload_name"),
                 container.get("workload_kind"),
+                len(processes_by_container_id[container["container_id"]]),
             )
             for container in normalized
         ]
+        container_template = (
+            "(%s::bigint, %s::text, %s::text, %s::text, %s::text, %s::text, %s::text, %s::text, %s::integer)"
+        )
 
         # Insert only genuinely-new containers. A blanket INSERT ... ON CONFLICT would
         # evaluate the id DEFAULT (nextval) for every proposed row before resolving the
@@ -1104,12 +1115,12 @@ class DBManager(metaclass=Singleton):
             """
             INSERT INTO HeartbeatContainers (
                 host_id, container_id, container_name, runtime, namespace,
-                pod_name, workload_name, workload_kind, updated_at
+                pod_name, workload_name, workload_kind, process_count, updated_at
             )
             SELECT v.host_id, v.container_id, v.container_name, v.runtime, v.namespace,
-                   v.pod_name, v.workload_name, v.workload_kind, CURRENT_TIMESTAMP
+                   v.pod_name, v.workload_name, v.workload_kind, v.process_count, CURRENT_TIMESTAMP
             FROM (VALUES %s) AS v(host_id, container_id, container_name, runtime,
-                                  namespace, pod_name, workload_name, workload_kind)
+                                  namespace, pod_name, workload_name, workload_kind, process_count)
             WHERE NOT EXISTS (
                 SELECT 1 FROM HeartbeatContainers hc
                 WHERE hc.host_id = v.host_id AND hc.container_id = v.container_id
@@ -1117,7 +1128,7 @@ class DBManager(metaclass=Singleton):
             ON CONFLICT (host_id, container_id) DO NOTHING
             """,
             container_rows,
-            template="(%s::bigint, %s::text, %s::text, %s::text, %s::text, %s::text, %s::text, %s::text)",
+            template=container_template,
         )
 
         # Rewrite metadata only for containers that actually changed.
@@ -1131,20 +1142,21 @@ class DBManager(metaclass=Singleton):
                 pod_name       = v.pod_name,
                 workload_name  = v.workload_name,
                 workload_kind  = v.workload_kind,
+                process_count  = v.process_count,
                 updated_at     = CURRENT_TIMESTAMP
             FROM (VALUES %s) AS v(host_id, container_id, container_name, runtime,
-                                  namespace, pod_name, workload_name, workload_kind)
+                                  namespace, pod_name, workload_name, workload_kind, process_count)
             WHERE hc.host_id = v.host_id AND hc.container_id = v.container_id
               AND (
                 hc.container_name, hc.runtime, hc.namespace, hc.pod_name,
-                hc.workload_name, hc.workload_kind
+                hc.workload_name, hc.workload_kind, hc.process_count
               ) IS DISTINCT FROM (
                 v.container_name, v.runtime, v.namespace, v.pod_name,
-                v.workload_name, v.workload_kind
+                v.workload_name, v.workload_kind, v.process_count
               )
             """,
             container_rows,
-            template="(%s::bigint, %s::text, %s::text, %s::text, %s::text, %s::text, %s::text, %s::text)",
+            template=container_template,
         )
 
         # Map every reported container_id to its stable row id (changed or not) so
@@ -1161,11 +1173,15 @@ class DBManager(metaclass=Singleton):
             container_row_id = row_id_by_container_id.get(container["container_id"])
             if container_row_id is None:
                 continue
-            self._sync_container_processes(cursor, container_row_id, container.get("processes") or [])
+            self._sync_container_processes(
+                cursor, container_row_id, processes_by_container_id[container["container_id"]]
+            )
 
-    def _sync_container_processes(self, cursor, container_row_id: int, processes: List[Dict[str, Any]]) -> None:
-        """Diff a single container's processes, mirroring the container-level upsert."""
-        process_rows = []
+    @staticmethod
+    def _dedup_process_rows(processes: List[Dict[str, Any]]) -> List[Tuple[int, Any]]:
+        """``(pid, process_name)`` for each storable process: integer pid, first occurrence
+        wins (UNIQUE (container_row_id, pid)). Same filter as the inventory digest."""
+        rows: List[Tuple[int, Any]] = []
         seen_pids: Set[int] = set()
         for process in processes:
             if not isinstance(process, dict):
@@ -1174,10 +1190,15 @@ class DBManager(metaclass=Singleton):
             if pid is None or not str(pid).isdigit():
                 continue
             pid = int(pid)
-            if pid in seen_pids:  # satisfy UNIQUE (container_row_id, pid)
+            if pid in seen_pids:
                 continue
             seen_pids.add(pid)
-            process_rows.append((container_row_id, pid, process.get("process_name")))
+            rows.append((pid, process.get("process_name")))
+        return rows
+
+    def _sync_container_processes(self, cursor, container_row_id: int, processes: List[Tuple[int, Any]]) -> None:
+        """Diff a single container's processes, mirroring the container-level upsert."""
+        process_rows = [(container_row_id, pid, process_name) for pid, process_name in processes]
 
         # Drop processes the container no longer reports.
         cursor.execute(
@@ -2054,7 +2075,7 @@ class DBManager(metaclass=Singleton):
         "namespace_count": ("COUNT(DISTINCT b.namespace) FILTER (WHERE b.namespace IS NOT NULL)", 1),
         "pod_count": ("COUNT(DISTINCT b.pod_name) FILTER (WHERE b.pod_name IS NOT NULL)", 1),
         "container_count": ("COUNT(DISTINCT b.container_name) FILTER (WHERE b.container_name IS NOT NULL)", 1),
-        "process_count": ("COUNT(DISTINCT (b.pid, b.process_name)) FILTER (WHERE b.pid IS NOT NULL)", 2),
+        "process_count": ("COUNT(b.pid)", 2),
     }
     # Sortable column -> output column/alias produced by the grouped aggregation, used by
     # the single-pass (whole-scope GROUP BY) query path for its ORDER BY.
@@ -2256,7 +2277,17 @@ class DBManager(metaclass=Singleton):
             "LEFT JOIN current_commands c ON fh.hostname = c.hostname AND fh.service_name = c.service_name",
         ]
         if depth >= 1:
-            cols += ["hc.container_name", "hc.namespace", "hc.pod_name", "hc.workload_name", "hc.workload_kind"]
+            # container_process_count is the per-container counter the inventory sync
+            # maintains. Only meaningful to SUM at depth 1 (one row per container); at
+            # depth 2 the process join fans each container out and COUNT(b.pid) is used.
+            cols += [
+                "hc.container_name",
+                "hc.namespace",
+                "hc.pod_name",
+                "hc.workload_name",
+                "hc.workload_kind",
+                "hc.process_count AS container_process_count",
+            ]
             joins.append("LEFT JOIN HeartbeatContainers hc ON hc.host_id = fh.id")
         if depth >= 2:
             cols += ["hp.pid", "hp.process_name"]
@@ -2294,13 +2325,19 @@ class DBManager(metaclass=Singleton):
         Shared by both the entity-first LATERAL hydrate and the single-pass GROUP BY, so
         the two code paths return byte-identical row shapes. ``l_*`` columns are the latest
         (by heartbeat) representative for the group; the counts are per-scope cardinalities.
+
+        ``process_count`` is the number of process rows in the group (one row per
+        (container, pid)), the same quantity the precomputed summaries get from
+        ``SUM(HeartbeatContainers.process_count)``. A ``DISTINCT (pid, process_name)``
+        count would collapse identical processes running on different hosts of a
+        service/namespace/pod into one and so undercount.
         """
         return """
                 COUNT(DISTINCT b.hostname) AS host_count,
                 COUNT(DISTINCT b.namespace) FILTER (WHERE b.namespace IS NOT NULL) AS namespace_count,
                 COUNT(DISTINCT b.pod_name) FILTER (WHERE b.pod_name IS NOT NULL) AS pod_count,
                 COUNT(DISTINCT b.container_name) FILTER (WHERE b.container_name IS NOT NULL) AS container_count,
-                COUNT(DISTINCT (b.pid, b.process_name)) FILTER (WHERE b.pid IS NOT NULL) AS process_count,
+                COUNT(b.pid) AS process_count,
                 array_agg(DISTINCT b.pid) FILTER (WHERE b.pid IS NOT NULL) AS pids,
                 (array_agg(b.hostname ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_hostname,
                 (array_agg(b.ip_address ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_ip_address,
@@ -2364,12 +2401,22 @@ class DBManager(metaclass=Singleton):
         """
         row_b = (self.db.execute(query_b, params, one_value=False, return_dict=True, fetch_all=True) or [{}])[0] or {}
 
-        # Tier C (process): base at process depth. ``(host_id, pid)`` is 1:1 with
-        # ``(service_name, hostname, pid)`` (unique_host_heartbeat) but distinct on the two
-        # integer columns is dramatically cheaper than on the wide text tuple.
-        base_c = self._workload_base_sql(max(2, filter_depth))
-        where_c = self._workload_where(conditions, extra=["b.pid IS NOT NULL"])
-        query_c = prefix + f""",
+        # Tier C (process). Without a process-level filter the count is a SUM of the
+        # per-container counter at the container grain, so HeartbeatProcesses (~100M rows
+        # at fleet scale) is not read at all. Only a process-level filter (process_name,
+        # pid, profiling_status) needs the process grain; there ``(host_id, pid)`` is 1:1
+        # with ``(service_name, hostname, pid)`` (unique_host_heartbeat) but distinct on
+        # the two integer columns is dramatically cheaper than on the wide text tuple.
+        if filter_depth < 2:
+            base_c = self._workload_base_sql(max(1, filter_depth))
+            where_c = self._workload_where(conditions)
+            query_c = prefix + f"""
+        SELECT COALESCE(SUM(b.container_process_count), 0)::bigint AS c_process FROM ({base_c}) b{where_c}
+        """
+        else:
+            base_c = self._workload_base_sql(filter_depth)
+            where_c = self._workload_where(conditions, extra=["b.pid IS NOT NULL"])
+            query_c = prefix + f""",
         fc AS MATERIALIZED (
             SELECT b.host_id, b.pid FROM ({base_c}) b{where_c}
         )
@@ -2606,11 +2653,10 @@ class DBManager(metaclass=Singleton):
         ORDER BY {final_order}
         """
         elif use_two_grain:
-            # ---------- two-grain single-pass (service scope). Counts + latest metadata at
-            # the container grain (~316K rows), process_count via the cheap
-            # COUNT(*) FROM (SELECT DISTINCT ...) trick, and any_active at the host grain
-            # (identical to PID-aware for service scope). Avoids aggregating the full
-            # ~1.08M process flatten -> ~16s down to ~4s on prod. Process-grain
+            # ---------- container-grain single-pass (service scope). Counts + latest
+            # metadata at the container grain, process_count as the SUM of the
+            # per-container counter, and any_active at the host grain (identical to
+            # PID-aware for service scope). HeartbeatProcesses is never read. Process-grain
             # representatives (l_process_name/l_pid/pids) are not shown at service scope and
             # are returned NULL/empty.
             sort_out_col = None
@@ -2624,55 +2670,36 @@ class DBManager(metaclass=Singleton):
 
             cbase = self._workload_base_sql(1)
             cwhere = self._workload_where(conditions)
-            pbase = self._workload_base_sql(2)
-            pwhere = self._workload_where(conditions, extra=["b.pid IS NOT NULL"])
 
-            query = self._workload_cte_prefix(spec["service_filter"]) + f""",
-        cagg AS (
-            SELECT
-                b.service_name,
-                COUNT(DISTINCT b.hostname) AS host_count,
-                COUNT(DISTINCT b.namespace) FILTER (WHERE b.namespace IS NOT NULL) AS namespace_count,
-                COUNT(DISTINCT b.pod_name) FILTER (WHERE b.pod_name IS NOT NULL) AS pod_count,
-                COUNT(DISTINCT b.container_name) FILTER (WHERE b.container_name IS NOT NULL) AS container_count,
-                NULL::integer[] AS pids,
-                (array_agg(b.hostname ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_hostname,
-                (array_agg(b.ip_address ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_ip_address,
-                (array_agg(b.namespace ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_namespace,
-                (array_agg(b.pod_name ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_pod_name,
-                (array_agg(b.container_name ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_container_name,
-                (array_agg(b.workload_name ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_workload_name,
-                (array_agg(b.workload_kind ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_workload_kind,
-                NULL::text AS l_process_name,
-                NULL::integer AS l_pid,
-                (array_agg(b.command_type ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_command_type,
-                (array_agg(b.command_status ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_command_status,
-                (array_agg(b.combined_config ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_combined_config,
-                bool_or(b.command_type = 'start' AND b.command_status IN ('pending', 'sent', 'completed')) AS any_active,
-                NULL::text AS l_profiling_status,
-                (array_agg(b.agent_version ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_agent_version,
-                (array_agg(b.run_mode ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_run_mode,
-                MAX(b.heartbeat_timestamp) AS l_heartbeat_timestamp,
-                COUNT(*) OVER () AS total_groups
-            FROM ({cbase}) b{cwhere}
-            GROUP BY b.service_name
-        ),
-        pcount AS (
-            SELECT service_name, COUNT(*) AS process_count
-            FROM (SELECT DISTINCT b.service_name, b.pid, b.process_name FROM ({pbase}) b{pwhere}) d
-            GROUP BY service_name
-        )
+            query = self._workload_cte_prefix(spec["service_filter"]) + f"""
         SELECT
-            c.service_name,
-            c.host_count, c.namespace_count, c.pod_count, c.container_count,
-            COALESCE(pc.process_count, 0) AS process_count,
-            c.pids, c.l_hostname, c.l_ip_address, c.l_namespace, c.l_pod_name, c.l_container_name,
-            c.l_workload_name, c.l_workload_kind, c.l_process_name, c.l_pid,
-            c.l_command_type, c.l_command_status, c.l_combined_config, c.any_active,
-            c.l_profiling_status, c.l_agent_version, c.l_run_mode, c.l_heartbeat_timestamp,
-            c.total_groups
-        FROM cagg c
-        LEFT JOIN pcount pc ON pc.service_name = c.service_name
+            b.service_name,
+            COUNT(DISTINCT b.hostname) AS host_count,
+            COUNT(DISTINCT b.namespace) FILTER (WHERE b.namespace IS NOT NULL) AS namespace_count,
+            COUNT(DISTINCT b.pod_name) FILTER (WHERE b.pod_name IS NOT NULL) AS pod_count,
+            COUNT(DISTINCT b.container_name) FILTER (WHERE b.container_name IS NOT NULL) AS container_count,
+            COALESCE(SUM(b.container_process_count), 0)::bigint AS process_count,
+            NULL::integer[] AS pids,
+            (array_agg(b.hostname ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_hostname,
+            (array_agg(b.ip_address ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_ip_address,
+            (array_agg(b.namespace ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_namespace,
+            (array_agg(b.pod_name ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_pod_name,
+            (array_agg(b.container_name ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_container_name,
+            (array_agg(b.workload_name ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_workload_name,
+            (array_agg(b.workload_kind ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_workload_kind,
+            NULL::text AS l_process_name,
+            NULL::integer AS l_pid,
+            (array_agg(b.command_type ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_command_type,
+            (array_agg(b.command_status ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_command_status,
+            (array_agg(b.combined_config ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_combined_config,
+            bool_or(b.command_type = 'start' AND b.command_status IN ('pending', 'sent', 'completed')) AS any_active,
+            NULL::text AS l_profiling_status,
+            (array_agg(b.agent_version ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_agent_version,
+            (array_agg(b.run_mode ORDER BY b.heartbeat_timestamp DESC NULLS LAST))[1] AS l_run_mode,
+            MAX(b.heartbeat_timestamp) AS l_heartbeat_timestamp,
+            COUNT(*) OVER () AS total_groups
+        FROM ({cbase}) b{cwhere}
+        GROUP BY b.service_name
         ORDER BY {two_order}
         LIMIT %(page_size)s OFFSET %(offset)s
         """

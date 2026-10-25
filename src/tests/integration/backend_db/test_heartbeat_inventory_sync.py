@@ -323,3 +323,66 @@ def test_agent_digest_disagreement_keeps_asking(heartbeat_url, credentials, post
     assert _stored_digest(postgres_connection, hostname, service) == _digest(containers)
     response = _send(heartbeat_url, credentials, hostname, service, inventory_digest="not-the-canonical-digest")
     assert response["need_inventory"] is True  # safe degradation: same traffic as an older agent, never silent data loss
+
+
+def _process_counts(conn, hostname: str, service: str) -> Dict[str, tuple]:
+    """container_id -> (stored process_count, actual HeartbeatProcesses rows)."""
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT hc.container_id, hc.process_count,
+                   (SELECT COUNT(*) FROM HeartbeatProcesses hp WHERE hp.container_row_id = hc.id)
+            FROM HeartbeatContainers hc JOIN HostHeartbeats h ON h.id = hc.host_id
+            WHERE h.hostname = %s AND h.service_name = %s
+            """,
+            (hostname, service),
+        )
+        return {cid: (stored, actual) for cid, stored, actual in cursor.fetchall()}
+
+
+def test_container_process_count_follows_sync(heartbeat_url, credentials, postgres_connection, host_service):
+    """HeartbeatContainers.process_count always equals the process rows stored for the container (AT-S26)."""
+    hostname, service = host_service
+    _send(heartbeat_url, credentials, hostname, service, containers=[
+        _container("cid-a", "app", [{"pid": 11, "process_name": "java"}, {"pid": 22, "process_name": "python"}]),
+        _container("cid-b", "sidecar", [{"pid": 33, "process_name": "envoy"}, {"pid": 33, "process_name": "dup-pid"}]),
+        _container("cid-c", "idle", []),
+    ])
+    counts = _process_counts(postgres_connection, hostname, service)
+    assert counts == {"cid-a": (2, 2), "cid-b": (1, 1), "cid-c": (0, 0)}, counts
+
+    # Grow one container, shrink another: the counter tracks the stored rows after the same beat.
+    _send(heartbeat_url, credentials, hostname, service, containers=[
+        _container("cid-a", "app", [{"pid": 11, "process_name": "java"}]),
+        _container("cid-b", "sidecar", [{"pid": 33, "process_name": "envoy"}, {"pid": 34, "process_name": "envoy"}, {"pid": 35, "process_name": "sh"}]),
+        _container("cid-c", "idle", []),
+    ])
+    counts = _process_counts(postgres_connection, hostname, service)
+    assert counts == {"cid-a": (1, 1), "cid-b": (3, 3), "cid-c": (0, 0)}, counts
+
+
+def test_process_counts_are_totals_and_agree_across_paths(heartbeat_url, credentials, postgres_connection, backend_base_url):
+    """Service-level process_count counts every process, and the precomputed store agrees with the live path (AT-S27)."""
+    service = f"inv-svc-{uuid.uuid4().hex[:8]}"
+    hosts = [f"inv-host-{uuid.uuid4().hex[:8]}" for _ in range(2)]
+    try:
+        # Both hosts run the identical (pid, name) pairs: a DISTINCT (pid, name) count would report 2, not 4.
+        same = [{"pid": 11, "process_name": "java"}, {"pid": 22, "process_name": "sh"}]
+        for hostname in hosts:
+            _send(heartbeat_url, credentials, hostname, service, containers=[_container("cid-a", "app", same)])
+
+        status_url = f"{backend_base_url}/api/metrics/profiling/workload_status"
+        live = requests.get(status_url, params={"scope": "service", "service_name": service, "exact_match": "true"},
+                            headers=credentials, timeout=30, verify=False).json()
+        assert live["tabCounts"]["process"] == 4, live["tabCounts"]
+        assert [r["processCount"] for r in live["rows"]] == [4], live["rows"]
+
+        with postgres_connection.cursor() as cursor:
+            cursor.execute("CALL refresh_workload_snapshot('2 minutes')")
+        precomputed = requests.get(status_url, params={"scope": "service"}, headers=credentials, timeout=30, verify=False).json()
+        ours = [r for r in precomputed["rows"] if r["serviceName"] == service]
+        assert [r["processCount"] for r in ours] == [4], ours
+        assert precomputed["tabCounts"]["process"] >= 4
+    finally:
+        for hostname in hosts:
+            _cleanup(postgres_connection, hostname)
