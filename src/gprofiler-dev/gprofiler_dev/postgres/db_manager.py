@@ -19,7 +19,6 @@ import json
 import threading
 import time
 import uuid
-import psycopg2.errors
 import psycopg2.extras
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -127,8 +126,7 @@ class DBManager(metaclass=Singleton):
     def db(self):
         # Resolve per access: this Singleton is process-wide, so caching one
         # connection would re-serialize every thread on its lock. get_postgres_db()
-        # hands each thread its own connection when GPROFILER_POSTGRES_CONN_PER_THREAD
-        # is set (and the shared instance otherwise).
+        # hands each thread its own connection.
         return get_postgres_db()
 
     def get_libc(self, libc_type, libc_version):
@@ -888,9 +886,10 @@ class DBManager(metaclass=Singleton):
         heartbeat_timestamp: Optional[datetime] = None,
         supported_perf_events: Optional[List[str]] = None,
         inventory_digest: Optional[str] = None,
-    ) -> bool:
+    ) -> str:
         """
-        Update or insert host heartbeat information using pure SQL.
+        Update or insert host heartbeat information using pure SQL. Returns the inventory
+        outcome for this beat (see the outcome list below ``upsert_host_heartbeat``).
         Always updates on conflict to ensure latest data is stored, including
         hardware changes (e.g., new PMU events after CPU upgrade).
 
@@ -972,21 +971,22 @@ class DBManager(metaclass=Singleton):
             host_id = row[0] if row else None
             stored_digest = row[1] if row else None
             if host_id is None:
-                self._note_inventory_outcome("no_host")
+                outcome = "no_host"
             elif containers is None:
-                self._note_inventory_outcome(self._digest_only_outcome(stored_digest, inventory_digest))
+                outcome = self._digest_only_outcome(stored_digest, inventory_digest)
             elif stored_digest == inventory_digest:
-                self._note_inventory_outcome("unchanged")
+                outcome = "unchanged"
             elif not get_sync_budget().try_acquire():
-                self._note_inventory_outcome("deferred")
+                outcome = "deferred"
             else:
                 self._sync_host_inventory(cursor, host_id, containers)
                 cursor.execute(
                     "UPDATE HostHeartbeats SET inventory_digest = %s WHERE ID = %s",
                     (inventory_digest, host_id),
                 )
-                self._note_inventory_outcome("synced")
-        return True
+                outcome = "synced"
+        self._note_inventory_outcome(outcome)
+        return outcome
 
     # Outcome of the inventory step for each heartbeat processed by this worker:
     #   synced           inventory differed and was diffed into the tables (digest updated)
@@ -1002,6 +1002,10 @@ class DBManager(metaclass=Singleton):
     #   not_reported     neither inventory nor digest in the beat (older agent)
     # Counts are cumulative per process; ``inventory_outcome_hook`` (set by the webapp) can
     # forward each increment to the metrics publisher.
+    #
+    # After these outcomes the stored digest equals the digest of this beat's inventory; the
+    # heartbeat route uses this to answer ``need_inventory`` without another read.
+    INVENTORY_HELD_OUTCOMES = frozenset({"synced", "unchanged", "digest_match"})
     inventory_outcome_hook: Optional[Callable[[str, int], None]] = None
 
     @staticmethod
@@ -1009,18 +1013,6 @@ class DBManager(metaclass=Singleton):
         if claimed_digest is None:
             return "not_reported"
         return "digest_match" if stored_digest == claimed_digest else "digest_mismatch"
-
-    def get_host_inventory_digest(self, hostname: str, service_name: str) -> Optional[str]:
-        """Digest of the inventory currently committed for a host (None if never synced or
-        unknown host). One point lookup on the (hostname, service_name) unique index; the
-        heartbeat route compares it with the agent's digest to answer ``need_inventory``."""
-        row = self.db.execute(
-            "SELECT inventory_digest FROM HostHeartbeats WHERE hostname = %s AND service_name = %s",
-            (hostname, service_name),
-            one_value=True,
-            return_dict=True,
-        )
-        return row["inventory_digest"] if row else None
 
     def count_inventory_pending_hosts(self) -> int:
         """Fresh hosts with no committed inventory digest: sync still queued behind the
@@ -1047,371 +1039,6 @@ class DBManager(metaclass=Singleton):
                 hook(outcome, count)
             except Exception:  # metrics must never break the heartbeat path
                 pass
-
-    def bulk_upsert_host_heartbeats(self, payloads: List[Dict[str, Any]]) -> int:
-        """Batched form of ``upsert_host_heartbeat`` for the async heartbeat writer.
-
-        Runs as two short transactions instead of one long one: first a bulk parent upsert
-        (``HostHeartbeats``), then a set-based inventory sync for the whole batch. The hot
-        parent rows every freshness query reads are therefore locked only for the fast
-        upsert, not for the duration of the inventory diff -- which is what let the old
-        per-host, single-transaction path pile up into deadlocks / a lock convoy at scale.
-
-        Callers must pre-coalesce so (hostname, service_name) is unique within the batch
-        (ON CONFLICT cannot affect the same row twice in one statement).
-
-        Inventory is change-detected per host (see ``upsert_host_heartbeat``): only payloads
-        whose ``inventory_digest`` differs from the digest stored on their host row go into
-        the inventory sync, and only as many of those as the per-process sync budget admits
-        this flush; the rest keep their old digest and are retried on their next beat.
-        Payloads carry a pre-computed ``inventory_digest`` (the request thread hashes them in
-        parallel) -- it is computed here only if missing.
-        """
-        if not payloads:
-            return 0
-        now = datetime.now()
-        for p in payloads:
-            if p.get("inventory_digest") is None and p.get("containers") is not None:
-                p["inventory_digest"] = compute_inventory_digest(p["containers"])
-        rows = [
-            (
-                p["hostname"],
-                p["ip_address"],
-                p["service_name"],
-                p.get("agent_version"),
-                p.get("run_mode"),
-                p.get("namespace"),
-                p.get("pod_name"),
-                p.get("last_command_id"),
-                p.get("received_command_ids"),
-                p.get("executed_command_ids"),
-                p.get("status", "active"),
-                p.get("heartbeat_timestamp") or now,
-                p.get("supported_perf_events"),
-            )
-            for p in payloads
-        ]
-        insert = """
-            INSERT INTO HostHeartbeats (
-                hostname, ip_address, service_name, agent_version, run_mode, namespace, pod_name,
-                last_command_id, received_command_ids, executed_command_ids,
-                status, heartbeat_timestamp, supported_perf_events, created_at, updated_at
-            ) VALUES %s
-            ON CONFLICT (hostname, service_name) DO UPDATE SET
-                ip_address = EXCLUDED.ip_address,
-                agent_version = EXCLUDED.agent_version,
-                run_mode = EXCLUDED.run_mode,
-                namespace = EXCLUDED.namespace,
-                pod_name = EXCLUDED.pod_name,
-                last_command_id = EXCLUDED.last_command_id,
-                received_command_ids = EXCLUDED.received_command_ids,
-                executed_command_ids = EXCLUDED.executed_command_ids,
-                status = EXCLUDED.status,
-                heartbeat_timestamp = EXCLUDED.heartbeat_timestamp,
-                supported_perf_events = EXCLUDED.supported_perf_events,
-                updated_at = CURRENT_TIMESTAMP
-            RETURNING id, hostname, service_name, inventory_digest
-        """
-        template = (
-            "(%s, %s::inet, %s, %s, %s, %s, %s, %s::uuid, %s::uuid[], %s::uuid[], "
-            "%s::HostStatus, %s, %s::text[], CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
-        )
-
-        # Transaction 1: parent upsert only, so the hot HostHeartbeats rows are locked briefly.
-        # The short lock window makes the residual (unsorted) deadlock rare; retry the rare one.
-        # The UPSERT does not touch inventory_digest, so RETURNING gives the stored digest.
-        host_id_by_key: Dict[Tuple[str, str], int] = {}
-        stored_digest_by_key: Dict[Tuple[str, str], Optional[str]] = {}
-
-        def _upsert_hosts(cursor) -> None:
-            returned = psycopg2.extras.execute_values(cursor, insert, rows, template=template, fetch=True)
-            host_id_by_key.clear()
-            stored_digest_by_key.clear()
-            for r in returned:
-                host_id_by_key[(r[1], r[2])] = r[0]
-                stored_digest_by_key[(r[1], r[2])] = r[3]
-
-        self._write_with_deadlock_retry("bulk heartbeat host upsert", _upsert_hosts, hosts=len(payloads))
-
-        # Change detection: keep only payloads whose inventory differs from what is stored, then
-        # admit as many of those as the sync budget allows this flush. Everything else costs
-        # nothing further -- unchanged hosts are done, deferred hosts retry next beat.
-        differing: List[Dict[str, Any]] = []
-        for p in payloads:
-            key = (p["hostname"], p["service_name"])
-            if key not in host_id_by_key:
-                self._note_inventory_outcome("no_host")
-            elif p.get("containers") is None:
-                self._note_inventory_outcome(
-                    self._digest_only_outcome(stored_digest_by_key.get(key), p.get("inventory_digest"))
-                )
-            elif stored_digest_by_key.get(key) == p.get("inventory_digest"):
-                self._note_inventory_outcome("unchanged")
-            else:
-                differing.append(p)
-        admitted = get_sync_budget().acquire_up_to(len(differing))
-        to_sync, deferred = differing[:admitted], differing[admitted:]
-        self._note_inventory_outcome("deferred", len(deferred))
-        if not to_sync:
-            return len(payloads)
-
-        # Transaction 2: bulked inventory for the admitted hosts, plus their new digests in the
-        # same transaction (a digest is only ever stored with the inventory it describes). The
-        # parent freshness is already committed, so if the inventory can't land after retries we
-        # skip it (those hosts keep their old digest and re-sync next beat) instead of failing
-        # the flush and losing the freshness update for the whole batch.
-        def _sync_inventory(cursor) -> None:
-            self._bulk_sync_inventory(cursor, to_sync, host_id_by_key)
-            psycopg2.extras.execute_values(
-                cursor,
-                "UPDATE HostHeartbeats h SET inventory_digest = v.digest "
-                "FROM (VALUES %s) AS v(id, digest) WHERE h.ID = v.id",
-                [(host_id_by_key[(p["hostname"], p["service_name"])], p.get("inventory_digest")) for p in to_sync],
-                template="(%s::bigint, %s::text)",
-                page_size=1000,
-            )
-
-        try:
-            self._write_with_deadlock_retry("bulk heartbeat inventory sync", _sync_inventory, hosts=len(to_sync))
-            self._note_inventory_outcome("synced", len(to_sync))
-        except psycopg2.errors.DeadlockDetected:
-            self._note_inventory_outcome("deferred", len(to_sync))
-            self.db.logger.warning(
-                "bulk heartbeat inventory sync deadlocked for %s hosts after retries; skipping "
-                "inventory this flush (freshness persisted, re-syncs next beat)",
-                len(to_sync),
-            )
-        if deferred:
-            self.db.logger.info(
-                "inventory sync budget: synced %s, deferred %s of %s differing hosts this flush "
-                "(GPROFILER_INVENTORY_SYNC_PER_SEC=%s per worker)",
-                len(to_sync),
-                len(deferred),
-                len(differing),
-                get_sync_budget().rate,
-            )
-        return len(payloads)
-
-    def _write_with_deadlock_retry(self, label: str, work, hosts: int, attempts: int = 3) -> None:
-        """Run ``work(cursor)`` in one transaction, retrying the whole transaction on deadlock."""
-        for attempt in range(attempts):
-            try:
-                with self.db.transaction() as cursor:
-                    work(cursor)
-                return
-            except psycopg2.errors.DeadlockDetected:
-                if attempt == attempts - 1:
-                    raise
-                self.db.logger.warning(
-                    "%s deadlock for %s hosts, retrying (attempt %s)", label, hosts, attempt + 1
-                )
-
-    def _bulk_sync_inventory(
-        self, cursor, payloads: List[Dict[str, Any]], host_id_by_key: Dict[Tuple[str, str], int]
-    ) -> None:
-        """Set-based inventory diff for the whole batch (containers + processes).
-
-        Equivalent to ``_sync_host_inventory`` per host, but expressed as a fixed handful of
-        statements over the entire batch (prune / insert-new / update-changed for containers,
-        then the same for processes) instead of O(hosts x containers) round-trips -- so the
-        inventory transaction stays short and holds few locks. Insert/update stay guarded
-        (insert-only-new, update-only-changed) so unchanged inventory produces zero row writes.
-        """
-        host_ids: List[int] = []
-        container_rows: List[Tuple[Any, ...]] = []
-        keep_c_host_ids: List[int] = []
-        keep_c_cids: List[str] = []
-        processes_by_ckey: Dict[Tuple[int, str], List[Tuple[int, Any]]] = {}
-
-        for p in payloads:
-            host_id = host_id_by_key.get((p["hostname"], p["service_name"]))
-            if host_id is None or p.get("containers") is None:
-                continue  # unknown host, or inventory not reported this beat (never prune on that)
-            host_ids.append(host_id)
-            seen_cids: Set[str] = set()
-            for container in p.get("containers") or []:
-                if not isinstance(container, dict):
-                    continue
-                cid = container.get("container_id")
-                if cid is None or cid in seen_cids:
-                    continue
-                seen_cids.add(cid)
-                container_rows.append(
-                    (
-                        host_id,
-                        cid,
-                        container.get("container_name"),
-                        container.get("runtime"),
-                        container.get("namespace"),
-                        container.get("pod_name"),
-                        container.get("workload_name"),
-                        container.get("workload_kind"),
-                    )
-                )
-                keep_c_host_ids.append(host_id)
-                keep_c_cids.append(cid)
-                seen_pids: Set[int] = set()
-                plist: List[Tuple[int, Any]] = []
-                for process in container.get("processes") or []:
-                    if not isinstance(process, dict):
-                        continue
-                    pid = process.get("pid")
-                    if pid is None or not str(pid).isdigit():
-                        continue
-                    pid = int(pid)
-                    if pid in seen_pids:
-                        continue
-                    seen_pids.add(pid)
-                    plist.append((pid, process.get("process_name")))
-                processes_by_ckey[(host_id, cid)] = plist
-
-        if not host_ids:
-            return
-
-        # Allow the prune anti-joins below to build hashed SubPlans even for large coalesced
-        # batches; a too-small work_mem would drop them back to a quadratic per-row plan.
-        cursor.execute("SET LOCAL work_mem = '64MB'")
-
-        # Prune containers these hosts no longer report (also reclaims legacy NULL-id rows).
-        # Tuple NOT IN (not a correlated NOT EXISTS over unnest) so the planner builds a hashed
-        # SubPlan -- O(1) per candidate -- instead of a per-container quadratic Merge Anti Join.
-        cursor.execute(
-            """
-            DELETE FROM HeartbeatContainers hc
-            WHERE hc.host_id = ANY(%(host_ids)s::bigint[])
-              AND (
-                hc.container_id IS NULL
-                OR (hc.host_id, hc.container_id) NOT IN (
-                    SELECT host_id, container_id
-                    FROM unnest(%(keep_host_ids)s::bigint[], %(keep_cids)s::text[]) AS keep(host_id, container_id)
-                )
-              )
-            """,
-            {"host_ids": host_ids, "keep_host_ids": keep_c_host_ids, "keep_cids": keep_c_cids},
-        )
-
-        if container_rows:
-            # Insert only genuinely-new containers so nextval fires only for real inserts.
-            psycopg2.extras.execute_values(
-                cursor,
-                """
-                INSERT INTO HeartbeatContainers (
-                    host_id, container_id, container_name, runtime, namespace,
-                    pod_name, workload_name, workload_kind, updated_at
-                )
-                SELECT v.host_id, v.container_id, v.container_name, v.runtime, v.namespace,
-                       v.pod_name, v.workload_name, v.workload_kind, CURRENT_TIMESTAMP
-                FROM (VALUES %s) AS v(host_id, container_id, container_name, runtime,
-                                      namespace, pod_name, workload_name, workload_kind)
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM HeartbeatContainers hc
-                    WHERE hc.host_id = v.host_id AND hc.container_id = v.container_id
-                )
-                ON CONFLICT (host_id, container_id) DO NOTHING
-                """,
-                container_rows,
-                template="(%s::bigint, %s::text, %s::text, %s::text, %s::text, %s::text, %s::text, %s::text)",
-                page_size=1000,
-            )
-            # Rewrite metadata only for containers that actually changed.
-            psycopg2.extras.execute_values(
-                cursor,
-                """
-                UPDATE HeartbeatContainers hc SET
-                    container_name = v.container_name,
-                    runtime        = v.runtime,
-                    namespace      = v.namespace,
-                    pod_name       = v.pod_name,
-                    workload_name  = v.workload_name,
-                    workload_kind  = v.workload_kind,
-                    updated_at     = CURRENT_TIMESTAMP
-                FROM (VALUES %s) AS v(host_id, container_id, container_name, runtime,
-                                      namespace, pod_name, workload_name, workload_kind)
-                WHERE hc.host_id = v.host_id AND hc.container_id = v.container_id
-                  AND (
-                    hc.container_name, hc.runtime, hc.namespace, hc.pod_name,
-                    hc.workload_name, hc.workload_kind
-                  ) IS DISTINCT FROM (
-                    v.container_name, v.runtime, v.namespace, v.pod_name,
-                    v.workload_name, v.workload_kind
-                  )
-                """,
-                container_rows,
-                template="(%s::bigint, %s::text, %s::text, %s::text, %s::text, %s::text, %s::text, %s::text)",
-                page_size=1000,
-            )
-
-        # Map every reported (host_id, container_id) to its stable row id so processes can attach.
-        row_id_by_ckey: Dict[Tuple[int, str], int] = {}
-        if keep_c_cids:
-            cursor.execute(
-                "SELECT id, host_id, container_id FROM HeartbeatContainers "
-                "WHERE host_id = ANY(%(host_ids)s::bigint[]) AND container_id = ANY(%(cids)s::text[])",
-                {"host_ids": host_ids, "cids": keep_c_cids},
-            )
-            row_id_by_ckey = {(hid, cid): rid for rid, hid, cid in cursor.fetchall()}
-
-        container_row_ids: List[int] = []
-        process_rows: List[Tuple[int, int, Any]] = []
-        keep_p_crids: List[int] = []
-        keep_p_pids: List[int] = []
-        for (host_id, cid), plist in processes_by_ckey.items():
-            crid = row_id_by_ckey.get((host_id, cid))
-            if crid is None:
-                continue
-            container_row_ids.append(crid)
-            for pid, pname in plist:
-                process_rows.append((crid, pid, pname))
-                keep_p_crids.append(crid)
-                keep_p_pids.append(pid)
-
-        if not container_row_ids:
-            return
-
-        # Prune processes these containers no longer report. Tuple NOT IN -> hashed SubPlan
-        # (O(1) per candidate) instead of the quadratic Merge Anti Join a correlated NOT EXISTS
-        # over unnest planned to. pid is always non-null here, so NOT IN has no NULL pitfall.
-        cursor.execute(
-            """
-            DELETE FROM HeartbeatProcesses hp
-            WHERE hp.container_row_id = ANY(%(crids)s::bigint[])
-              AND (hp.container_row_id, hp.pid) NOT IN (
-                SELECT container_row_id, pid
-                FROM unnest(%(keep_crids)s::bigint[], %(keep_pids)s::int[]) AS keep(container_row_id, pid)
-              )
-            """,
-            {"crids": container_row_ids, "keep_crids": keep_p_crids, "keep_pids": keep_p_pids},
-        )
-
-        if process_rows:
-            psycopg2.extras.execute_values(
-                cursor,
-                """
-                INSERT INTO HeartbeatProcesses (container_row_id, pid, process_name)
-                SELECT v.container_row_id, v.pid, v.process_name
-                FROM (VALUES %s) AS v(container_row_id, pid, process_name)
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM HeartbeatProcesses hp
-                    WHERE hp.container_row_id = v.container_row_id AND hp.pid = v.pid
-                )
-                ON CONFLICT (container_row_id, pid) DO NOTHING
-                """,
-                process_rows,
-                template="(%s::bigint, %s::int, %s::text)",
-                page_size=1000,
-            )
-            psycopg2.extras.execute_values(
-                cursor,
-                """
-                UPDATE HeartbeatProcesses hp SET process_name = v.process_name
-                FROM (VALUES %s) AS v(container_row_id, pid, process_name)
-                WHERE hp.container_row_id = v.container_row_id AND hp.pid = v.pid
-                  AND hp.process_name IS DISTINCT FROM v.process_name
-                """,
-                process_rows,
-                template="(%s::bigint, %s::int, %s::text)",
-                page_size=1000,
-            )
 
     def _sync_host_inventory(self, cursor, host_id: int, containers: List[Dict[str, Any]]) -> None:
         """Diff the normalized inventory for a host against the latest heartbeat snapshot.

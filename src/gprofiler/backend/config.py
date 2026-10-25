@@ -60,7 +60,8 @@ BACKEND_ROOT = os.path.dirname(os.path.realpath(__file__))
 MAX_PROFILING_REQUEST_HOSTS = int(os.getenv("MAX_PROFILING_REQUEST_HOSTS", 20))
 
 # Per-worker threadpool size for sync route handlers (Starlette/anyio default: 40).
-# Caps concurrent requests per worker; requests beyond GPROFILER_POSTGRES_POOL_SIZE
-# wait for a pooled DB connection. 0 keeps the framework default.
+# Each thread owns one Postgres connection, so this is also the number of DB connections
+# per worker process; the fleet total is containers x GUNICORN_PROCESS_COUNT x this.
+# ~10 is plenty for the heartbeat path (one short UPSERT per beat). 0 keeps the default.
 WEBAPP_THREAD_POOL_SIZE = int(os.getenv("GPROFILER_WEBAPP_THREAD_POOL_SIZE", 0))
 MAX_SIMULTANEOUS_PROFILING_HOSTS_PERCENT = int(os.getenv("MAX_SIMULTANEOUS_PROFILING_HOSTS", 10))

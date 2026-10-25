@@ -5,7 +5,8 @@ Integration tests for the normalized heartbeat workload inventory sync.
 These validate the diff/upsert behavior of ``DBManager._sync_host_inventory`` end
 to end: a heartbeat is POSTed to the live backend and the resulting rows in
 ``HeartbeatContainers`` / ``HeartbeatProcesses`` are inspected directly in
-PostgreSQL.
+PostgreSQL. Heartbeats are written synchronously, so rows can be inspected as soon
+as the POST returns.
 
 The central regression this guards is write amplification at fleet scale: an
 unchanged inventory must NOT rewrite rows on every heartbeat. We prove that by
@@ -85,13 +86,6 @@ def _send(heartbeat_url: str, credentials: Dict[str, str], hostname: str, servic
     return response.json()
 
 
-def _settle() -> None:
-    """Heartbeats are persisted by the async writer (flush interval ~1 s by default)."""
-    import time
-
-    time.sleep(1.5)
-
-
 def _stored_digest(conn, hostname: str, service: str):
     with conn.cursor() as cursor:
         cursor.execute(
@@ -152,7 +146,6 @@ def test_non_containerized_host_stores_no_rows(heartbeat_url, credentials, postg
     """A host with no containerized workload (empty list) stores zero inventory rows."""
     hostname, service = host_service
     _send(heartbeat_url, credentials, hostname, service, containers=[])
-    _settle()
 
     assert _containers(postgres_connection, hostname, service) == []
     assert _processes(postgres_connection, hostname, service) == []
@@ -167,7 +160,6 @@ def test_stable_inventory_is_not_rewritten(heartbeat_url, credentials, postgres_
     ]
 
     _send(heartbeat_url, credentials, hostname, service, containers)
-    _settle()
     containers_first = _containers(postgres_connection, hostname, service)
     processes_first = _processes(postgres_connection, hostname, service)
     assert [c["container_id"] for c in containers_first] == ["cid-a", "cid-b"]
@@ -177,7 +169,6 @@ def test_stable_inventory_is_not_rewritten(heartbeat_url, credentials, postgres_
 
     # Second identical beat: nothing should be physically rewritten.
     _send(heartbeat_url, credentials, hostname, service, containers)
-    _settle()
     containers_second = _containers(postgres_connection, hostname, service)
     processes_second = _processes(postgres_connection, hostname, service)
 
@@ -192,7 +183,6 @@ def test_process_change_is_isolated(heartbeat_url, credentials, postgres_connect
         _container("cid-a", "app", [{"pid": 11, "process_name": "java"}, {"pid": 22, "process_name": "python"}]),
     ]
     _send(heartbeat_url, credentials, hostname, service, containers)
-    _settle()
     before = {(p["pid"]): p for p in _processes(postgres_connection, hostname, service)}
 
     # Rename only pid 22.
@@ -201,7 +191,6 @@ def test_process_change_is_isolated(heartbeat_url, credentials, postgres_connect
         {"pid": 22, "process_name": "python3"},
     ]
     _send(heartbeat_url, credentials, hostname, service, containers)
-    _settle()
     after = {(p["pid"]): p for p in _processes(postgres_connection, hostname, service)}
 
     # Unchanged sibling: same physical row.
@@ -222,7 +211,6 @@ def test_removed_container_is_pruned(heartbeat_url, credentials, postgres_connec
             _container("cid-b", "sidecar", [{"pid": 33, "process_name": "envoy"}]),
         ],
     )
-    _settle()
     assert {c["container_id"] for c in _containers(postgres_connection, hostname, service)} == {"cid-a", "cid-b"}
 
     # Drop cid-b.
@@ -230,7 +218,6 @@ def test_removed_container_is_pruned(heartbeat_url, credentials, postgres_connec
         heartbeat_url, credentials, hostname, service,
         containers=[_container("cid-a", "app", [{"pid": 11, "process_name": "java"}])],
     )
-    _settle()
     assert {c["container_id"] for c in _containers(postgres_connection, hostname, service)} == {"cid-a"}
     assert {p["pid"] for p in _processes(postgres_connection, hostname, service)} == {11}
 
@@ -245,7 +232,6 @@ def test_null_container_id_is_skipped(heartbeat_url, credentials, postgres_conne
             _container(None, "bare", [{"pid": 99, "process_name": "systemd"}]),
         ],
     )
-    _settle()
 
     stored = _containers(postgres_connection, hostname, service)
     assert [c["container_id"] for c in stored] == ["cid-a"]
@@ -263,7 +249,6 @@ def test_null_container_id_is_skipped(heartbeat_url, credentials, postgres_conne
 def _digest(containers: List[Dict[str, Any]]) -> str:
     # Same canonical form as gprofiler_dev.heartbeat_inventory (imported by path so this
     # file stays runnable from the tests image, which does not install gprofiler_dev).
-    import hashlib
     import importlib.util
     import pathlib
 
@@ -281,37 +266,29 @@ def test_older_agent_gets_no_need_inventory_answer(heartbeat_url, credentials, p
 
     response = _send(heartbeat_url, credentials, hostname, service, containers=containers)
     assert response.get("need_inventory") is None
-    _settle()
     assert _stored_digest(postgres_connection, hostname, service) == _digest(containers)
 
     # A beat with no containers field at all leaves the stored inventory untouched.
     response = _send(heartbeat_url, credentials, hostname, service)
     assert response.get("need_inventory") is None
-    _settle()
     assert {p["pid"] for p in _processes(postgres_connection, hostname, service)} == {11}
 
 
 def test_digest_only_beats_once_inventory_is_held(heartbeat_url, credentials, postgres_connection, host_service):
-    """need_inventory flips to False once the inventory is committed; digest-only beats then cost no inventory writes."""
+    """need_inventory is False as soon as the inventory is committed; digest-only beats then cost no inventory writes."""
     hostname, service = host_service
     containers = [_container("cid-a", "app", [{"pid": 11, "process_name": "java"}, {"pid": 22, "process_name": "python"}])]
     digest = _digest(containers)
 
-    # First beat: the row is not committed yet (async writer) -> keep sending.
-    response = _send(heartbeat_url, credentials, hostname, service, containers=containers, inventory_digest=digest)
-    assert response["need_inventory"] is True
-    _settle()
-    assert _stored_digest(postgres_connection, hostname, service) == digest
-
-    # Server now holds matching inventory -> the agent may stop including containers.
+    # The write is synchronous, so the very first full beat is confirmed in its own reply.
     response = _send(heartbeat_url, credentials, hostname, service, containers=containers, inventory_digest=digest)
     assert response["need_inventory"] is False
+    assert _stored_digest(postgres_connection, hostname, service) == digest
     before = {(p["id"], p["ctid"]) for p in _processes(postgres_connection, hostname, service)}
 
     for _ in range(3):
         response = _send(heartbeat_url, credentials, hostname, service, inventory_digest=digest)
         assert response["need_inventory"] is False
-    _settle()
     assert {(p["id"], p["ctid"]) for p in _processes(postgres_connection, hostname, service)} == before
     assert _stored_digest(postgres_connection, hostname, service) == digest
 
@@ -323,16 +300,14 @@ def test_changed_digest_is_asked_for_and_then_synced(heartbeat_url, credentials,
     new = [_container("cid-a", "app", [{"pid": 11, "process_name": "java"}]), _container("cid-b", "sidecar", [{"pid": 33, "process_name": "envoy"}])]
 
     _send(heartbeat_url, credentials, hostname, service, containers=old, inventory_digest=_digest(old))
-    _settle()
 
     response = _send(heartbeat_url, credentials, hostname, service, inventory_digest=_digest(new))
     assert response["need_inventory"] is True
-    _settle()
     assert _stored_digest(postgres_connection, hostname, service) == _digest(old)  # a claim alone is never stored
     assert {c["container_id"] for c in _containers(postgres_connection, hostname, service)} == {"cid-a"}
 
-    _send(heartbeat_url, credentials, hostname, service, containers=new, inventory_digest=_digest(new))
-    _settle()
+    response = _send(heartbeat_url, credentials, hostname, service, containers=new, inventory_digest=_digest(new))
+    assert response["need_inventory"] is False
     assert _stored_digest(postgres_connection, hostname, service) == _digest(new)
     assert {c["container_id"] for c in _containers(postgres_connection, hostname, service)} == {"cid-a", "cid-b"}
     assert _send(heartbeat_url, credentials, hostname, service, inventory_digest=_digest(new))["need_inventory"] is False
@@ -343,8 +318,8 @@ def test_agent_digest_disagreement_keeps_asking(heartbeat_url, credentials, post
     hostname, service = host_service
     containers = [_container("cid-a", "app", [{"pid": 11, "process_name": "java"}])]
 
-    _send(heartbeat_url, credentials, hostname, service, containers=containers, inventory_digest="not-the-canonical-digest")
-    _settle()
+    response = _send(heartbeat_url, credentials, hostname, service, containers=containers, inventory_digest="not-the-canonical-digest")
+    assert response["need_inventory"] is True
     assert _stored_digest(postgres_connection, hostname, service) == _digest(containers)
     response = _send(heartbeat_url, credentials, hostname, service, inventory_digest="not-the-canonical-digest")
     assert response["need_inventory"] is True  # safe degradation: same traffic as an older agent, never silent data loss
