@@ -55,9 +55,7 @@ from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 from gprofiler_dev import S3ProfileDal
-from gprofiler_dev import config as _dev_config
 from gprofiler_dev.heartbeat_inventory import inventory_digest
-from gprofiler_dev.heartbeat_writer import get_heartbeat_writer
 from gprofiler_dev.postgres.db_manager import DBManager
 
 # Adhoc profiling models
@@ -807,16 +805,14 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
         db_manager = DBManager()
 
         try:
-            # 1. Persist the host heartbeat + normalized inventory. By default this is buffered
-            # off the request thread and flushed in coalesced batches by the async writer; the
-            # command lookup below stays synchronous so the agent still gets its command now.
-            #
-            # Inventory is change-detected downstream: the digest is computed here, on the
-            # request thread (parallel across the thread pool, not on the single writer
-            # thread), and compared with the digest stored on the host row. ``containers``
-            # absent from the payload means "not reported this beat" and must stay None --
-            # it is NOT the same as ``[]`` ("this host has no containers"), which is a real
-            # inventory that prunes everything previously stored for the host.
+            # 1. Persist the host heartbeat + normalized inventory, synchronously, on this
+            # request thread. In steady state this is one UPSERT of the host row (a change-
+            # detecting agent sends only a digest, and a full beat whose digest matches the
+            # stored one does no inventory work either); the inventory diff runs only when
+            # something actually changed. ``containers`` absent from the payload means "not
+            # reported this beat" and must stay None -- it is NOT the same as ``[]`` ("this
+            # host has no containers"), which is a real inventory that prunes everything
+            # previously stored for the host.
             #
             # A change-detecting agent sends ``inventory_digest`` on every beat and includes
             # ``containers`` only when the digest changed or we asked for it. The digest we
@@ -851,24 +847,22 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                 heartbeat_timestamp=heartbeat.timestamp,
                 supported_perf_events=heartbeat.perf_supported_events,  # Use agent field name
             )
-            if _dev_config.HEARTBEAT_ASYNC_WRITES:
-                get_heartbeat_writer(db_manager).submit(heartbeat_fields)
-            else:
-                db_manager.upsert_host_heartbeat(**heartbeat_fields)
+            outcome = db_manager.upsert_host_heartbeat(**heartbeat_fields)
 
-            # 1b. Tell a change-detecting agent whether we hold its inventory. The answer is
-            # based on the digest *committed* for the host (one point read on the unique
-            # index), not on this beat's payload: a full beat whose sync was deferred by the
-            # budget, or is still in the async writer, correctly gets need_inventory=True
-            # and the agent keeps sending until a later beat sees the stored digest match.
-            # That is what makes the agent side stateless-safe: it only stops sending once
-            # the server has confirmed it holds matching inventory. Older agents (no digest)
-            # get no answer and keep sending full inventory as before.
+            # 1b. Tell a change-detecting agent whether we hold its inventory. The write above
+            # has committed, so the outcome says exactly what is stored now: after synced /
+            # unchanged / digest_match the stored digest is this beat's digest; after deferred
+            # (over the sync budget) or digest_mismatch it is not, and the agent must keep
+            # sending until a later beat is admitted. The agent only stops sending once we
+            # have confirmed we hold matching inventory, so neither side needs memory across
+            # restarts. If the agent's own digest disagrees with ours for the same containers
+            # we keep asking (it then just sends full inventory every beat, like an older
+            # agent). Older agents send no digest and get no answer.
             need_inventory: Optional[bool] = None
             if agent_digest is not None:
-                need_inventory = db_manager.get_host_inventory_digest(
-                    hostname=heartbeat.hostname, service_name=heartbeat.service_name
-                ) != agent_digest
+                need_inventory = not (
+                    outcome in DBManager.INVENTORY_HELD_OUTCOMES and agent_digest == computed_digest
+                )
 
             # 2. Look up this host's current command once. The agent needs it on every beat,
             # and it also gates auto-subscribe (only hosts *without* a command are candidates),

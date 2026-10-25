@@ -268,13 +268,12 @@ awareness lives in the backend.
 
 ```mermaid
 flowchart TB
-    AGENT["gProfiler agent<br/>beat every 30s, full inventory"]
+    AGENT["gProfiler agent<br/>beat every 30s: inventory digest always,<br/>full inventory only when it changed or when asked"]
 
-    subgraph WEBAPP["webapp worker — conn per thread when CONN_PER_THREAD=TRUE"]
+    subgraph WEBAPP["webapp worker — one Postgres connection per thread"]
         REQ["POST /api/metrics/heartbeat<br/>request thread"]
-        SYNC["synchronous reads:<br/>subscription check + command lookup"]
-        BUF["HeartbeatWriter buffer<br/>latest-wins per host, cap 20k hosts"]
-        FLUSH["flush daemon, every 1.0s"]
+        UPSERT["one transaction: host UPSERT RETURNING stored digest<br/>→ equal: done · differs: diff-only inventory sync + store digest<br/>(admitted by the per-process sync budget)"]
+        CMD["command lookup (+ auto-subscribe when no command)"]
     end
 
     DB[("PostgreSQL / Aurora")]
@@ -282,12 +281,11 @@ flowchart TB
     UI["Profiling console"]
 
     AGENT -->|"heartbeat"| REQ
-    REQ --> SYNC
-    REQ --> BUF
-    SYNC --> DB
-    BUF --> FLUSH
-    FLUSH -->|"txn 1: bulk parent upsert, commit<br/>txn 2: set-based inventory sync"| DB
-    REQ -->|"profiling_command"| AGENT
+    REQ --> UPSERT
+    REQ --> CMD
+    UPSERT --> DB
+    CMD --> DB
+    REQ -->|"profiling_command + need_inventory"| AGENT
     CRON --> DB
     UI -->|"workload_status"| DB
     UI -->|"profile_request"| DB
@@ -295,50 +293,48 @@ flowchart TB
 
 ### Ingest path
 
-The request thread does only fast work: the two synchronous reads it must answer
-now (subscription check and command lookup), then it enqueues the host and
-inventory payload and returns. The heavy write never touches the request thread.
+Inventory work is proportional to **change**, not to fleet size. Both sides
+compute the same sha256 digest of the canonical inventory
+(`gprofiler_dev/heartbeat_inventory.py` on the server,
+`gprofiler/metadata/heartbeat_inventory.py` in the agent) and the server stores
+the digest of what it last synced on `HostHeartbeats.inventory_digest`.
 
-`HeartbeatWriter` buffers payloads keyed by `(hostname, service_name)` with
-**latest-wins** semantics, so repeated beats within a flush window collapse to
-one write and the working set is bounded by active hosts rather than request
-rate. The buffer is capped; dropping on overflow is safe because the host
-re-sends on its next beat.
+Each heartbeat is handled synchronously on its request thread, in one
+transaction:
 
-A daemon thread flushes every second through `bulk_upsert_host_heartbeats`,
-which runs **two short transactions**:
+1. **Host upsert** — `INSERT … ON CONFLICT (hostname, service_name) DO UPDATE`
+   refreshing timestamp, status and command ids, `RETURNING id,
+   inventory_digest`. The upsert never touches the digest column.
+2. **Compare.** If the beat carried no inventory (a digest-only beat from a
+   change-detecting agent, or an older agent that sends nothing) or its digest
+   equals the stored one, there is nothing more to do. This is the steady state:
+   one statement per beat, ~1 ms.
+3. **Sync only on change.** When the digest differs, the diff-only sync of
+   `HeartbeatContainers` / `HeartbeatProcesses` runs for that host (inserts
+   filtered by `WHERE NOT EXISTS`, updates by `IS DISTINCT FROM`, prune of
+   what is no longer reported) and the new digest is written in the same
+   transaction, so the stored digest always describes committed inventory.
 
-1. **Parent upsert** — one bulk `execute_values` `INSERT … ON CONFLICT` over
-   every host in the batch, returning row ids, committed on its own so the hot
-   rows that every freshness query reads are locked for milliseconds rather than
-   minutes.
-2. **Inventory sync** — set-based prune, insert-only-new, and update-only-changed
-   statements spanning the whole batch for both containers and processes: a
-   fixed handful of round-trips regardless of host count.
+The reply carries `need_inventory` for change-detecting agents: `false` once the
+stored digest equals the agent's (the agent then sends digest-only beats until
+its inventory changes), `true` otherwise (the agent includes the full inventory
+on its next beat). Because the answer is derived from what was just committed,
+neither side needs memory across restarts: an agent restart costs one full beat
+that the server recognises as unchanged; a server that loses a host's digest
+asks for the inventory back on the next beat.
 
-Both carry a bounded deadlock retry. If inventory cannot land after retries it
-is skipped rather than failing the flush — freshness is already committed and
-inventory re-syncs on the next beat.
+**Sync budget.** When many hosts differ at once — first rollout (every stored
+row differs), a restore from backup, a reschedule wave — a per-process token
+bucket (`GPROFILER_INVENTORY_SYNC_PER_SEC`) admits that many syncs per second.
+A host over budget keeps its freshness update and its old digest, is answered
+`need_inventory: true`, and syncs on a later beat. Deferred beats cost the same
+as unchanged ones, so the one-time load is paced at a rate operators choose
+(`heartbeat_inventory{outcome=…}` and `inventory_pending_hosts` show it
+draining) instead of arriving as a herd.
 
-Two invariants make this survivable at fleet scale:
-
-- **Unchanged inventory writes zero rows.** Inserts are filtered by
-  `WHERE NOT EXISTS` and updates by `IS DISTINCT FROM`, so steady-state beats
-  produce no dead tuples, WAL, or index churn — and no `nextval` allocation.
-- **Locks are held briefly.** Splitting parent and inventory into separate
-  transactions keeps the contended `HostHeartbeats` rows out of the long
-  inventory pass.
-
-Two consequences are accepted deliberately. A reader can briefly see a host
-whose inventory is one beat behind, since the two transactions commit
-separately; inventory is eventually consistent by design. And bulk prune must be
-scoped to the host set actually present in the batch, so it never deletes
-inventory for hosts absent from this flush.
-
-Do **not** reintroduce a deterministic sort of the flush batch. It eliminates
-`ON CONFLICT` deadlocks but converts them into a worse failure mode: every
-worker locks the same hot rows in the same order, and the flushes serialize into
-a lock convoy.
+`containers` absent from the payload means "not reported this beat" and leaves
+the stored inventory untouched; `[]` is a real empty inventory and prunes. The
+two must never be conflated.
 
 ### Read path
 
@@ -386,25 +382,24 @@ requests assigned. The command queue is unchanged after resolution.
 
 ### Concurrency model
 
-With `GPROFILER_POSTGRES_CONN_PER_THREAD` enabled, each webapp worker thread
-holds its own database connection, so connection count is proportional to demand
-and bounded by the worker threadpool rather than a fixed pool size. Because
-psycopg2 has no client-side idle timeout, idle sessions are reaped server-side
-via `idle_session_timeout` on the application role; a thread reconnects on next
-use.
+Each webapp worker thread holds its own database connection (always; there is
+no flag), so a worker process's connection count equals its threadpool size and
+the fleet total is `containers × GUNICORN_PROCESS_COUNT ×
+GPROFILER_WEBAPP_THREAD_POOL_SIZE`. Because psycopg2 has no client-side idle
+timeout, idle sessions are reaped server-side via `idle_session_timeout` on the
+application role; a thread reconnects on next use.
 
-The flag defaults to off. Left off, a worker process shares one connection
-guarded by a re-entrant lock, and every request in that process — reads
-included — serializes behind it. That lock is application-level, not
-PostgreSQL's; MVCC would otherwise let those reads proceed concurrently. The
-symptom is request latency that grows with concurrency while both host CPU and
-the database sit idle.
+Two earlier designs are gone and should not come back. A process-wide
+connection behind a re-entrant lock serialized every request in the process —
+reads included — behind an application-level lock that MVCC would never have
+imposed. A bounded connection pool either starved reads when small or held a
+large idle high-water when large, and needed retuning as the fleet grew.
 
-A bounded connection pool was evaluated and reverted: a fixed maximum either
-starves reads when too small or holds a large idle high-water when large, and it
-required continual retuning as the fleet grew. Per-thread connections are only
-safe because the async writer keeps the heavy writes off the request path — the
-two changes must be kept together.
+Per-thread connections are cheap to run because each heartbeat does so little:
+one short upsert in steady state (see *Ingest path*), so by Little's law a
+fleet-wide 5,000 beats/s keeps only a handful of connections busy. The threadpool
+should be sized small (prod: 10 threads per worker, 560 connections fleet-wide),
+not large.
 
 ## Continuous Service Subscriptions & Auto-Enrollment
 
@@ -480,19 +475,18 @@ active-host window applies to the status page, the precompute build, and target
 resolution, which keeps "what the UI offers" and "what a request can target"
 consistent.
 
-The window is **15 minutes** by default, set by
+The window is **2 minutes** by default, set by
 `GPROFILER_WORKLOAD_FRESH_INTERVAL` as a SQL interval string. Because the value
 is interpolated into SQL interval literals, it is validated against a strict
 `<n> <unit>` allowlist and falls back to the default if malformed — keep that
 validation in place for any new interval setting.
 
-The window was deliberately loosened from its original 2 minutes. **At
-full-fleet scale the async writer spreads each host's timestamp refresh over
-roughly 15 minutes**, so a host beating healthily every 30 seconds may still
-have its stored `heartbeat_timestamp` updated far less often. A tight window
-therefore undercounts the fleet and hides healthy hosts from the UI. The window
-tracks *write-path throughput*, not beat cadence — if flush throughput changes
-materially, revisit this value.
+Heartbeats are written synchronously, so a host's stored `heartbeat_timestamp`
+is at most one beat (30 s) old while it is healthy; four missed beats means the
+host or its pod is gone. A longer window keeps dead pods selectable and resolves
+stale PIDs into new requests. (The window was temporarily widened to 15 minutes
+while heartbeat writes were buffered and could lag by that much; that buffering
+no longer exists.)
 
 Inventory rows are not aged out on a timer; they are pruned when a host's next
 heartbeat no longer lists them, and removed entirely by cascade when the host
@@ -504,31 +498,19 @@ row is deleted.
 |---|---|---|
 | Agent beat interval | 30s | Command pickup latency and inventory cadence |
 | Agent collector cache | 30s | Upper bound on inventory age within a beat |
-| `GPROFILER_WORKLOAD_FRESH_INTERVAL` | `15 minutes` | Freshness window for live views, precompute build, and resolution |
-| `GPROFILER_HEARTBEAT_ASYNC_WRITES` | `TRUE` | Off reverts to synchronous per-request writes |
-| `GPROFILER_HEARTBEAT_FLUSH_INTERVAL_SEC` | `1.0` | Coalescing window; larger batches more but delays freshness |
-| `GPROFILER_HEARTBEAT_BUFFER_MAX_HOSTS` | `20000` | Buffer cap per worker; overflow drops the beat |
-| `GPROFILER_POSTGRES_CONN_PER_THREAD` | `FALSE` | **Must be enabled explicitly** for per-thread connections |
-| `GPROFILER_WEBAPP_THREAD_POOL_SIZE` | `0` | `0` keeps the framework default; with worker count it bounds peak connections |
+| `GPROFILER_WORKLOAD_FRESH_INTERVAL` | `2 minutes` | Freshness window for live views, precompute build, and resolution |
+| `GPROFILER_INVENTORY_SYNC_PER_SEC` | `2` | Full inventory syncs admitted per second per worker process when a host's inventory differs from what is stored; `0` = unlimited |
+| `GPROFILER_WEBAPP_THREAD_POOL_SIZE` | `0` | `0` keeps the framework default (40); threads per worker = connections per worker |
 | `idle_session_timeout` (DB role) | — | Reaps idle per-thread connections server-side |
 | Precompute refresh | every minute | Upper bound on added staleness for unfiltered reads |
-
-The default for `GPROFILER_POSTGRES_CONN_PER_THREAD` is `FALSE`, so a deployment
-that does not set it runs one connection per worker **process** and serializes
-that worker's database work. The per-thread model described above applies only
-when it is explicitly enabled.
 
 The periodic worker keeps its own `GPROFILER_WORKLOAD_FRESH_INTERVAL` in sync
 with the webapp's; if they diverge, the precomputed tabs and the live filtered
 views disagree about which hosts are active.
 
-Peak connections are approximately `workers × (threadpool + flush thread)`. Size
-`max_connections` against that and confirm `idle_session_timeout` is set before
-raising the threadpool.
-
-`GPROFILER_POSTGRES_POOL_SIZE` and `GPROFILER_POSTGRES_POOL_ACQUIRE_TIMEOUT`
-remain in config but are **no longer read** by the connection layer; they are
-leftovers from the reverted pool and should not be tuned.
+Connections are `containers × workers × threadpool`. Size `max_connections`
+against that and confirm `idle_session_timeout` is set before raising the
+threadpool. See `docs/WEBAPP_DB_CONCURRENCY_TUNING.md` for the sizing argument.
 
 ## Failure Handling
 
@@ -630,20 +612,25 @@ window referenced below is the active-host heartbeat window
 ### Ingest behavior
 
 - **AT-S17 — Unchanged inventory writes nothing.** *Given* a host re-sends an
-  identical inventory, *When* the flush runs, *Then* no container or process row
-  is inserted, updated, or deleted, and no sequence value is consumed.
-- **AT-S18 — Latest-wins coalescing.** *Given* several beats from the same host
-  arrive within one flush interval, *When* the flush runs, *Then* exactly one
-  write occurs for that host, carrying the newest payload.
-- **AT-S19 — Overflow drops safely.** *Given* the pending buffer is at capacity,
-  *When* another beat arrives, *Then* it is dropped without error and the host is
-  recorded normally on its next beat.
-- **AT-S20 — Prune is batch-scoped.** *Given* a flush batch containing only a
-  subset of hosts, *When* inventory sync prunes removed containers, *Then* rows
-  belonging to hosts outside the batch are untouched.
-- **AT-S21 — Freshness survives inventory failure.** *Given* the inventory
-  transaction fails after retries, *When* the flush completes, *Then* the parent
-  heartbeat is still committed and the host remains fresh.
+  identical inventory (same digest), *When* the beat is handled, *Then* the only
+  statement issued is the host upsert: no container or process row is read,
+  inserted, updated, or deleted, and no sequence value is consumed.
+- **AT-S18 — Digest-only beat.** *Given* the server has confirmed it holds a
+  host's inventory (`need_inventory: false`), *When* the agent sends a beat with
+  only `inventory_digest`, *Then* the host is refreshed, the stored inventory and
+  digest are untouched, and the reply is again `need_inventory: false`.
+- **AT-S19 — Not reported is not empty.** *Given* a beat with no `containers`
+  field, *When* it is handled, *Then* the stored inventory is untouched; *Given*
+  a beat with `containers: []`, *Then* every stored container and process for
+  the host is pruned and the empty inventory's digest is stored.
+- **AT-S20 — Sync is paced.** *Given* more hosts' inventories differ than the
+  sync budget admits this second, *When* their beats are handled, *Then* the
+  hosts over budget are refreshed, keep their previous digest and inventory,
+  are answered `need_inventory: true`, and are synced on a later beat.
+- **AT-S21 — Digest describes committed inventory.** *Given* an inventory sync
+  and its digest write share one transaction, *When* either fails, *Then*
+  neither is committed and the next beat with inventory syncs again; the digest
+  column never describes inventory that is not in the tables.
 
 ### Precomputed store
 

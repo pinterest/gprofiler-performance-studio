@@ -15,30 +15,24 @@
 #
 
 import threading
-from typing import Optional
 
-from gprofiler_dev import config
 from gprofiler_dev.postgres.postgresdb import PostgresDB
 
-_DB_INSTANCE: Optional[PostgresDB] = None
 THREAD_LOCAL = threading.local()
-_DB_LOCK = threading.RLock()
 
 
 def get_postgres_db() -> PostgresDB:
-    if config.POSTGRES_CONN_PER_THREAD:
-        if getattr(THREAD_LOCAL, "postgres_conn", None) is None:
-            THREAD_LOCAL.postgres_conn = PostgresDB()
-        return THREAD_LOCAL.postgres_conn
+    """One Postgres connection per thread, created lazily and reused for the thread's life.
 
-    global _DB_INSTANCE
-
-    if _DB_INSTANCE is None:
-        with _DB_LOCK:
-            if _DB_INSTANCE is None:
-                _DB_INSTANCE = PostgresDB()
-
-    return _DB_INSTANCE
+    A psycopg2 connection is not safe to share between threads, and the earlier
+    process-wide singleton behind a lock serialized every DB call in the process. Per-thread
+    connections mean the number of connections a process holds equals its thread count, so
+    size the webapp's threadpool (GPROFILER_WEBAPP_THREAD_POOL_SIZE) with the database's
+    connection limit in mind; nothing else needs tuning.
+    """
+    if getattr(THREAD_LOCAL, "postgres_conn", None) is None:
+        THREAD_LOCAL.postgres_conn = PostgresDB()
+    return THREAD_LOCAL.postgres_conn
 
 
 class ParameterIsMissing(Exception):

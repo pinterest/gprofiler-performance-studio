@@ -30,18 +30,10 @@ PG_HOST = os.getenv("GPROFILER_POSTGRES_HOST", "localhost")
 PG_USER = os.getenv("GPROFILER_POSTGRES_USERNAME")
 PG_PORT = os.getenv("GPROFILER_POSTGRES_PORT", 5432)
 PG_PASSWORD = os.getenv("GPROFILER_POSTGRES_PASSWORD")
-POSTGRES_CONN_PER_THREAD = os.getenv("GPROFILER_POSTGRES_CONN_PER_THREAD", "FALSE").upper() == "TRUE"
 PG_CONNECT_TIMEOUT = int(os.getenv("GPROFILER_POSTGRES_CONNECT_TIMEOUT", 3))
-# Bounded per-process connection pool: max live connections and how long a caller waits
-# for a free one before erroring. Total DB connections ~= replicas * workers * pool size.
-POSTGRES_POOL_SIZE = int(os.getenv("GPROFILER_POSTGRES_POOL_SIZE", 10))
-POSTGRES_POOL_ACQUIRE_TIMEOUT = int(os.getenv("GPROFILER_POSTGRES_POOL_ACQUIRE_TIMEOUT", 10))
-
-# Async heartbeat writes: buffer the host + inventory writes off the request thread and flush
-# them in coalesced batches, so a heartbeat POST returns after only the (fast) command read.
-HEARTBEAT_ASYNC_WRITES = os.getenv("GPROFILER_HEARTBEAT_ASYNC_WRITES", "TRUE").upper() == "TRUE"
-HEARTBEAT_FLUSH_INTERVAL_SEC = float(os.getenv("GPROFILER_HEARTBEAT_FLUSH_INTERVAL_SEC", "1.0"))
-HEARTBEAT_BUFFER_MAX_HOSTS = int(os.getenv("GPROFILER_HEARTBEAT_BUFFER_MAX_HOSTS", "20000"))
+# Each thread gets its own Postgres connection (see gprofiler_dev.postgres.get_postgres_db).
+# Connections per process therefore equal the thread count; in the webapp that is
+# GPROFILER_WEBAPP_THREAD_POOL_SIZE, which is the knob to size the DB connection count with.
 
 # Inventory change detection (see gprofiler_dev/heartbeat_inventory.py). A beat whose inventory
 # digest equals the one stored on the host row does no inventory work. When it differs, the
@@ -77,8 +69,11 @@ def _validated_sql_interval(value: str, default: str) -> str:
 
 
 # How recent a host's last heartbeat must be to count as "fresh"/active in the live workload
-# views and the precompute store build. Loosened from 2m: at full-fleet scale the async writer
-# spreads each host's timestamp refresh over ~15m, so a tighter window undercounts the fleet.
+# views, target resolution and the precompute store build. Heartbeats are written
+# synchronously every 30 s, so four missed beats means the host (or its pod) is gone; a
+# longer window keeps dead pods selectable and resolves stale pids. (The earlier 15-minute
+# default only existed to hide the refresh lag of the buffered writer, which is gone.)
+# Keep deploy/periodic_tasks/refresh_workload_snapshot.sh in step with this default.
 WORKLOAD_FRESH_INTERVAL = _validated_sql_interval(
-    os.getenv("GPROFILER_WORKLOAD_FRESH_INTERVAL", "15 minutes"), "15 minutes"
+    os.getenv("GPROFILER_WORKLOAD_FRESH_INTERVAL", "2 minutes"), "2 minutes"
 )

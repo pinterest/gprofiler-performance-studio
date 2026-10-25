@@ -22,7 +22,6 @@ from backend import config, routers
 from backend.utils.metrics_publisher import MetricsPublisher
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, Response
-from gprofiler_dev import config as dev_config
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 logger = logging.getLogger(__name__)
@@ -41,23 +40,12 @@ app = FastAPI(openapi_url="/api/v1/openapi.json", docs_url="/api/v1/docs")
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on application startup."""
-    # Size the sync-route threadpool per worker (max concurrent requests/worker);
-    # DB concurrency is bounded separately by the connection pool (GPROFILER_POSTGRES_POOL_SIZE).
+    # Size the sync-route threadpool per worker. Each thread owns one Postgres connection,
+    # so this is also the number of DB connections per worker process (fleet total =
+    # containers x GUNICORN_PROCESS_COUNT x this). 0 keeps the framework default (40).
     if config.WEBAPP_THREAD_POOL_SIZE > 0:
         anyio.to_thread.current_default_thread_limiter().total_tokens = config.WEBAPP_THREAD_POOL_SIZE
         logger.info("Webapp threadpool size set to %s", config.WEBAPP_THREAD_POOL_SIZE)
-
-    # Start the async heartbeat writer (per worker) so it's flushing before beats arrive.
-    if dev_config.HEARTBEAT_ASYNC_WRITES:
-        from gprofiler_dev.heartbeat_writer import get_heartbeat_writer
-        from gprofiler_dev.postgres.db_manager import DBManager
-
-        get_heartbeat_writer(DBManager())
-        logger.info(
-            "Async heartbeat writer started (flush=%ss, max_hosts=%s)",
-            dev_config.HEARTBEAT_FLUSH_INTERVAL_SEC,
-            dev_config.HEARTBEAT_BUFFER_MAX_HOSTS,
-        )
 
     # Initialize MetricsPublisher
     metrics_publisher = MetricsPublisher(

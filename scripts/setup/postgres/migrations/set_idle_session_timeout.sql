@@ -1,6 +1,6 @@
 -- Reap idle DB connections for the webapp DB role.
 --
--- The webapp uses per-thread connections (GPROFILER_POSTGRES_CONN_PER_THREAD=TRUE): each
+-- The webapp uses one connection per thread (gprofiler_dev.postgres.get_postgres_db): each
 -- worker thread keeps its own connection, so the connection count tracks demand but the
 -- high-water is retained after a burst. psycopg2 has no client-side idle timeout, so we
 -- reap idle sessions on the server: PostgreSQL closes connections left idle beyond the

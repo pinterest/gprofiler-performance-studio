@@ -22,7 +22,6 @@ from typing import Union
 
 import psycopg2
 import psycopg2.extras
-import psycopg2.pool
 from gprofiler_dev import config
 
 SQL_FROM_CLAUSE = " FROM "
