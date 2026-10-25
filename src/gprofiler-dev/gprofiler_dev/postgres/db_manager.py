@@ -900,7 +900,12 @@ class DBManager(metaclass=Singleton):
         -> the diff sync runs if the per-process sync budget admits it, and the new digest is
         written in the same transaction. ``containers is None`` means the agent did not
         report inventory this beat and leaves the stored inventory untouched (distinct from
-        ``[]``, a real "no containers" inventory).
+        ``[]``, a real "no containers" inventory). With ``containers is None`` a non-None
+        ``inventory_digest`` is the digest the agent *claims* for its current inventory
+        (a digest-only beat); it is only compared, never stored, since the digest column
+        must always describe inventory that is actually in the tables. With containers
+        present the caller must pass the digest *it computed from those containers* (or
+        None to compute here), never the agent's claim.
         """
         if heartbeat_timestamp is None:
             heartbeat_timestamp = datetime.now()
@@ -966,8 +971,10 @@ class DBManager(metaclass=Singleton):
             row = cursor.fetchone()
             host_id = row[0] if row else None
             stored_digest = row[1] if row else None
-            if host_id is None or containers is None:
-                self._note_inventory_outcome("not_reported" if host_id is not None else "no_host")
+            if host_id is None:
+                self._note_inventory_outcome("no_host")
+            elif containers is None:
+                self._note_inventory_outcome(self._digest_only_outcome(stored_digest, inventory_digest))
             elif stored_digest == inventory_digest:
                 self._note_inventory_outcome("unchanged")
             elif not get_sync_budget().try_acquire():
@@ -982,13 +989,53 @@ class DBManager(metaclass=Singleton):
         return True
 
     # Outcome of the inventory step for each heartbeat processed by this worker:
-    #   synced        inventory differed and was diffed into the tables (digest updated)
-    #   unchanged     digest matched the stored one -> no inventory statements at all
-    #   deferred      differed, but over the per-process sync budget -> retried next beat
-    #   not_reported  the agent sent no inventory field this beat
+    #   synced           inventory differed and was diffed into the tables (digest updated)
+    #   unchanged        full inventory sent, digest matched the stored one -> no inventory
+    #                    statements at all (agent has not yet learned it can stop sending)
+    #   deferred         differed, but over the per-process sync budget -> retried next beat
+    #   digest_match     digest-only beat and the digest matches -> the steady state for a
+    #                    change-detecting agent; nothing to do
+    #   digest_mismatch  digest-only beat whose digest does not match what is stored; the
+    #                    route answers need_inventory=True so the next beat carries the
+    #                    inventory. Persistently high = agents not honouring need_inventory
+    #                    or a canonical-form mismatch between agent and server
+    #   not_reported     neither inventory nor digest in the beat (older agent)
     # Counts are cumulative per process; ``inventory_outcome_hook`` (set by the webapp) can
     # forward each increment to the metrics publisher.
     inventory_outcome_hook: Optional[Callable[[str, int], None]] = None
+
+    @staticmethod
+    def _digest_only_outcome(stored_digest: Optional[str], claimed_digest: Optional[str]) -> str:
+        if claimed_digest is None:
+            return "not_reported"
+        return "digest_match" if stored_digest == claimed_digest else "digest_mismatch"
+
+    def get_host_inventory_digest(self, hostname: str, service_name: str) -> Optional[str]:
+        """Digest of the inventory currently committed for a host (None if never synced or
+        unknown host). One point lookup on the (hostname, service_name) unique index; the
+        heartbeat route compares it with the agent's digest to answer ``need_inventory``."""
+        row = self.db.execute(
+            "SELECT inventory_digest FROM HostHeartbeats WHERE hostname = %s AND service_name = %s",
+            (hostname, service_name),
+            one_value=True,
+            return_dict=True,
+        )
+        return row["inventory_digest"] if row else None
+
+    def count_inventory_pending_hosts(self) -> int:
+        """Fresh hosts with no committed inventory digest: sync still queued behind the
+        budget, or an agent that never reports inventory. Drains to the latter after a
+        rollout; fine-scope targeting cannot see these hosts' pods/containers/processes."""
+        row = self.db.execute(
+            f"""
+            SELECT COUNT(*) AS pending FROM HostHeartbeats
+            WHERE heartbeat_timestamp > NOW() - INTERVAL '{WORKLOAD_FRESH_INTERVAL}'
+              AND inventory_digest IS NULL
+            """,
+            one_value=True,
+            return_dict=True,
+        )
+        return int(row["pending"]) if row else 0
 
     def _note_inventory_outcome(self, outcome: str, count: int = 1) -> None:
         if count <= 0:
@@ -1092,8 +1139,12 @@ class DBManager(metaclass=Singleton):
         differing: List[Dict[str, Any]] = []
         for p in payloads:
             key = (p["hostname"], p["service_name"])
-            if key not in host_id_by_key or p.get("containers") is None:
-                self._note_inventory_outcome("not_reported")
+            if key not in host_id_by_key:
+                self._note_inventory_outcome("no_host")
+            elif p.get("containers") is None:
+                self._note_inventory_outcome(
+                    self._digest_only_outcome(stored_digest_by_key.get(key), p.get("inventory_digest"))
+                )
             elif stored_digest_by_key.get(key) == p.get("inventory_digest"):
                 self._note_inventory_outcome("unchanged")
             else:
@@ -3090,6 +3141,7 @@ class DBManager(metaclass=Singleton):
                     "rows": rows,
                     "tab_counts": tab_counts,
                     "active_hosts": active_hosts,
+                    "inventory_pending_hosts": self.count_inventory_pending_hosts(),
                     "total_count": total_count,
                     "page": page,
                     "page_size": page_size,
@@ -3107,6 +3159,7 @@ class DBManager(metaclass=Singleton):
             "rows": rows,
             "tab_counts": tab_counts,
             "active_hosts": active_hosts,
+            "inventory_pending_hosts": self.count_inventory_pending_hosts(),
             "total_count": total_count,
             "page": page,
             "page_size": page_size,
