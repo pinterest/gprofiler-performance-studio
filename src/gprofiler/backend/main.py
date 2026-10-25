@@ -77,6 +77,16 @@ async def startup_event():
     else:
         logger.info("MetricsPublisher disabled")
 
+    # Forward heartbeat inventory outcomes (synced / unchanged / deferred / not_reported) to the
+    # metrics publisher. "deferred" climbing and then draining to ~0 is the signal to watch when
+    # raising GPROFILER_INVENTORY_SYNC_PER_SEC after a rollout.
+    from gprofiler_dev.postgres.db_manager import DBManager as _DBManager
+
+    def _publish_inventory_outcome(outcome: str, count: int) -> None:
+        metrics_publisher.send_counter("heartbeat_inventory", count, {"outcome": outcome})
+
+    _DBManager.inventory_outcome_hook = staticmethod(_publish_inventory_outcome)
+
 
 @app.on_event("shutdown")
 async def shutdown_event():

@@ -24,7 +24,7 @@ import psycopg2.extras
 from collections import defaultdict
 from datetime import datetime, timedelta
 from secrets import token_urlsafe
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 from gprofiler_dev.config import (
     ACTIVE_HOST_HEARTBEAT_MAX_DELTA_HOURS,
@@ -32,6 +32,8 @@ from gprofiler_dev.config import (
     PROFILER_PROCESSES_LRU_CACHE_LIMIT,
     WORKLOAD_FRESH_INTERVAL,
 )
+from gprofiler_dev.heartbeat_inventory import get_sync_budget
+from gprofiler_dev.heartbeat_inventory import inventory_digest as compute_inventory_digest
 from gprofiler_dev.lru_cache_impl import LRUCache
 from gprofiler_dev.postgres import get_postgres_db
 from gprofiler_dev.postgres.postgresdb import DBConflict
@@ -113,6 +115,9 @@ class DBManager(metaclass=Singleton):
 
         # Cache for host-pid mappings (temporary solution)
         self.request_host_pid_mappings: Dict[str, Dict[str, List[int]]] = {}
+
+        # Per-process counters of the heartbeat inventory step (see _note_inventory_outcome).
+        self.inventory_outcomes: Dict[str, int] = defaultdict(int)
 
         self.last_seen_updates: Dict[str : time.time] = defaultdict(
             lambda: time.time() - (LAST_SEEN_UPDATES_INTERVAL_MINUTES + 1) * 60
@@ -882,19 +887,31 @@ class DBManager(metaclass=Singleton):
         status: str = "active",
         heartbeat_timestamp: Optional[datetime] = None,
         supported_perf_events: Optional[List[str]] = None,
+        inventory_digest: Optional[str] = None,
     ) -> bool:
         """
         Update or insert host heartbeat information using pure SQL.
         Always updates on conflict to ensure latest data is stored, including
         hardware changes (e.g., new PMU events after CPU upgrade).
+
+        Inventory is change-detected: ``containers`` is hashed (``inventory_digest`` may be
+        passed in pre-computed) and compared with the digest stored on the host row in the
+        same statement that refreshes the heartbeat. Equal -> no inventory work. Different
+        -> the diff sync runs if the per-process sync budget admits it, and the new digest is
+        written in the same transaction. ``containers is None`` means the agent did not
+        report inventory this beat and leaves the stored inventory untouched (distinct from
+        ``[]``, a real "no containers" inventory).
         """
         if heartbeat_timestamp is None:
             heartbeat_timestamp = datetime.now()
+        if inventory_digest is None and containers is not None:
+            inventory_digest = compute_inventory_digest(containers)
 
         # Container/process inventory lives entirely in the normalized
         # HeartbeatContainers/HeartbeatProcesses tables (synced below). ``RETURNING ID``
         # gives us the stable host row id (the upsert key is (hostname, service_name))
-        # used to attach those child rows.
+        # used to attach those child rows; ``inventory_digest`` is the stored fingerprint
+        # (the UPSERT deliberately does not touch that column).
         query = """
         INSERT INTO HostHeartbeats (
             hostname, ip_address, service_name, agent_version, run_mode, namespace, pod_name, last_command_id,
@@ -922,7 +939,7 @@ class DBManager(metaclass=Singleton):
             heartbeat_timestamp = EXCLUDED.heartbeat_timestamp,
             supported_perf_events = EXCLUDED.supported_perf_events,
             updated_at = CURRENT_TIMESTAMP
-        RETURNING ID
+        RETURNING ID, inventory_digest
         """
 
         values = {
@@ -942,14 +959,47 @@ class DBManager(metaclass=Singleton):
         }
 
         # Host upsert and the normalized inventory sync share one transaction so a
-        # reader never observes a host whose structured inventory is half-written.
+        # reader never observes a host whose structured inventory is half-written, and so
+        # the digest is only ever stored alongside the inventory it describes.
         with self.db.transaction() as cursor:
             cursor.execute(query, values)
             row = cursor.fetchone()
             host_id = row[0] if row else None
-            if host_id is not None:
-                self._sync_host_inventory(cursor, host_id, containers or [])
+            stored_digest = row[1] if row else None
+            if host_id is None or containers is None:
+                self._note_inventory_outcome("not_reported" if host_id is not None else "no_host")
+            elif stored_digest == inventory_digest:
+                self._note_inventory_outcome("unchanged")
+            elif not get_sync_budget().try_acquire():
+                self._note_inventory_outcome("deferred")
+            else:
+                self._sync_host_inventory(cursor, host_id, containers)
+                cursor.execute(
+                    "UPDATE HostHeartbeats SET inventory_digest = %s WHERE ID = %s",
+                    (inventory_digest, host_id),
+                )
+                self._note_inventory_outcome("synced")
         return True
+
+    # Outcome of the inventory step for each heartbeat processed by this worker:
+    #   synced        inventory differed and was diffed into the tables (digest updated)
+    #   unchanged     digest matched the stored one -> no inventory statements at all
+    #   deferred      differed, but over the per-process sync budget -> retried next beat
+    #   not_reported  the agent sent no inventory field this beat
+    # Counts are cumulative per process; ``inventory_outcome_hook`` (set by the webapp) can
+    # forward each increment to the metrics publisher.
+    inventory_outcome_hook: Optional[Callable[[str, int], None]] = None
+
+    def _note_inventory_outcome(self, outcome: str, count: int = 1) -> None:
+        if count <= 0:
+            return
+        self.inventory_outcomes[outcome] += count
+        hook = self.inventory_outcome_hook
+        if hook is not None:
+            try:
+                hook(outcome, count)
+            except Exception:  # metrics must never break the heartbeat path
+                pass
 
     def bulk_upsert_host_heartbeats(self, payloads: List[Dict[str, Any]]) -> int:
         """Batched form of ``upsert_host_heartbeat`` for the async heartbeat writer.
@@ -962,10 +1012,20 @@ class DBManager(metaclass=Singleton):
 
         Callers must pre-coalesce so (hostname, service_name) is unique within the batch
         (ON CONFLICT cannot affect the same row twice in one statement).
+
+        Inventory is change-detected per host (see ``upsert_host_heartbeat``): only payloads
+        whose ``inventory_digest`` differs from the digest stored on their host row go into
+        the inventory sync, and only as many of those as the per-process sync budget admits
+        this flush; the rest keep their old digest and are retried on their next beat.
+        Payloads carry a pre-computed ``inventory_digest`` (the request thread hashes them in
+        parallel) -- it is computed here only if missing.
         """
         if not payloads:
             return 0
         now = datetime.now()
+        for p in payloads:
+            if p.get("inventory_digest") is None and p.get("containers") is not None:
+                p["inventory_digest"] = compute_inventory_digest(p["containers"])
         rows = [
             (
                 p["hostname"],
@@ -1003,7 +1063,7 @@ class DBManager(metaclass=Singleton):
                 heartbeat_timestamp = EXCLUDED.heartbeat_timestamp,
                 supported_perf_events = EXCLUDED.supported_perf_events,
                 updated_at = CURRENT_TIMESTAMP
-            RETURNING id, hostname, service_name
+            RETURNING id, hostname, service_name, inventory_digest
         """
         template = (
             "(%s, %s::inet, %s, %s, %s, %s, %s, %s::uuid, %s::uuid[], %s::uuid[], "
@@ -1012,29 +1072,72 @@ class DBManager(metaclass=Singleton):
 
         # Transaction 1: parent upsert only, so the hot HostHeartbeats rows are locked briefly.
         # The short lock window makes the residual (unsorted) deadlock rare; retry the rare one.
+        # The UPSERT does not touch inventory_digest, so RETURNING gives the stored digest.
         host_id_by_key: Dict[Tuple[str, str], int] = {}
+        stored_digest_by_key: Dict[Tuple[str, str], Optional[str]] = {}
 
         def _upsert_hosts(cursor) -> None:
             returned = psycopg2.extras.execute_values(cursor, insert, rows, template=template, fetch=True)
             host_id_by_key.clear()
-            host_id_by_key.update({(r[1], r[2]): r[0] for r in returned})
+            stored_digest_by_key.clear()
+            for r in returned:
+                host_id_by_key[(r[1], r[2])] = r[0]
+                stored_digest_by_key[(r[1], r[2])] = r[3]
 
         self._write_with_deadlock_retry("bulk heartbeat host upsert", _upsert_hosts, hosts=len(payloads))
 
-        # Transaction 2: bulked inventory. The parent freshness is already committed, so if the
-        # inventory can't land after retries we skip it (it re-syncs next beat) instead of failing
+        # Change detection: keep only payloads whose inventory differs from what is stored, then
+        # admit as many of those as the sync budget allows this flush. Everything else costs
+        # nothing further -- unchanged hosts are done, deferred hosts retry next beat.
+        differing: List[Dict[str, Any]] = []
+        for p in payloads:
+            key = (p["hostname"], p["service_name"])
+            if key not in host_id_by_key or p.get("containers") is None:
+                self._note_inventory_outcome("not_reported")
+            elif stored_digest_by_key.get(key) == p.get("inventory_digest"):
+                self._note_inventory_outcome("unchanged")
+            else:
+                differing.append(p)
+        admitted = get_sync_budget().acquire_up_to(len(differing))
+        to_sync, deferred = differing[:admitted], differing[admitted:]
+        self._note_inventory_outcome("deferred", len(deferred))
+        if not to_sync:
+            return len(payloads)
+
+        # Transaction 2: bulked inventory for the admitted hosts, plus their new digests in the
+        # same transaction (a digest is only ever stored with the inventory it describes). The
+        # parent freshness is already committed, so if the inventory can't land after retries we
+        # skip it (those hosts keep their old digest and re-sync next beat) instead of failing
         # the flush and losing the freshness update for the whole batch.
-        try:
-            self._write_with_deadlock_retry(
-                "bulk heartbeat inventory sync",
-                lambda cursor: self._bulk_sync_inventory(cursor, payloads, host_id_by_key),
-                hosts=len(payloads),
+        def _sync_inventory(cursor) -> None:
+            self._bulk_sync_inventory(cursor, to_sync, host_id_by_key)
+            psycopg2.extras.execute_values(
+                cursor,
+                "UPDATE HostHeartbeats h SET inventory_digest = v.digest "
+                "FROM (VALUES %s) AS v(id, digest) WHERE h.ID = v.id",
+                [(host_id_by_key[(p["hostname"], p["service_name"])], p.get("inventory_digest")) for p in to_sync],
+                template="(%s::bigint, %s::text)",
+                page_size=1000,
             )
+
+        try:
+            self._write_with_deadlock_retry("bulk heartbeat inventory sync", _sync_inventory, hosts=len(to_sync))
+            self._note_inventory_outcome("synced", len(to_sync))
         except psycopg2.errors.DeadlockDetected:
+            self._note_inventory_outcome("deferred", len(to_sync))
             self.db.logger.warning(
                 "bulk heartbeat inventory sync deadlocked for %s hosts after retries; skipping "
                 "inventory this flush (freshness persisted, re-syncs next beat)",
-                len(payloads),
+                len(to_sync),
+            )
+        if deferred:
+            self.db.logger.info(
+                "inventory sync budget: synced %s, deferred %s of %s differing hosts this flush "
+                "(GPROFILER_INVENTORY_SYNC_PER_SEC=%s per worker)",
+                len(to_sync),
+                len(deferred),
+                len(differing),
+                get_sync_budget().rate,
             )
         return len(payloads)
 
@@ -1071,8 +1174,8 @@ class DBManager(metaclass=Singleton):
 
         for p in payloads:
             host_id = host_id_by_key.get((p["hostname"], p["service_name"]))
-            if host_id is None:
-                continue
+            if host_id is None or p.get("containers") is None:
+                continue  # unknown host, or inventory not reported this beat (never prune on that)
             host_ids.append(host_id)
             seen_cids: Set[str] = set()
             for container in p.get("containers") or []:

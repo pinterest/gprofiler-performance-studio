@@ -43,6 +43,15 @@ HEARTBEAT_ASYNC_WRITES = os.getenv("GPROFILER_HEARTBEAT_ASYNC_WRITES", "TRUE").u
 HEARTBEAT_FLUSH_INTERVAL_SEC = float(os.getenv("GPROFILER_HEARTBEAT_FLUSH_INTERVAL_SEC", "1.0"))
 HEARTBEAT_BUFFER_MAX_HOSTS = int(os.getenv("GPROFILER_HEARTBEAT_BUFFER_MAX_HOSTS", "20000"))
 
+# Inventory change detection (see gprofiler_dev/heartbeat_inventory.py). A beat whose inventory
+# digest equals the one stored on the host row does no inventory work. When it differs, the
+# full sync is admitted by a per-process token bucket of this many syncs per second (fleet
+# total = this x worker processes). Over budget, the host keeps its freshness update and its
+# old digest, and syncs on a later beat -- this paces the one-time load on first rollout and
+# any fleet-wide inventory change instead of letting it arrive as a herd. <= 0 disables the
+# budget (every differing beat syncs immediately; fine for dev / small fleets).
+INVENTORY_SYNC_PER_SEC = float(os.getenv("GPROFILER_INVENTORY_SYNC_PER_SEC", "2"))
+
 INSTANCE_RUNS_LRU_CACHE_LIMIT = os.getenv("INSTANCE_RUNS_LRU_CACHE_LIMIT", 1000)
 PROFILER_PROCESSES_LRU_CACHE_LIMIT = os.getenv("PROFILER_PROCESSES_LRU_CACHE_LIMIT", 1000)
 
