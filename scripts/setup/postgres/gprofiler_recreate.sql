@@ -324,6 +324,12 @@ CREATE TABLE HeartbeatContainers (
     workload_name text NULL,
     workload_kind text NULL,
     updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- Number of HeartbeatProcesses rows for this container, maintained by the inventory
+    -- sync in the same statement that writes the container. Lets fleet-wide process
+    -- counts (tab counts, service/namespace/pod summaries) be a SUM over containers
+    -- instead of a scan of the ~100M-row HeartbeatProcesses table. (Last column so a
+    -- fresh install matches the migrated layout.)
+    process_count integer NOT NULL DEFAULT 0,
     CONSTRAINT unique_heartbeat_container UNIQUE (host_id, container_id)
 );
 
@@ -1006,8 +1012,12 @@ CREATE OR REPLACE VIEW workload_tab_counts AS SELECT * FROM workload_tab_counts_
 --   * Computes Layer 2 (tab counts + service/namespace/pod summaries) from the
 --     SOURCE tables at the appropriate grain, reusing the tiered / two-grain
 --     tricks (COUNT(*) FROM (SELECT DISTINCT ...) counts; container-grain
---     aggregates; distinct-subquery process_count; host-grain any_active). Prod
---     read-only prototypes: tab_counts 7.7s, service summary 5.3s.
+--     aggregates; host-grain any_active). Prod read-only prototypes: tab_counts
+--     7.7s, service summary 5.3s.
+--   * Never reads HeartbeatProcesses (~100M rows at fleet scale): every process
+--     total is SUM(HeartbeatContainers.process_count), a per-container counter the
+--     inventory sync maintains. Process counts are therefore "processes on fresh
+--     hosts in the group", the same quantity the process tab counts.
 --   * Guards against overlap with a non-blocking advisory lock, so a slow build
 --     can never queue behind another (no pile-up), regardless of cron cadence.
 --   * No longer populates the Layer 1 workload_snapshot table (nothing reads it
@@ -1019,7 +1029,7 @@ CREATE OR REPLACE VIEW workload_tab_counts AS SELECT * FROM workload_tab_counts_
 -- provably identical to the PID-aware value; for namespace/pod it can over-mark
 -- only under PID-targeted commands, which are effectively unused in practice.
 
-CREATE OR REPLACE PROCEDURE refresh_workload_snapshot(IN fresh_interval interval DEFAULT '15 minutes')
+CREATE OR REPLACE PROCEDURE refresh_workload_snapshot(IN fresh_interval interval DEFAULT '2 minutes')
     LANGUAGE plpgsql
 AS $procedure$
 DECLARE
@@ -1072,17 +1082,17 @@ BEGIN
                 (SELECT COUNT(*) FROM (SELECT DISTINCT f.service_name, f.hostname, hc.namespace, hc.pod_name, hc.container_name
                     FROM fresh f JOIN HeartbeatContainers hc ON hc.host_id = f.id
                     WHERE hc.container_name IS NOT NULL) d) AS c_container,
-                (SELECT COUNT(*) FROM (SELECT DISTINCT f.id, hp.pid
-                    FROM fresh f JOIN HeartbeatContainers hc ON hc.host_id = f.id
-                    JOIN HeartbeatProcesses hp ON hp.container_row_id = hc.id
-                    WHERE hp.pid IS NOT NULL) d) AS c_process
+                (SELECT COALESCE(SUM(hc.process_count), 0)
+                    FROM fresh f JOIN HeartbeatContainers hc ON hc.host_id = f.id) AS c_process
         ) t,
         LATERAL (VALUES ('service', c_service), ('host', c_host), ('namespace', c_namespace),
                         ('pod', c_pod), ('container', c_container), ('process', c_process),
                         ('active_hosts', active_hosts)) x(k, v)
     $f$, cnt_tbl, fresh_interval);
 
-    -- Shared container-grain source for the coarse summaries.
+    -- Shared container-grain source for the coarse summaries. process_count is the
+    -- per-container counter maintained by the inventory sync, so every process total
+    -- below is a SUM over this relation and HeartbeatProcesses is never read here.
     src_cte := format($c$
         fresh AS MATERIALIZED (
             SELECT id, hostname, host(ip_address) AS ip_address, service_name, agent_version, run_mode, heartbeat_timestamp
@@ -1092,6 +1102,7 @@ BEGIN
         cont AS (
             SELECT f.id, f.hostname, f.ip_address, f.service_name, f.agent_version, f.run_mode, f.heartbeat_timestamp,
                    hc.namespace, hc.pod_name, hc.container_name, hc.workload_name, hc.workload_kind,
+                   COALESCE(hc.process_count, 0) AS process_count,
                    COALESCE(c.command_type, 'N/A') AS command_type, c.status AS command_status, c.combined_config,
                    (c.command_type = 'start' AND c.status IN ('pending','sent','completed')) AS host_active
             FROM fresh f
@@ -1106,6 +1117,7 @@ BEGIN
         COUNT(DISTINCT namespace) FILTER (WHERE namespace IS NOT NULL) AS namespace_count,
         COUNT(DISTINCT pod_name) FILTER (WHERE pod_name IS NOT NULL) AS pod_count,
         COUNT(DISTINCT container_name) FILTER (WHERE container_name IS NOT NULL) AS container_count,
+        SUM(process_count)::integer AS process_count,
         bool_or(host_active) AS any_active,
         (array_agg(hostname ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_hostname,
         (array_agg(ip_address ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_ip_address,
@@ -1125,67 +1137,42 @@ BEGIN
     -- service
     EXECUTE format($f$
         INSERT INTO %1$I (%2$s)
-        WITH %3$s,
-        pc AS (SELECT service_name, COUNT(*) AS process_count FROM (
-                   SELECT DISTINCT f.service_name, hp.pid, hp.process_name
-                   FROM fresh f JOIN HeartbeatContainers hc ON hc.host_id = f.id
-                   JOIN HeartbeatProcesses hp ON hp.container_row_id = hc.id WHERE hp.pid IS NOT NULL
-               ) d GROUP BY service_name)
+        WITH %3$s
         SELECT 'service', row_number() OVER (ORDER BY ca.service_name ASC NULLS LAST), ca.service_name,
                ca.service_name, NULL, NULL, NULL, NULL,
-               ca.host_count, ca.namespace_count, ca.pod_count, ca.container_count, COALESCE(pc.process_count, 0), NULL::integer[],
+               ca.host_count, ca.namespace_count, ca.pod_count, ca.container_count, COALESCE(ca.process_count, 0), NULL::integer[],
                ca.l_hostname, ca.l_ip_address, ca.l_namespace, ca.l_pod_name, ca.l_container_name, ca.l_workload_name, ca.l_workload_kind,
                NULL::text, NULL::integer, ca.l_command_type, ca.l_command_status, ca.l_combined_config, ca.any_active, NULL::text,
                ca.l_agent_version, ca.l_run_mode, ca.l_heartbeat_timestamp
         FROM (SELECT service_name, %4$s FROM cont GROUP BY service_name) ca
-        LEFT JOIN pc ON pc.service_name = ca.service_name
     $f$, sum_tbl, sum_cols, src_cte, agg_tail);
 
     -- namespace
-    -- pc joins use COALESCE(...)= equality, NOT `IS NOT DISTINCT FROM`: the latter
-    -- is not hashable, so the planner merges on service_name alone and filters the
-    -- ns/pod match post-join -> quadratic per service (10min+ at pod grain).
     EXECUTE format($f$
         INSERT INTO %1$I (%2$s)
-        WITH %3$s,
-        pc AS (SELECT service_name, namespace, COUNT(*) AS process_count FROM (
-                   SELECT DISTINCT f.service_name, hc.namespace, hp.pid, hp.process_name
-                   FROM fresh f JOIN HeartbeatContainers hc ON hc.host_id = f.id
-                   JOIN HeartbeatProcesses hp ON hp.container_row_id = hc.id
-                   WHERE hp.pid IS NOT NULL AND hc.namespace IS NOT NULL
-               ) d GROUP BY service_name, namespace)
+        WITH %3$s
         SELECT 'namespace', row_number() OVER (ORDER BY ca.service_name ASC NULLS LAST, ca.namespace ASC NULLS LAST),
                ca.service_name || '|' || COALESCE(ca.namespace, ''),
                ca.service_name, NULL, ca.namespace, NULL, NULL,
-               ca.host_count, ca.namespace_count, ca.pod_count, ca.container_count, COALESCE(pc.process_count, 0), NULL::integer[],
+               ca.host_count, ca.namespace_count, ca.pod_count, ca.container_count, COALESCE(ca.process_count, 0), NULL::integer[],
                ca.l_hostname, ca.l_ip_address, ca.l_namespace, ca.l_pod_name, ca.l_container_name, ca.l_workload_name, ca.l_workload_kind,
                NULL::text, NULL::integer, ca.l_command_type, ca.l_command_status, ca.l_combined_config, ca.any_active, NULL::text,
                ca.l_agent_version, ca.l_run_mode, ca.l_heartbeat_timestamp
         FROM (SELECT service_name, namespace, %4$s FROM cont WHERE namespace IS NOT NULL GROUP BY service_name, namespace) ca
-        LEFT JOIN pc ON pc.service_name = ca.service_name AND COALESCE(pc.namespace, '') = COALESCE(ca.namespace, '')
     $f$, sum_tbl, sum_cols, src_cte, agg_tail);
 
     -- pod
     EXECUTE format($f$
         INSERT INTO %1$I (%2$s)
-        WITH %3$s,
-        pc AS (SELECT service_name, namespace, pod_name, COUNT(*) AS process_count FROM (
-                   SELECT DISTINCT f.service_name, hc.namespace, hc.pod_name, hp.pid, hp.process_name
-                   FROM fresh f JOIN HeartbeatContainers hc ON hc.host_id = f.id
-                   JOIN HeartbeatProcesses hp ON hp.container_row_id = hc.id
-                   WHERE hp.pid IS NOT NULL AND hc.pod_name IS NOT NULL
-               ) d GROUP BY service_name, namespace, pod_name)
+        WITH %3$s
         SELECT 'pod', row_number() OVER (ORDER BY ca.service_name ASC NULLS LAST, ca.namespace ASC NULLS LAST, ca.pod_name ASC NULLS LAST),
                ca.service_name || '|' || COALESCE(ca.namespace, '') || '|' || COALESCE(ca.pod_name, ''),
                ca.service_name, NULL, ca.namespace, ca.pod_name, NULL,
-               ca.host_count, ca.namespace_count, ca.pod_count, ca.container_count, COALESCE(pc.process_count, 0), NULL::integer[],
+               ca.host_count, ca.namespace_count, ca.pod_count, ca.container_count, COALESCE(ca.process_count, 0), NULL::integer[],
                ca.l_hostname, ca.l_ip_address, ca.l_namespace, ca.l_pod_name, ca.l_container_name, ca.l_workload_name, ca.l_workload_kind,
                NULL::text, NULL::integer, ca.l_command_type, ca.l_command_status, ca.l_combined_config, ca.any_active, NULL::text,
                ca.l_agent_version, ca.l_run_mode, ca.l_heartbeat_timestamp
         FROM (SELECT service_name, namespace, pod_name, %4$s FROM cont WHERE pod_name IS NOT NULL GROUP BY service_name, namespace, pod_name) ca
-        LEFT JOIN pc ON pc.service_name = ca.service_name
-                    AND COALESCE(pc.namespace, '') = COALESCE(ca.namespace, '')
-                    AND pc.pod_name = ca.pod_name
     $f$, sum_tbl, sum_cols, src_cte, agg_tail);
 
     EXECUTE format('ANALYZE %I', sum_tbl);
