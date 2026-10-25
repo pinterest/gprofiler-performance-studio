@@ -291,11 +291,15 @@ CREATE TABLE HostHeartbeats (
     CONSTRAINT "unique_host_heartbeat" UNIQUE (hostname, service_name)
 );
 
--- Essential indexes for heartbeats
-CREATE INDEX idx_hostheartbeats_hostname ON HostHeartbeats (hostname);
+-- Essential indexes for heartbeats.
+-- Deliberately NOT indexed (see migrations/drop_redundant_heartbeat_indexes.sql):
+--   * hostname            -- leading column of unique_host_heartbeat already serves it
+--   * heartbeat_timestamp -- rewritten on every beat; an index on it forces a full
+--                            row re-write + all-index maintenance per beat (no HOT
+--                            update). Every reader filters by recency over the whole
+--                            table (<=150k rows), which is a cheap sequential scan.
 CREATE INDEX idx_hostheartbeats_service_name ON HostHeartbeats (service_name);
 CREATE INDEX idx_hostheartbeats_status ON HostHeartbeats (status);
-CREATE INDEX idx_hostheartbeats_heartbeat_timestamp ON HostHeartbeats (heartbeat_timestamp);
 CREATE INDEX idx_hostheartbeats_namespace ON HostHeartbeats (namespace);
 CREATE INDEX idx_hostheartbeats_pod_name ON HostHeartbeats (pod_name);
 
@@ -318,7 +322,7 @@ CREATE TABLE HeartbeatContainers (
     CONSTRAINT unique_heartbeat_container UNIQUE (host_id, container_id)
 );
 
-CREATE INDEX idx_hb_containers_host_id ON HeartbeatContainers (host_id);
+-- host_id lookups are served by unique_heartbeat_container (host_id, container_id).
 CREATE INDEX idx_hb_containers_namespace ON HeartbeatContainers (namespace);
 CREATE INDEX idx_hb_containers_pod_name ON HeartbeatContainers (pod_name);
 CREATE INDEX idx_hb_containers_workload_name ON HeartbeatContainers (workload_name);
@@ -332,8 +336,10 @@ CREATE TABLE HeartbeatProcesses (
     CONSTRAINT unique_heartbeat_process UNIQUE (container_row_id, pid)
 );
 
-CREATE INDEX idx_hb_processes_container_row_id ON HeartbeatProcesses (container_row_id);
-CREATE INDEX idx_hb_processes_process_name ON HeartbeatProcesses (process_name);
+-- No secondary indexes on HeartbeatProcesses: container_row_id lookups are served by
+-- unique_heartbeat_process (container_row_id, pid), and nothing filters by
+-- process_name without first narrowing to a container. This table is the largest
+-- (one row per process fleet-wide) so every extra index is paid on every insert.
 
 -- Cache a block of ids per backend so high-frequency heartbeat inserts don't
 -- contend on the sequence buffer lock (see migrations/increase_heartbeat_sequence_cache.sql).
@@ -392,12 +398,12 @@ CREATE TABLE ProfilingCommands (
     CONSTRAINT "unique_profiling_command_per_host" UNIQUE (hostname, service_name)
 );
 
--- Essential indexes for profiling commands
+-- Essential indexes for profiling commands.
+-- (hostname) and (hostname, service_name) lookups are served by
+-- unique_profiling_command_per_host.
 CREATE INDEX idx_profilingcommands_command_id ON ProfilingCommands (command_id);
-CREATE INDEX idx_profilingcommands_hostname ON ProfilingCommands (hostname);
 CREATE INDEX idx_profilingcommands_service_name ON ProfilingCommands (service_name);
 CREATE INDEX idx_profilingcommands_status ON ProfilingCommands (status);
-CREATE INDEX idx_profilingcommands_hostname_service ON ProfilingCommands (hostname, service_name);
 
 -- Profiling Executions Table (optional - for audit trail)
 CREATE TABLE ProfilingExecutions (
@@ -1131,6 +1137,9 @@ BEGIN
     $f$, sum_tbl, sum_cols, src_cte, agg_tail);
 
     -- namespace
+    -- pc joins use COALESCE(...)= equality, NOT `IS NOT DISTINCT FROM`: the latter
+    -- is not hashable, so the planner merges on service_name alone and filters the
+    -- ns/pod match post-join -> quadratic per service (10min+ at pod grain).
     EXECUTE format($f$
         INSERT INTO %1$I (%2$s)
         WITH %3$s,
