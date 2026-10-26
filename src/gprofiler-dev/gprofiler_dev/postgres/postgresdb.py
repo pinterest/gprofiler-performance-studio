@@ -109,7 +109,7 @@ class PostgresDB:
         jitter spreads the reconnect attempts out in time so they don't all hammer Aurora's
         accept path at once.
         """
-        base = config.PG_RETRY_BACKOFF_BASE * (2 ** attempt)
+        base = config.PG_RETRY_BACKOFF_BASE * (2**attempt)
         return min(base, config.PG_RETRY_BACKOFF_CAP) + random.uniform(0, config.PG_RETRY_BACKOFF_JITTER)
 
     @contextmanager
@@ -143,9 +143,7 @@ class PostgresDB:
                     self._reconnect()
                     current_conn = self._thread_unsafe_conn
 
-                cursor = current_conn.cursor(
-                    cursor_factory=psycopg2.extras.RealDictCursor if return_dict else None
-                )
+                cursor = current_conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor if return_dict else None)
                 try:
                     yield cursor
                     current_conn.commit()
