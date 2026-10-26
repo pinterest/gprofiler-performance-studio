@@ -45,6 +45,13 @@ PG_MAX_RETRIES = int(os.getenv("GPROFILER_POSTGRES_MAX_RETRIES", 3))
 PG_RETRY_BACKOFF_BASE = float(os.getenv("GPROFILER_POSTGRES_RETRY_BACKOFF_BASE", "0.2"))
 PG_RETRY_BACKOFF_CAP = float(os.getenv("GPROFILER_POSTGRES_RETRY_BACKOFF_CAP", "5.0"))
 PG_RETRY_BACKOFF_JITTER = float(os.getenv("GPROFILER_POSTGRES_RETRY_BACKOFF_JITTER", "0.5"))
+# Reconnect a connection that has been unused for longer than this *before* using it again.
+# The database closes sessions idle for idle_session_timeout (5 min on our roles, see
+# scripts/setup/postgres/migrations/set_idle_session_timeout.sql); psycopg2 only notices on
+# the next round trip, which then fails, backs off, logs an error and reconnects. Per-thread
+# connections idle routinely (hundreds of request threads, a few busy), so that is the
+# normal case, not an incident. Keep this below the server timeout. <= 0 disables.
+PG_IDLE_RECONNECT_SEC = float(os.getenv("GPROFILER_POSTGRES_IDLE_RECONNECT_SEC", "240"))
 # Bounded per-process connection pool: max live connections and how long a caller waits
 # for a free one before erroring. Total DB connections ~= replicas * workers * pool size.
 POSTGRES_POOL_SIZE = int(os.getenv("GPROFILER_POSTGRES_POOL_SIZE", 10))

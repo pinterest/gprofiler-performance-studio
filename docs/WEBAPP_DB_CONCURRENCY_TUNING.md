@@ -59,6 +59,7 @@ back up and storm the Aurora writer (connections pile up in `FIN-WAIT-2`, new
 | `GPROFILER_POSTGRES_RETRY_BACKOFF_BASE` | `src/gprofiler-dev/gprofiler_dev/config.py` | `0.2` (seconds) | Base for exponential backoff between retries. |
 | `GPROFILER_POSTGRES_RETRY_BACKOFF_CAP` | `src/gprofiler-dev/gprofiler_dev/config.py` | `5.0` (seconds) | Upper bound on a single backoff wait. |
 | `GPROFILER_POSTGRES_RETRY_BACKOFF_JITTER` | `src/gprofiler-dev/gprofiler_dev/config.py` | `0.5` (seconds) | Random jitter added to each backoff wait. |
+| `GPROFILER_POSTGRES_IDLE_RECONNECT_SEC` | `src/gprofiler-dev/gprofiler_dev/config.py` | `240` (seconds) | Reconnect a connection unused for longer than this *before* using it, instead of failing on the server's 5-min `idle_session_timeout`. Must stay below that timeout; `<= 0` disables. |
 | `GPROFILER_POSTGRES_POOL_SIZE` | `src/gprofiler-dev/gprofiler_dev/config.py` | `10` | **Currently inactive** (the in-process pool was reverted; see the historical note). |
 | `GPROFILER_POSTGRES_POOL_ACQUIRE_TIMEOUT` | `src/gprofiler-dev/gprofiler_dev/config.py` | `10` | **Currently inactive** (see above). |
 
@@ -88,6 +89,28 @@ attempts, reconnecting between tries. Two behaviors matter under load:
 `execute()` also accepts an optional `max_retries` argument so latency-sensitive
 callers can pass a low value (e.g. `1`) to **fail fast and shed load** rather than
 block on reconnect attempts while the accept path is saturated.
+
+### Idle connections are refreshed, not retried
+
+The application roles have `idle_session_timeout = 5min`
+(`scripts/setup/postgres/migrations/set_idle_session_timeout.sql`), so the server
+closes any connection that sits unused that long. psycopg2 cannot see a
+server-side close until the next round trip, which means the first statement on
+such a connection fails. In `CONN_PER_THREAD=TRUE` mode most connections are idle
+most of the time (hundreds of request threads, a few busy at once), so without
+further handling this is the steady state: each idle recycle costs the unlucky
+request a failed round trip plus a backoff sleep, logs an `ERROR Trying to
+reconnect`, and — in `PostgresDB.transaction()`, which cannot retry mid-transaction
+— fails the whole transaction (for the heartbeat writer that is one dropped flush
+batch).
+
+`PostgresDB` therefore tracks when each connection was last used and, once it has
+been idle for more than `GPROFILER_POSTGRES_IDLE_RECONNECT_SEC` (default 240 s),
+reconnects *before* sending the statement, at `DEBUG` level and with no backoff.
+Both `execute()` and `transaction()` do this. The retry path stays as the safety
+net for connections that die unexpectedly (restart, failover, network), and its
+error line now includes the exception that triggered it. Keep the threshold below
+the server timeout; if you change `idle_session_timeout`, change this with it.
 
 `GPROFILER_POSTGRES_CONNECT_TIMEOUT` defaults to **10 s**: long enough that a
 brief latency blip does not trip a reconnect wave, and well under the gunicorn
