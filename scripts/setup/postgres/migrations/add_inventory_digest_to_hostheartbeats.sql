@@ -1,0 +1,21 @@
+-- Add HostHeartbeats.inventory_digest: fingerprint of the inventory last synced for a host.
+--
+-- Every heartbeat carries the host's full container/process inventory, and almost every
+-- beat's inventory is identical to the previous one. The webapp now computes a stable
+-- sha256 digest of the incoming inventory (gprofiler_dev/heartbeat_inventory.py) and
+-- compares it with this column in the same statement that refreshes the host's
+-- heartbeat_timestamp. Equal -> no inventory work at all. Different -> the inventory is
+-- diffed into HeartbeatContainers / HeartbeatProcesses and the new digest is written in
+-- the SAME transaction, so the column is only ever set to a digest whose inventory has
+-- actually landed. A host whose sync was deferred by the per-worker sync budget keeps its
+-- previous value (or NULL) and is re-attempted on a later beat.
+--
+-- NULL means "no inventory has been synced under change detection yet". On first rollout
+-- that is every host: each host's first beat differs and is synced, paced by the budget
+-- (GPROFILER_INVENTORY_SYNC_PER_SEC). Expect this one-time load to take
+-- hosts / (budget x workers) seconds and plan the budget accordingly.
+--
+-- Online: ADD COLUMN with a NULL default is a catalog-only change in PostgreSQL >= 11.
+-- Idempotent via IF NOT EXISTS. Older application code ignores the column.
+
+ALTER TABLE HostHeartbeats ADD COLUMN IF NOT EXISTS inventory_digest text NULL;

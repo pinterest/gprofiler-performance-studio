@@ -56,6 +56,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 from gprofiler_dev import S3ProfileDal
 from gprofiler_dev import config as _dev_config
+from gprofiler_dev.heartbeat_inventory import inventory_digest
 from gprofiler_dev.heartbeat_writer import get_heartbeat_writer
 from gprofiler_dev.postgres.db_manager import DBManager
 
@@ -790,6 +791,18 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
             # 1. Persist the host heartbeat + normalized inventory. By default this is buffered
             # off the request thread and flushed in coalesced batches by the async writer; the
             # command lookup below stays synchronous so the agent still gets its command now.
+            #
+            # Inventory is change-detected downstream: the digest is computed here, on the
+            # request thread (parallel across the thread pool, not on the single writer
+            # thread), and compared with the digest stored on the host row. ``containers``
+            # absent from the payload means "not reported this beat" and must stay None --
+            # it is NOT the same as ``[]`` ("this host has no containers"), which is a real
+            # inventory that prunes everything previously stored for the host.
+            containers = (
+                None
+                if heartbeat.containers is None
+                else [container.dict() for container in heartbeat.containers]
+            )
             heartbeat_fields = dict(
                 hostname=heartbeat.hostname,
                 ip_address=heartbeat.ip_address,
@@ -798,7 +811,8 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                 run_mode=heartbeat.run_mode,
                 namespace=heartbeat.namespace,
                 pod_name=heartbeat.pod_name,
-                containers=[container.dict() for container in (heartbeat.containers or [])],
+                containers=containers,
+                inventory_digest=inventory_digest(containers),
                 last_command_id=heartbeat.last_command_id,
                 received_command_ids=heartbeat.received_command_ids,
                 executed_command_ids=heartbeat.executed_command_ids,
