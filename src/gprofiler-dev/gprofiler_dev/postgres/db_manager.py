@@ -772,6 +772,13 @@ class DBManager(metaclass=Singleton):
         This method checks the status of all commands associated with each request ID,
         and updates the request status accordingly.
         The resulting status is determined by the highest "priority" / "criticality" status from the associated commands.
+
+        Only the given requests are touched, and only when their status actually changes. An
+        earlier version of the final UPDATE joined the target table to an unconstrained alias of
+        itself (``UPDATE ProfilingRequests ... FROM ProfilingRequests pr JOIN final_status fs ON
+        pr.request_id = fs.request_id``), i.e. a cross join: every call rewrote and row-locked the
+        whole table. Called once per command completion, that serialised all completions behind a
+        table-wide lock queue and deadlocked under concurrency (prod incident, 2026-10-29).
         """
         if not request_ids:
             return True
@@ -818,17 +825,17 @@ class DBManager(metaclass=Singleton):
                     max_status ms
                     JOIN status_priority sp ON ms.max_status_value = sp.status_value
             )
-        UPDATE ProfilingRequests
+        UPDATE ProfilingRequests pr
         SET status = fs.status::profilingrequeststatus,
             completed_at = CASE
                 WHEN fs.status IN ('completed', 'failed') THEN CURRENT_TIMESTAMP
                 ELSE pr.completed_at
             END
         FROM
-            ProfilingRequests pr
-            JOIN final_status fs ON pr.request_id = fs.request_id
+            final_status fs
         WHERE
-            pr.request_id = ANY(%(request_ids)s::uuid[])
+            pr.request_id = fs.request_id
+            AND pr.status IS DISTINCT FROM fs.status::profilingrequeststatus
         """
 
         exec_values = {"request_ids": request_ids}
