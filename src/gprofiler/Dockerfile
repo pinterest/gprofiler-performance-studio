@@ -22,6 +22,15 @@ WORKDIR /usr/src/app
 EXPOSE 80
 CMD ["./run.sh"]
 
+# Package sources. Builds that cannot reach deb.debian.org / nginx.org (e.g. CI
+# behind a DNS allowlist) pass --build-arg DEBIAN_MIRROR=<proxy that mirrors
+# deb.debian.org> ("<mirror>/debian" and "<mirror>/debian-security" must exist
+# under it) and --build-arg NGINX_MIRROR=<proxy that mirrors
+# nginx.org/packages/mainline/debian>. Defaults are the public upstreams.
+ARG DEBIAN_MIRROR=http://deb.debian.org
+ARG NGINX_MIRROR=https://nginx.org/packages/mainline/debian
+RUN sed -i "s|http://deb.debian.org|${DEBIAN_MIRROR%/}|g" /etc/apt/sources.list.d/debian.sources
+
 # These commands install nginx v1.23.2, based on official nginx docs:
 # https://docs.nginx.com/nginx/admin-guide/installing-nginx/installing-nginx-open-source/#installing-prebuilt-debian-packages
 COPY gprofiler/nginx/nginx_signing.key nginx_signing.key
@@ -30,8 +39,8 @@ RUN gpg --no-default-keyring --keyring ./temp-keyring.gpg --export --output ngin
 RUN rm -f temp-keyring.gpg
 RUN mkdir -p /etc/apt/keyrings/
 RUN cp nginx_signing.gpg /etc/apt/keyrings/
-RUN echo "deb [signed-by=/etc/apt/keyrings/nginx_signing.gpg] https://nginx.org/packages/mainline/debian/ bookworm nginx" >> /etc/apt/sources.list
-RUN echo "deb-src [signed-by=/etc/apt/keyrings/nginx_signing.gpg] https://nginx.org/packages/mainline/debian bookworm nginx" >> /etc/apt/sources.list
+RUN echo "deb [signed-by=/etc/apt/keyrings/nginx_signing.gpg] ${NGINX_MIRROR%/}/ bookworm nginx" >> /etc/apt/sources.list
+RUN echo "deb-src [signed-by=/etc/apt/keyrings/nginx_signing.gpg] ${NGINX_MIRROR%/} bookworm nginx" >> /etc/apt/sources.list
 
 # install dependencies
 RUN apt-get update && apt-get install -y nginx bc logrotate gettext-base && \
