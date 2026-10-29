@@ -1,5 +1,11 @@
 FROM alpine:3.18.5
 
+# Package source. Builds that cannot reach dl-cdn.alpinelinux.org (e.g. CI behind
+# a DNS allowlist) pass --build-arg ALPINE_MIRROR=<proxy that mirrors
+# dl-cdn.alpinelinux.org/alpine>, i.e. "<mirror>/v3.18/main" must exist under it.
+ARG ALPINE_MIRROR=https://dl-cdn.alpinelinux.org/alpine
+RUN sed -i "s|https://dl-cdn.alpinelinux.org/alpine|${ALPINE_MIRROR%/}|g" /etc/apk/repositories
+
 RUN apk add --no-cache dcron wget rsync ca-certificates postgresql-client logrotate sudo
 
 COPY crontab /etc/cron.d/my-cron-job
