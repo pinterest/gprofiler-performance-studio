@@ -60,6 +60,8 @@ const ProfilingTopPanel = ({
     onNsysTimelineStacksChange,
     enableNsysUploadRep,
     onNsysUploadRepChange,
+    nsysWorkload = '',
+    onNsysWorkloadChange,
     profilingFrequency,
     onProfilingFrequencyChange,
     maxProcesses,
@@ -216,9 +218,9 @@ const ProfilingTopPanel = ({
                                 title={
                                     'Enable NVIDIA Nsight Systems (nsys) GPU capture. ' +
                                     'The profiled host must have nsys installed (not bundled with the agent). ' +
-                                    'Produces a CUDA kernel flamegraph for the Adhoc Profiling view ' +
-                                    '(inspired by GPU flame graphs). Adhoc mode is recommended — ' +
-                                    'continuous mode is left to the operator and is not auto-forced.'
+                                    'nsys traces the process it launches, so set a workload command below ' +
+                                    '(or start the agent with --nsys-workload). A blank command captures sleep ' +
+                                    'and produces no CUDA frames. Adhoc mode is recommended.'
                                 }>
                                 <FormControlLabel
                                     control={
@@ -312,6 +314,17 @@ const ProfilingTopPanel = ({
                                     />
                                 </Tooltip>
                             </Box>
+                        )}
+                        {enableNsys && (
+                            <TextField
+                                value={nsysWorkload}
+                                onChange={(e) => onNsysWorkloadChange(e.target.value)}
+                                size='small'
+                                fullWidth
+                                placeholder='python3 /opt/gpu-workloads/workload.py 50'
+                                label='nsys workload command'
+                                helperText='Command the agent launches under nsys. Left blank, the agent uses its own --nsys-workload, or else profiles sleep.'
+                            />
                         )}
 
                         <Box>

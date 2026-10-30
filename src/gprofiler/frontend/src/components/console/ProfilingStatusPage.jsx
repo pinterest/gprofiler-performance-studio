@@ -278,6 +278,7 @@ const ProfilingStatusPage = () => {
     const [enableNsysTimeline, setEnableNsysTimeline] = useState(false);
     const [enableNsysTimelineStacks, setEnableNsysTimelineStacks] = useState(false);
     const [enableNsysUploadRep, setEnableNsysUploadRep] = useState(false);
+    const [nsysWorkload, setNsysWorkload] = useState('');
     const [profilingFrequency, setProfilingFrequency] = useState(DEFAULT_PROFILING_FREQUENCY);
     const [maxProcesses, setMaxProcesses] = useState(DEFAULT_MAX_PROCESSES);
     const [profilingMode, setProfilingMode] = useState('continuous');
@@ -324,6 +325,7 @@ const ProfilingStatusPage = () => {
                 if (typeof saved.enableNsysTimelineStacks === 'boolean')
                     setEnableNsysTimelineStacks(saved.enableNsysTimelineStacks);
                 if (typeof saved.enableNsysUploadRep === 'boolean') setEnableNsysUploadRep(saved.enableNsysUploadRep);
+                if (typeof saved.nsysWorkload === 'string') setNsysWorkload(saved.nsysWorkload);
                 if (saved.profilingFrequency) setProfilingFrequency(saved.profilingFrequency);
                 if (saved.maxProcesses != null) setMaxProcesses(saved.maxProcesses);
                 if (saved.profilingMode) setProfilingMode(saved.profilingMode);
@@ -342,6 +344,7 @@ const ProfilingStatusPage = () => {
             enableNsysTimeline,
             enableNsysTimelineStacks,
             enableNsysUploadRep,
+            nsysWorkload,
             profilingFrequency,
             maxProcesses,
             profilingMode,
@@ -354,7 +357,7 @@ const ProfilingStatusPage = () => {
         } catch (error) {
             setSnackbar({ open: true, message: 'Failed to save configuration' });
         }
-    }, [duration, enableNsys, enableNsysTimeline, enableNsysTimelineStacks, enableNsysUploadRep, enablePerfSpect, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
+    }, [duration, enableNsys, enableNsysTimeline, enableNsysTimelineStacks, enableNsysUploadRep, enablePerfSpect, maxProcesses, nsysWorkload, profilerConfigs, profilingFrequency, profilingMode]);
 
     const fetchProfilingStatus = useCallback((filterParams, scope = activeScope) => {
         setLoading(true);
@@ -459,9 +462,10 @@ const ProfilingStatusPage = () => {
         enableNsysTimeline,
         enableNsysTimelineStacks,
         enableNsysUploadRep,
+        nsysWorkload,
         profilerConfigs,
         maxProcesses,
-    }), [activeScope, duration, enableNsys, enableNsysTimeline, enableNsysTimelineStacks, enableNsysUploadRep, enablePerfSpect, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
+    }), [activeScope, duration, enableNsys, enableNsysTimeline, enableNsysTimelineStacks, enableNsysUploadRep, enablePerfSpect, maxProcesses, nsysWorkload, profilerConfigs, profilingFrequency, profilingMode]);
 
     const executeDryRun = useCallback((action, selectedRows) => {
         const { requests } = buildRequests(action, selectedRows);
@@ -629,6 +633,8 @@ const ProfilingStatusPage = () => {
                     onNsysTimelineStacksChange={setEnableNsysTimelineStacks}
                     enableNsysUploadRep={enableNsysUploadRep}
                     onNsysUploadRepChange={setEnableNsysUploadRep}
+                    nsysWorkload={nsysWorkload}
+                    onNsysWorkloadChange={setNsysWorkload}
                     profilingFrequency={profilingFrequency}
                     onProfilingFrequencyChange={setProfilingFrequency}
                     maxProcesses={maxProcesses}
@@ -731,6 +737,9 @@ const ProfilingStatusPage = () => {
                                             })`
                                             : 'Disabled'
                                     }</Typography>
+                                    {enableNsys && (
+                                        <Typography variant="body2">• nsys workload: {nsysWorkload.trim() || 'agent default'}</Typography>
+                                    )}
                                     <Typography variant="body2">• Profiling Mode: {profilingMode === 'adhoc' ? 'Ad Hoc' : 'Continuous'}</Typography>
                                     <Typography variant="body2">• Duration: {profilingMode === 'continuous' ? 60 : duration} seconds</Typography>
                                     <Typography variant="body2">• Mode: CPU profiling</Typography>

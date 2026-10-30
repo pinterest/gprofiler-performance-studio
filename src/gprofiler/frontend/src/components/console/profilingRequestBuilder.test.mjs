@@ -248,6 +248,29 @@ describe('buildProfilingRequests — nsys timeline flags', () => {
         assert.equal(onRequests[0].additional_args.nsys_upload_rep, true);
     });
 
+    it('sends nsys_workload only when nsys is enabled and the command is non-blank', () => {
+        const { requests } = buildProfilingRequests('start', [makeRow()], {
+            ...baseConfig,
+            enableNsys: true,
+            nsysWorkload: '  python3 /opt/gpu-workloads/workload.py 50  ',
+        });
+        assert.equal(requests[0].additional_args.nsys_workload, 'python3 /opt/gpu-workloads/workload.py 50');
+
+        const { requests: blank } = buildProfilingRequests('start', [makeRow()], {
+            ...baseConfig,
+            enableNsys: true,
+            nsysWorkload: '   ',
+        });
+        assert.equal(blank[0].additional_args.nsys_workload, undefined);
+
+        const { requests: gated } = buildProfilingRequests('start', [makeRow()], {
+            ...baseConfig,
+            enableNsys: false,
+            nsysWorkload: 'python3 workload.py',
+        });
+        assert.equal(gated[0].additional_args.nsys_workload, undefined);
+    });
+
     it('gates stacks on the timeline itself being enabled', () => {
         const { requests } = buildProfilingRequests('start', [makeRow()], {
             ...baseConfig,
