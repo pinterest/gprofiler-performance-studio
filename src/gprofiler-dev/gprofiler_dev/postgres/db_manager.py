@@ -820,7 +820,9 @@ class DBManager(metaclass=Singleton):
             final_status AS (
                 SELECT
                     ms.request_id,
-                    sp.status
+                    -- 'sent' is a command status with no request-status counterpart; at request level a
+                    -- dispatched-but-unfinished command means the request is 'assigned'.
+                    CASE WHEN sp.status = 'sent' THEN 'assigned' ELSE sp.status END AS status
                 FROM
                     max_status ms
                     JOIN status_priority sp ON ms.max_status_value = sp.status_value
