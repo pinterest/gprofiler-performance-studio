@@ -98,6 +98,8 @@ export const groupRowsByService = (selectedRows) =>
  *   CPU backtrace per kernel launch (heavier capture) for click-for-stack.
  * @param {boolean} [config.enableNsysUploadRep] - With enableNsys, also upload the raw
  *   .nsys-rep capture for download (openable in NVIDIA Nsight Systems; can be large).
+ * @param {string} [config.nsysWorkload] - With enableNsys, command nsys launches and
+ *   traces. Omitted when blank so the agent keeps its own --nsys-workload.
  * @param {object} config.profilerConfigs
  * @param {number} config.maxProcesses
  * @returns {{grouped: Record<string, Array<object>>, requests: Array<object>}}
@@ -113,6 +115,7 @@ export const buildProfilingRequests = (action, selectedRows, config) => {
         enableNsysTimeline = false,
         enableNsysTimelineStacks = false,
         enableNsysUploadRep = false,
+        nsysWorkload = '',
         profilerConfigs,
         maxProcesses,
     } = config;
@@ -120,6 +123,9 @@ export const buildProfilingRequests = (action, selectedRows, config) => {
     const grouped = groupRowsByService(selectedRows);
     const isContinuous = profilingMode === 'continuous';
     const stopLevel = resolveStopLevel(action, scope);
+    // nsys only traces the process it launches. A blank field must be omitted
+    // (not sent as "") so a heartbeat request does not wipe the agent's CLI workload.
+    const nsysWorkloadCmd = enableNsys ? String(nsysWorkload || '').trim() : '';
 
     const requests = Object.entries(grouped).map(([serviceName, serviceRows]) => {
         const targetHosts =
@@ -150,6 +156,7 @@ export const buildProfilingRequests = (action, selectedRows, config) => {
                 nsys_timeline: enableNsys && enableNsysTimeline,
                 nsys_timeline_stacks: enableNsys && enableNsysTimeline && enableNsysTimelineStacks,
                 nsys_upload_rep: enableNsys && enableNsysUploadRep,
+                ...(nsysWorkloadCmd ? { nsys_workload: nsysWorkloadCmd } : {}),
                 profiler_configs: profilerConfigs,
                 max_processes: maxProcesses,
             },
