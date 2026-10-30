@@ -30,6 +30,7 @@ const baseConfig = {
     duration: 120,
     profilingFrequency: 11,
     enablePerfSpect: false,
+    enableNsys: false,
     profilerConfigs: {},
     maxProcesses: 10,
 };
@@ -201,6 +202,64 @@ describe('buildProfilingRequests — start requests', () => {
     });
 });
 
+describe('buildProfilingRequests — nsys timeline flags', () => {
+    it('defaults nsys_timeline and nsys_timeline_stacks to false', () => {
+        const { requests } = buildProfilingRequests('start', [makeRow()], baseConfig);
+        assert.equal(requests[0].additional_args.nsys_timeline, false);
+        assert.equal(requests[0].additional_args.nsys_timeline_stacks, false);
+    });
+
+    it('passes the timeline flags through when nsys is enabled', () => {
+        const { requests } = buildProfilingRequests('start', [makeRow()], {
+            ...baseConfig,
+            enableNsys: true,
+            enableNsysTimeline: true,
+            enableNsysTimelineStacks: true,
+        });
+        assert.equal(requests[0].additional_args.enable_nsys, true);
+        assert.equal(requests[0].additional_args.nsys_timeline, true);
+        assert.equal(requests[0].additional_args.nsys_timeline_stacks, true);
+    });
+
+    it('gates the timeline flags on enableNsys (stale saved toggles stay off)', () => {
+        const { requests } = buildProfilingRequests('start', [makeRow()], {
+            ...baseConfig,
+            enableNsys: false,
+            enableNsysTimeline: true,
+            enableNsysTimelineStacks: true,
+        });
+        assert.equal(requests[0].additional_args.nsys_timeline, false);
+        assert.equal(requests[0].additional_args.nsys_timeline_stacks, false);
+    });
+
+    it('gates the rep upload on enableNsys (stale saved toggle stays off)', () => {
+        const { requests } = buildProfilingRequests('start', [makeRow()], {
+            ...baseConfig,
+            enableNsys: false,
+            enableNsysUploadRep: true,
+        });
+        assert.equal(requests[0].additional_args.nsys_upload_rep, false);
+
+        const { requests: onRequests } = buildProfilingRequests('start', [makeRow()], {
+            ...baseConfig,
+            enableNsys: true,
+            enableNsysUploadRep: true,
+        });
+        assert.equal(onRequests[0].additional_args.nsys_upload_rep, true);
+    });
+
+    it('gates stacks on the timeline itself being enabled', () => {
+        const { requests } = buildProfilingRequests('start', [makeRow()], {
+            ...baseConfig,
+            enableNsys: true,
+            enableNsysTimeline: false,
+            enableNsysTimelineStacks: true,
+        });
+        assert.equal(requests[0].additional_args.nsys_timeline, false);
+        assert.equal(requests[0].additional_args.nsys_timeline_stacks, false);
+    });
+});
+
 describe('buildProfilingRequests — multi-service', () => {
     it('emits one request per service', () => {
         const { requests } = buildProfilingRequests(
@@ -289,8 +348,25 @@ describe('buildProfilingRequests — scope matrix (start)', () => {
         });
         assert.deepEqual(requests[0].additional_args, {
             enable_perfspect: true,
+            enable_nsys: false,
+            nsys_timeline: false,
+            nsys_timeline_stacks: false,
+            nsys_upload_rep: false,
             profiler_configs: profilerConfigs,
             max_processes: 25,
         });
+    });
+
+    it('threads enable_nsys through additional_args without forcing continuous=false', () => {
+        const { requests } = buildProfilingRequests('start', [makeRow()], {
+            ...baseConfig,
+            scope: 'host',
+            profilingMode: 'continuous',
+            enableNsys: true,
+        });
+        assert.equal(requests[0].additional_args.enable_nsys, true);
+        // Builder leaves mode to the operator (UI recommends Adhoc via tooltip only).
+        assert.equal(requests[0].continuous, true);
+        assert.equal(requests[0].duration, 60);
     });
 });
