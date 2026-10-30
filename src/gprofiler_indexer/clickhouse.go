@@ -139,15 +139,15 @@ func NewClickHouseClient(settings *ClickHouseSettings) (*ClickHouseClient, error
 	}, nil
 }
 
-func (c *ClickHouseClient) clickHouseWrite(records []RecordsAttributesUnpack, tableName string) {
+func (c *ClickHouseClient) clickHouseWrite(records []RecordsAttributesUnpack, tableName string) error {
 	if len(records) == 0 {
-		return
+		return nil
 	}
 	ctx := context.Background()
 	batch, err := c.conn.PrepareBatch(ctx, fmt.Sprintf("INSERT INTO %s", tableName))
 	if err != nil {
 		logger.Errorf("unable to prepare batch: %v", err)
-		return
+		return err
 	}
 
 	for _, temp := range records {
@@ -157,9 +157,32 @@ func (c *ClickHouseClient) clickHouseWrite(records []RecordsAttributesUnpack, ta
 	}
 	if err = batch.Send(); err != nil {
 		logger.Errorf("unable to send batch: %v", err)
-	} else {
-		logger.Debugf("successfully sent %d records to %s", len(records), tableName)
+		return err
 	}
+	logger.Debugf("successfully sent %d records to %s", len(records), tableName)
+	return nil
+}
+
+// flush writes the buffer to ClickHouse, reports how long its rows waited and
+// how long the insert took, and empties the buffer.
+func (c *ClickHouseClient) flush(buf *recordBuffer, tableName string, reason string) {
+	if len(buf.records) == 0 {
+		return
+	}
+	start := time.Now()
+	err := c.clickHouseWrite(buf.records, tableName)
+	stats := flushStats{
+		Table:     tableName,
+		Reason:    reason,
+		Rows:      len(buf.records),
+		BufferAge: sinceOrZero(buf.oldestAt, start),
+		Duration:  time.Since(start),
+		Err:       err,
+	}
+	logger.Infof("Flush %d records to %s: reason=%s result=%s buffer_age=%s duration=%s",
+		stats.Rows, stats.Table, stats.Reason, stats.result(), stats.BufferAge, stats.Duration)
+	GetMetricsPublisher().SendFlushStats(stats)
+	buf.reset()
 }
 
 func BufferedClickHouseWrite(args *CLIArgs, channels *RecordChannels, wg *sync.WaitGroup) {
@@ -177,45 +200,40 @@ func BufferedClickHouseWrite(args *CLIArgs, channels *RecordChannels, wg *sync.W
 	if err != nil {
 		logger.Fatal(err)
 	}
-	stacksTicker := time.NewTicker(time.Second * ClickHouseStacksFlushTimeout)
-	metricsTicker := time.NewTicker(time.Second * ClickHouseMetricsFlushTimeout)
-	buffRecords := make([]RecordsAttributesUnpack, 0)
-	buffMetricsRecords := make([]RecordsAttributesUnpack, 0)
+	logger.Infof("ClickHouse flush timeouts: stacks=%s metrics=%s",
+		args.stacksFlushInterval(), args.metricsFlushInterval())
+	stacksTicker := time.NewTicker(args.stacksFlushInterval())
+	metricsTicker := time.NewTicker(args.metricsFlushInterval())
+	var buffRecords, buffMetricsRecords recordBuffer
 
 	for {
 		select {
 		case stackRecord, ok := <-channels.StacksRecords:
 			if ok {
-				buffRecords = append(buffRecords, stackRecord)
-				if len(buffRecords) >= args.ClickHouseStacksBatchSize {
-					clickhouseClient.clickHouseWrite(buffRecords, args.ClickHouseStacksTable)
-					logger.Debugf("Flush %d stacks records to clickhouse", len(buffRecords))
-					buffRecords = make([]RecordsAttributesUnpack, 0)
-					stacksTicker.Reset(time.Second * ClickHouseStacksFlushTimeout)
+				// InsertionTimestamp is set just before the record enters the channel,
+				// so the buffer age includes any time spent waiting in the channel.
+				buffRecords.add(stackRecord, stackRecord.InsertionTimestamp)
+				if len(buffRecords.records) >= args.ClickHouseStacksBatchSize {
+					clickhouseClient.flush(&buffRecords, args.ClickHouseStacksTable, FlushReasonSize)
+					stacksTicker.Reset(args.stacksFlushInterval())
 				}
 			} else {
 				channels.StacksRecords = nil
 			}
 		case <-stacksTicker.C:
-			clickhouseClient.clickHouseWrite(buffRecords, args.ClickHouseStacksTable)
-			logger.Debugf("Flush %d stacks records to clickhouse on timeout %ds", len(buffRecords), ClickHouseStacksFlushTimeout)
-			buffRecords = make([]RecordsAttributesUnpack, 0)
+			clickhouseClient.flush(&buffRecords, args.ClickHouseStacksTable, FlushReasonTimer)
 		case metricRecords, ok := <-channels.MetricsRecords:
 			if ok {
-				buffMetricsRecords = append(buffMetricsRecords, metricRecords)
-				if len(buffMetricsRecords) >= args.ClickHouseMetricsBatchSize {
-					clickhouseClient.clickHouseWrite(buffMetricsRecords, args.ClickHouseMetricsTable)
-					logger.Debugf("Flush %d metrics records to clickhouse", len(buffMetricsRecords))
-					buffMetricsRecords = make([]RecordsAttributesUnpack, 0)
-					metricsTicker.Reset(time.Second * ClickHouseMetricsFlushTimeout)
+				buffMetricsRecords.add(metricRecords, time.Now())
+				if len(buffMetricsRecords.records) >= args.ClickHouseMetricsBatchSize {
+					clickhouseClient.flush(&buffMetricsRecords, args.ClickHouseMetricsTable, FlushReasonSize)
+					metricsTicker.Reset(args.metricsFlushInterval())
 				}
 			} else {
 				channels.MetricsRecords = nil
 			}
 		case <-metricsTicker.C:
-			clickhouseClient.clickHouseWrite(buffMetricsRecords, args.ClickHouseMetricsTable)
-			logger.Debugf("Flush %d metrics records to clickhouse on timeout %ds", len(buffMetricsRecords), ClickHouseMetricsFlushTimeout)
-			buffMetricsRecords = make([]RecordsAttributesUnpack, 0)
+			clickhouseClient.flush(&buffMetricsRecords, args.ClickHouseMetricsTable, FlushReasonTimer)
 		}
 		if channels.StacksRecords == nil {
 			stacksTicker.Stop()
@@ -228,7 +246,7 @@ func BufferedClickHouseWrite(args *CLIArgs, channels *RecordChannels, wg *sync.W
 		}
 	}
 	// flush buffer on exit
-	clickhouseClient.clickHouseWrite(buffRecords, args.ClickHouseStacksTable)
-	clickhouseClient.clickHouseWrite(buffMetricsRecords, args.ClickHouseMetricsTable)
+	clickhouseClient.flush(&buffRecords, args.ClickHouseStacksTable, FlushReasonShutdown)
+	clickhouseClient.flush(&buffMetricsRecords, args.ClickHouseMetricsTable, FlushReasonShutdown)
 	logger.Debug("BufferedClickHouseWrite finished")
 }
