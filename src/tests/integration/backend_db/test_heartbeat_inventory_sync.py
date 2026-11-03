@@ -29,21 +29,6 @@ import requests
 
 
 @pytest.fixture(scope="session")
-def postgres_connection(pytestconfig):
-    """Create a PostgreSQL connection for direct row inspection."""
-    conn = psycopg2.connect(
-        host=pytestconfig.getoption("--postgres-host", default="localhost"),
-        port=pytestconfig.getoption("--postgres-port", default=5432),
-        user=pytestconfig.getoption("--postgres-user", default="performance_studio"),
-        password=pytestconfig.getoption("--postgres-password", default="performance_studio_password"),
-        database=pytestconfig.getoption("--postgres-db", default="performance_studio_db"),
-    )
-    conn.autocommit = True
-    yield conn
-    conn.close()
-
-
-@pytest.fixture(scope="session")
 def heartbeat_url(backend_base_url) -> str:
     return f"{backend_base_url}/api/metrics/heartbeat"
 

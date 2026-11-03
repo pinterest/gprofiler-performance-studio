@@ -480,6 +480,13 @@ active-host window applies to the status page, the precompute build, and target
 resolution, which keeps "what the UI offers" and "what a request can target"
 consistent.
 
+A host that stops reporting altogether keeps its last inventory rows, which no
+reader uses but the precompute build still scans. The periodic-tasks worker
+removes them with `prune_stale_host_inventory` once the host has gone
+`GPROFILER_INVENTORY_PRUNE_AFTER` without a beat, measured against the newest
+beat so an ingest outage prunes nothing. It also clears the host's stored
+digest, so a host that comes back re-sends its full inventory.
+
 The window is **15 minutes** by default, set by
 `GPROFILER_WORKLOAD_FRESH_INTERVAL` as a SQL interval string. Because the value
 is interpolated into SQL interval literals, it is validated against a strict
@@ -512,6 +519,7 @@ row is deleted.
 | `GPROFILER_WEBAPP_THREAD_POOL_SIZE` | `0` | `0` keeps the framework default; with worker count it bounds peak connections |
 | `idle_session_timeout` (DB role) | — | Reaps idle per-thread connections server-side |
 | Precompute refresh | every minute | Upper bound on added staleness for unfiltered reads |
+| `GPROFILER_INVENTORY_PRUNE_AFTER` (periodic worker) | `1 hour` | Time without a beat before a host's inventory is pruned (every 10 minutes); keep well above the freshness window |
 
 The default for `GPROFILER_POSTGRES_CONN_PER_THREAD` is `FALSE`, so a deployment
 that does not set it runs one connection per worker **process** and serializes

@@ -11,6 +11,7 @@ RUN apk add --no-cache dcron wget rsync ca-certificates postgresql-client logrot
 COPY crontab /etc/cron.d/my-cron-job
 COPY aggregations.sh /aggregations.sh
 COPY refresh_workload_snapshot.sh /refresh_workload_snapshot.sh
+COPY prune_stale_host_inventory.sh /prune_stale_host_inventory.sh
 COPY logrotate_conf.sh /logrotate_conf.sh
 
 
@@ -18,6 +19,7 @@ RUN chmod +x /logrotate_conf.sh
 RUN chmod 0644 /etc/cron.d/my-cron-job
 RUN chmod +x /aggregations.sh
 RUN chmod +x /refresh_workload_snapshot.sh
+RUN chmod +x /prune_stale_host_inventory.sh
 
 
 RUN crontab /etc/cron.d/my-cron-job
@@ -27,6 +29,7 @@ RUN mkdir -p /var/log/cron && touch /var/log/cron/cron.log
 RUN addgroup -S non_root && adduser -S -G non_root -u 888 non_root && \
     chown -R non_root:non_root /aggregations.sh && \
     chown -R non_root:non_root /refresh_workload_snapshot.sh && \
+    chown -R non_root:non_root /prune_stale_host_inventory.sh && \
     chown -R non_root:non_root /logrotate_conf.sh && \
     chown -R non_root:non_root /etc/logrotate.conf && \
     chown -R non_root:non_root /etc/cron.d/my-cron-job && \
