@@ -21,32 +21,6 @@ import requests
 
 
 @pytest.fixture(scope="session")
-def postgres_connection(pytestconfig):
-    """Create a PostgreSQL connection for database verification."""
-    # Get PostgreSQL configuration from pytest config
-    postgres_user = pytestconfig.getoption("--postgres-user", default="postgres")
-    postgres_password = pytestconfig.getoption("--postgres-password", default="password")
-    postgres_host = pytestconfig.getoption("--postgres-host", default="localhost")
-    postgres_port = pytestconfig.getoption("--postgres-port", default=54321)
-    postgres_db = pytestconfig.getoption("--postgres-db", default="gprofiler")
-
-    # Create connection
-    conn = psycopg2.connect(
-        host=postgres_host,
-        port=postgres_port,
-        user=postgres_user,
-        password=postgres_password,
-        database=postgres_db,
-    )
-    conn.autocommit = True
-
-    yield conn
-
-    # Cleanup
-    conn.close()
-
-
-@pytest.fixture(scope="session")
 def test_service_name() -> str:
     """Generate a unique service name for testing."""
     return f"test-service-{uuid.uuid4().hex[:8]}"

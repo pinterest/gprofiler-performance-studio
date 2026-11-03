@@ -1203,3 +1203,64 @@ BEGIN
     PERFORM pg_advisory_unlock(3126073);
 END;
 $procedure$;
+
+-- Prune the workload inventory (HeartbeatContainers / HeartbeatProcesses) of hosts with
+-- no beat for stale_after, measured against the newest beat so an ingest outage prunes
+-- nothing; clears the host's inventory_digest so a returning host re-sends it. Run by
+-- the periodic-tasks worker. Rationale: migrations/add_prune_stale_host_inventory.sql.
+CREATE OR REPLACE PROCEDURE prune_stale_host_inventory(
+    IN stale_after interval DEFAULT '1 hour',
+    IN batch_hosts integer DEFAULT 200,
+    IN max_batches integer DEFAULT 50
+)
+    LANGUAGE plpgsql
+AS $procedure$
+DECLARE
+    cutoff       timestamp;
+    candidates   bigint[];
+    pruned       bigint[];
+    n_rows       bigint;
+    n_hosts      bigint := 0;
+    n_containers bigint := 0;
+    t0           timestamptz := clock_timestamp();
+BEGIN
+    SELECT MAX(updated_at) - stale_after INTO cutoff FROM HostHeartbeats;
+
+    SELECT array_agg(id ORDER BY id) INTO candidates
+    FROM (
+        SELECT h.id
+        FROM HostHeartbeats h
+        WHERE h.updated_at < cutoff
+          AND EXISTS (SELECT 1 FROM HeartbeatContainers c WHERE c.host_id = h.id)
+        ORDER BY h.id
+        LIMIT batch_hosts * max_batches
+    ) s;
+
+    FOR i IN 0 .. coalesce(cardinality(candidates), 0) - 1 BY batch_hosts LOOP
+        -- SKIP LOCKED: a host whose row is locked is being written by a beat right now.
+        WITH stale AS (
+            SELECT id FROM HostHeartbeats
+            WHERE id = ANY (candidates[i + 1 : i + batch_hosts])
+              AND updated_at < cutoff
+            FOR UPDATE SKIP LOCKED
+        ), cleared AS (
+            UPDATE HostHeartbeats h SET inventory_digest = NULL
+            FROM stale
+            WHERE h.id = stale.id
+            RETURNING h.id
+        )
+        SELECT array_agg(id) INTO pruned FROM cleared;
+
+        IF pruned IS NOT NULL THEN
+            DELETE FROM HeartbeatContainers WHERE host_id = ANY (pruned);
+            GET DIAGNOSTICS n_rows = ROW_COUNT;
+            n_hosts := n_hosts + cardinality(pruned);
+            n_containers := n_containers + n_rows;
+        END IF;
+        COMMIT;
+    END LOOP;
+
+    RAISE NOTICE 'prune_stale_host_inventory: pruned % hosts (% containers and their processes) with no beat for %, in %',
+        n_hosts, n_containers, stale_after, clock_timestamp() - t0;
+END;
+$procedure$;
