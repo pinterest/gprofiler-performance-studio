@@ -24,7 +24,7 @@ import { ICONS_NAMES } from '../common/icon/iconsData';
 import MuiTable from '../common/dataDisplay/table/MuiTable';
 import ProfilingHeader from './header/ProfilingHeader';
 import ProfilingTopPanel from './header/ProfilingTopPanel';
-import { buildProfilingRequests } from './profilingRequestBuilder.mjs';
+import { buildProfilingRequests, nsysSelectionSupport } from './profilingRequestBuilder.mjs';
 
 const DEFAULT_PROFILING_FREQUENCY = 11;
 const DEFAULT_MAX_PROCESSES = 10;
@@ -237,6 +237,9 @@ const formatRowForScope = (row, scope) => ({
     heartbeatTimestamp: readField(row, 'heartbeatTimestamp', 'heartbeat_timestamp'),
     agentVersion: readField(row, 'agentVersion', 'agent_version'),
     runMode: readField(row, 'runMode', 'run_mode'),
+    nsysAvailable: readField(row, 'nsysAvailable', 'nsys_available') === true,
+    nsysPath: readField(row, 'nsysPath', 'nsys_path'),
+    nsysMissingHosts: readField(row, 'nsysMissingHosts', 'nsys_missing_hosts') || [],
 });
 
 const scopeEntityLabel = (scope) => {
@@ -449,19 +452,25 @@ const ProfilingStatusPage = () => {
         updateURL(nextScope, appliedFilters);
     };
 
+    const nsysGate = useMemo(() => {
+        const selectedRows = rows.filter((row) => selectionModel.includes(row.id));
+        return nsysSelectionSupport(selectedRows);
+    }, [rows, selectionModel]);
+    const gpuNsysEnabled = enableNsys && !nsysGate.disabled;
+
     const buildRequests = useCallback((action, selectedRows) => buildProfilingRequests(action, selectedRows, {
         scope: activeScope,
         profilingMode,
         duration,
         profilingFrequency,
         enablePerfSpect,
-        enableNsys,
+        enableNsys: gpuNsysEnabled,
         enableNsysTimeline,
         enableNsysTimelineStacks,
         enableNsysUploadRep,
         profilerConfigs,
         maxProcesses,
-    }), [activeScope, duration, enableNsys, enableNsysTimeline, enableNsysTimelineStacks, enableNsysUploadRep, enablePerfSpect, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
+    }), [activeScope, duration, enableNsysTimeline, enableNsysTimelineStacks, enableNsysUploadRep, enablePerfSpect, gpuNsysEnabled, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
 
     const executeDryRun = useCallback((action, selectedRows) => {
         const { requests } = buildRequests(action, selectedRows);
@@ -621,8 +630,11 @@ const ProfilingStatusPage = () => {
                     loading={loading}
                     enablePerfSpect={enablePerfSpect}
                     onPerfSpectChange={setEnablePerfSpect}
-                    enableNsys={enableNsys}
+                    enableNsys={gpuNsysEnabled}
                     onNsysChange={setEnableNsys}
+                    nsysDisabled={nsysGate.disabled}
+                    nsysMissingHosts={nsysGate.missingHosts}
+                    nsysPath={nsysGate.path}
                     enableNsysTimeline={enableNsysTimeline}
                     onNsysTimelineChange={setEnableNsysTimeline}
                     enableNsysTimelineStacks={enableNsysTimelineStacks}
@@ -723,7 +735,7 @@ const ProfilingStatusPage = () => {
                                     <Typography variant="body2">• Max Processes: {maxProcesses}</Typography>
                                     <Typography variant="body2">• PerfSpect HW Metrics: {enablePerfSpect ? 'Enabled' : 'Disabled'}</Typography>
                                     <Typography variant="body2">• GPU (nsys): {
-                                        enableNsys
+                                        gpuNsysEnabled
                                             ? `Enabled (${
                                                 enableNsysTimeline
                                                     ? `Timeline${enableNsysTimelineStacks ? ' + stacks' : ''}`

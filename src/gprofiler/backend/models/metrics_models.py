@@ -279,6 +279,8 @@ class HeartbeatRequest(BaseModel):
     status: str = "active"  # active, idle, error
     timestamp: Optional[datetime] = None
     perf_supported_events: Optional[List[str]] = None  # Changed to match agent format
+    nsys_available: Optional[bool] = None
+    nsys_path: Optional[str] = None
 
 
 class HeartbeatResponse(BaseModel):
@@ -389,6 +391,9 @@ class ProfilingInventoryStatus(CamelModel):
     heartbeat_timestamp: Optional[datetime] = None
     agent_version: Optional[str] = None
     run_mode: Optional[str] = None
+    nsys_available: Optional[bool] = None
+    nsys_path: Optional[str] = None
+    nsys_missing_hosts: Optional[List[str]] = None
 
 
 class ProfilingInventoryStatusResponse(CamelModel):

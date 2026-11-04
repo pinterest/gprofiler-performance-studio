@@ -45,6 +45,12 @@ SERVICES_LIST_HOURS_INTERVAL = 7 * 24
 SERVICES_LIST_HOURS_VISIBLE_INTERVAL = 24 * 30
 
 
+def _nsys_missing_hosts(value: Any) -> List[str]:
+    if not value:
+        return []
+    return [host for host in list(value) if host][:10]
+
+
 def generate_token(nbytes) -> str:
     while True:
         token = token_urlsafe(nbytes)
@@ -873,6 +879,8 @@ class DBManager(metaclass=Singleton):
         status: str = "active",
         heartbeat_timestamp: Optional[datetime] = None,
         supported_perf_events: Optional[List[str]] = None,
+        nsys_available: Optional[bool] = None,
+        nsys_path: Optional[str] = None,
     ) -> bool:
         """
         Update or insert host heartbeat information using pure SQL.
@@ -890,14 +898,17 @@ class DBManager(metaclass=Singleton):
         INSERT INTO HostHeartbeats (
             hostname, ip_address, service_name, agent_version, run_mode, namespace, pod_name, last_command_id,
             received_command_ids, executed_command_ids,
-            status, heartbeat_timestamp, supported_perf_events, created_at, updated_at
+            status, heartbeat_timestamp, supported_perf_events, nsys_available, nsys_path,
+            created_at, updated_at
         ) VALUES (
             %(hostname)s, %(ip_address)s::inet, %(service_name)s, %(agent_version)s, %(run_mode)s,
             %(namespace)s, %(pod_name)s,
             %(last_command_id)s::uuid, %(received_command_ids)s::uuid[],
             %(executed_command_ids)s::uuid[],
             %(status)s::HostStatus,
-            %(heartbeat_timestamp)s, %(supported_perf_events)s::text[], CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            %(heartbeat_timestamp)s, %(supported_perf_events)s::text[],
+            %(nsys_available)s, %(nsys_path)s,
+            CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         )
         ON CONFLICT (hostname, service_name)
         DO UPDATE SET
@@ -912,6 +923,11 @@ class DBManager(metaclass=Singleton):
             status = EXCLUDED.status,
             heartbeat_timestamp = EXCLUDED.heartbeat_timestamp,
             supported_perf_events = EXCLUDED.supported_perf_events,
+            nsys_available = COALESCE(EXCLUDED.nsys_available, HostHeartbeats.nsys_available),
+            nsys_path = CASE
+                WHEN EXCLUDED.nsys_available IS NULL THEN HostHeartbeats.nsys_path
+                ELSE EXCLUDED.nsys_path
+            END,
             updated_at = CURRENT_TIMESTAMP
         RETURNING ID
         """
@@ -930,6 +946,8 @@ class DBManager(metaclass=Singleton):
             "status": status,
             "heartbeat_timestamp": heartbeat_timestamp,
             "supported_perf_events": supported_perf_events,
+            "nsys_available": nsys_available,
+            "nsys_path": nsys_path,
         }
 
         # Host upsert and the normalized inventory sync share one transaction so a
@@ -1895,6 +1913,8 @@ class DBManager(metaclass=Singleton):
                 h.agent_version,
                 h.run_mode,
                 h.heartbeat_timestamp,
+                h.nsys_available,
+                h.nsys_path,
                 hc.container_name,
                 hc.namespace,
                 hc.pod_name,
@@ -1972,7 +1992,11 @@ class DBManager(metaclass=Singleton):
             (array_agg(profiling_status ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_profiling_status,
             (array_agg(agent_version ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_agent_version,
             (array_agg(run_mode ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_run_mode,
-            MAX(heartbeat_timestamp) AS l_heartbeat_timestamp
+            MAX(heartbeat_timestamp) AS l_heartbeat_timestamp,
+            bool_and(COALESCE(nsys_available, false)) AS nsys_available,
+            (array_agg(nsys_path) FILTER (WHERE nsys_available IS TRUE))[1] AS nsys_path,
+            (array_agg(DISTINCT hostname) FILTER (WHERE NOT COALESCE(nsys_available, false)))[1:10]
+                AS nsys_missing_hosts
         FROM filtered
         {where_clause}
         GROUP BY {group_by}
@@ -2028,6 +2052,9 @@ class DBManager(metaclass=Singleton):
                     "heartbeat_timestamp": db_row.get("l_heartbeat_timestamp"),
                     "agent_version": db_row.get("l_agent_version"),
                     "run_mode": db_row.get("l_run_mode"),
+                    "nsys_available": bool(db_row.get("nsys_available")),
+                    "nsys_path": db_row.get("nsys_path"),
+                    "nsys_missing_hosts": _nsys_missing_hosts(db_row.get("nsys_missing_hosts")),
                 }
             )
 

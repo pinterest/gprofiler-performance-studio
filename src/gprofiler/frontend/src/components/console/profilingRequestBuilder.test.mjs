@@ -21,6 +21,7 @@ import {
     buildProfilingRequests,
     buildTargetEntity,
     groupRowsByService,
+    nsysSelectionSupport,
     resolveStopLevel,
 } from './profilingRequestBuilder.mjs';
 
@@ -365,8 +366,47 @@ describe('buildProfilingRequests — scope matrix (start)', () => {
             enableNsys: true,
         });
         assert.equal(requests[0].additional_args.enable_nsys, true);
-        // Builder leaves mode to the operator (UI recommends Adhoc via tooltip only).
         assert.equal(requests[0].continuous, true);
         assert.equal(requests[0].duration, 60);
+    });
+});
+
+describe('nsysSelectionSupport', () => {
+    it('leaves the checkbox editable when nothing is selected', () => {
+        assert.deepEqual(nsysSelectionSupport([]), { disabled: false, missingHosts: [], path: null });
+    });
+
+    it('enables GPU profiling when every selected host reported nsys', () => {
+        const support = nsysSelectionSupport([
+            { host: 'gpu-1', hostCount: 1, nsysAvailable: true, nsysPath: '/opt/nvidia/nsys' },
+        ]);
+        assert.equal(support.disabled, false);
+        assert.equal(support.path, '/opt/nvidia/nsys');
+    });
+
+    it('does not pin one nsys path onto a multi-host selection', () => {
+        const support = nsysSelectionSupport([
+            { service: 'devapp', host: 'gpu-1', hostCount: 4, nsysAvailable: true, nsysPath: '/opt/nvidia/nsys' },
+        ]);
+        assert.equal(support.disabled, false);
+        assert.equal(support.path, null);
+    });
+
+    it('disables only the GPU option when a selected host has no nsys', () => {
+        const support = nsysSelectionSupport([
+            { host: 'gpu-1', nsysAvailable: true },
+            { host: 'cpu-1', nsysAvailable: false },
+        ]);
+        assert.equal(support.disabled, true);
+        assert.deepEqual(support.missingHosts, ['cpu-1']);
+        assert.equal(support.path, null);
+    });
+
+    it('uses the host list from an aggregated row', () => {
+        const support = nsysSelectionSupport([
+            { service: 'devapp', nsysAvailable: false, nsysMissingHosts: ['a', 'b'] },
+        ]);
+        assert.equal(support.disabled, true);
+        assert.deepEqual(support.missingHosts, ['a', 'b']);
     });
 });
