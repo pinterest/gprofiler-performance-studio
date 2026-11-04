@@ -18,26 +18,30 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"strings"
+	"time"
 )
 
 type CLIArgs struct {
-	SQSQueue                   string
-	S3Bucket                   string
-	S3PathPrefix               string
-	ClickHouseAddr             string
-	ClickHouseUser             string
-	ClickHousePassword         string
-	ClickHouseUseTLS           bool
-	ClickHouseStacksTable      string
-	ClickHouseMetricsTable     string
-	Concurrency                int
-	ClickHouseStacksBatchSize  int
-	ClickHouseMetricsBatchSize int
-	InputFolder                string
-	FrameReplaceFileName       string
-	AWSEndpoint                string
-	AWSRegion                  string
+	SQSQueue                      string
+	S3Bucket                      string
+	S3PathPrefix                  string
+	ClickHouseAddr                string
+	ClickHouseUser                string
+	ClickHousePassword            string
+	ClickHouseUseTLS              bool
+	ClickHouseStacksTable         string
+	ClickHouseMetricsTable        string
+	Concurrency                   int
+	ClickHouseStacksBatchSize     int
+	ClickHouseMetricsBatchSize    int
+	ClickHouseStacksFlushTimeout  int // seconds
+	ClickHouseMetricsFlushTimeout int // seconds
+	InputFolder                   string
+	FrameReplaceFileName          string
+	AWSEndpoint                   string
+	AWSRegion                     string
 	// Metrics Publisher Configuration
 	MetricsEnabled     bool
 	MetricsAgentURL    string
@@ -53,16 +57,18 @@ type CLIArgs struct {
 
 func NewCliArgs() *CLIArgs {
 	return &CLIArgs{
-		ClickHouseAddr:             "localhost:9000",
-		ClickHouseStacksTable:      "flamedb.samples",
-		ClickHouseMetricsTable:     "flamedb.metrics",
-		ClickHouseUser:             "default",
-		ClickHousePassword:         "",
-		ClickHouseUseTLS:           false,
-		Concurrency:                2,
-		ClickHouseStacksBatchSize:  10000,
-		ClickHouseMetricsBatchSize: 100,
-		FrameReplaceFileName:       ConfPrefix + "replace.yaml",
+		ClickHouseAddr:                "localhost:9000",
+		ClickHouseStacksTable:         "flamedb.samples",
+		ClickHouseMetricsTable:        "flamedb.metrics",
+		ClickHouseUser:                "default",
+		ClickHousePassword:            "",
+		ClickHouseUseTLS:              false,
+		Concurrency:                   2,
+		ClickHouseStacksBatchSize:     10000,
+		ClickHouseMetricsBatchSize:    100,
+		ClickHouseStacksFlushTimeout:  DefaultClickHouseStacksFlushTimeout,
+		ClickHouseMetricsFlushTimeout: DefaultClickHouseMetricsFlushTimeout,
+		FrameReplaceFileName:          ConfPrefix + "replace.yaml",
 		// Metrics defaults
 		MetricsEnabled:     false,
 		MetricsAgentURL:    "tcp://localhost:18126",
@@ -105,6 +111,12 @@ func (ca *CLIArgs) ParseArgs() {
 	flag.IntVar(&ca.ClickHouseMetricsBatchSize, "clickhouse-metrics-batch-size",
 		LookupEnvOrInt("CLICKHOUSE_METRICS_BATCH_SIZE", ca.ClickHouseMetricsBatchSize),
 		"clickhouse metrics batch size (default 100)")
+	flag.IntVar(&ca.ClickHouseStacksFlushTimeout, "clickhouse-stacks-flush-timeout",
+		LookupEnvOrInt("CLICKHOUSE_STACKS_FLUSH_TIMEOUT", ca.ClickHouseStacksFlushTimeout),
+		"seconds before buffered stacks are flushed if the batch isn't full (default 30)")
+	flag.IntVar(&ca.ClickHouseMetricsFlushTimeout, "clickhouse-metrics-flush-timeout",
+		LookupEnvOrInt("CLICKHOUSE_METRICS_FLUSH_TIMEOUT", ca.ClickHouseMetricsFlushTimeout),
+		"seconds before buffered metrics are flushed if the batch isn't full (default 30)")
 	flag.StringVar(&ca.FrameReplaceFileName, "replace-file", LookupEnvOrString("REPLACE_FILE",
 		ca.FrameReplaceFileName),
 		"replace.yaml")
@@ -140,4 +152,29 @@ func (ca *CLIArgs) ParseArgs() {
 	if ca.S3Bucket == "" && ca.InputFolder == "" {
 		logger.Fatal("You must supply the name of a bucket (-s3-bucket BUCKET)")
 	}
+
+	if err := ca.validateFlushTimeouts(); err != nil {
+		logger.Fatal(err)
+	}
+}
+
+// validateFlushTimeouts rejects values time.NewTicker would panic on.
+func (ca *CLIArgs) validateFlushTimeouts() error {
+	if ca.ClickHouseStacksFlushTimeout < 1 {
+		return fmt.Errorf("clickhouse stacks flush timeout must be at least 1 second, got %d",
+			ca.ClickHouseStacksFlushTimeout)
+	}
+	if ca.ClickHouseMetricsFlushTimeout < 1 {
+		return fmt.Errorf("clickhouse metrics flush timeout must be at least 1 second, got %d",
+			ca.ClickHouseMetricsFlushTimeout)
+	}
+	return nil
+}
+
+func (ca *CLIArgs) stacksFlushInterval() time.Duration {
+	return time.Duration(ca.ClickHouseStacksFlushTimeout) * time.Second
+}
+
+func (ca *CLIArgs) metricsFlushInterval() time.Duration {
+	return time.Duration(ca.ClickHouseMetricsFlushTimeout) * time.Second
 }
