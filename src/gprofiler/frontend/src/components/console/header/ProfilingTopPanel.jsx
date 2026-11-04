@@ -60,6 +60,9 @@ const ProfilingTopPanel = ({
     onNsysTimelineStacksChange,
     enableNsysUploadRep,
     onNsysUploadRepChange,
+    nsysDisabled = false,
+    nsysMissingHosts = [],
+    nsysPath = null,
     profilingFrequency,
     onProfilingFrequencyChange,
     maxProcesses,
@@ -214,30 +217,44 @@ const ProfilingTopPanel = ({
                             </Tooltip>
                             <Tooltip
                                 title={
-                                    'Enable NVIDIA Nsight Systems (nsys) GPU capture. ' +
-                                    'The profiled host must have nsys installed (not bundled with the agent). ' +
-                                    'Produces a CUDA kernel flamegraph for the Adhoc Profiling view ' +
-                                    '(inspired by GPU flame graphs). Adhoc mode is recommended — ' +
-                                    'continuous mode is left to the operator and is not auto-forced.'
+                                    nsysDisabled
+                                        ? (nsysMissingHosts.length
+                                            ? `No nsys on the selected hosts: ${nsysMissingHosts.join(', ')}`
+                                            : 'No nsys on the selected hosts')
+                                        : 'Enable NVIDIA Nsight Systems (nsys) GPU capture. ' +
+                                          'The profiled host must have nsys installed (not bundled with the agent). ' +
+                                          (nsysPath ? `Found at ${nsysPath}. ` : '') +
+                                          'Produces a CUDA kernel flamegraph for the Adhoc Profiling view ' +
+                                          '(inspired by GPU flame graphs). Adhoc mode is recommended — ' +
+                                          'continuous mode is left to the operator and is not auto-forced.'
                                 }>
-                                <FormControlLabel
-                                    control={
-                                        <Checkbox
-                                            checked={enableNsys}
-                                            onChange={(e) => onNsysChange(e.target.checked)}
-                                            size='small'
-                                            color='primary'
-                                        />
-                                    }
-                                    label={
-                                        <Typography variant='body2' sx={{ fontSize: '0.875rem' }}>
-                                            GPU (nsys)
-                                        </Typography>
-                                    }
-                                    sx={{ m: 0 }}
-                                />
+                                <span>
+                                    <FormControlLabel
+                                        control={
+                                            <Checkbox
+                                                checked={Boolean(enableNsys) && !nsysDisabled}
+                                                disabled={nsysDisabled}
+                                                onChange={(e) => onNsysChange(e.target.checked)}
+                                                size='small'
+                                                color='primary'
+                                            />
+                                        }
+                                        label={
+                                            <Typography variant='body2' sx={{ fontSize: '0.875rem' }}>
+                                                GPU (nsys)
+                                            </Typography>
+                                        }
+                                        sx={{ m: 0 }}
+                                    />
+                                </span>
                             </Tooltip>
                         </Box>
+                        {nsysDisabled && (
+                            <Typography variant='caption' color='text.secondary'>
+                                No nsys on the selected hosts
+                                {nsysMissingHosts.length ? `: ${nsysMissingHosts.join(', ')}` : ''}.
+                            </Typography>
+                        )}
 
                         {enableNsys && (
                             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, ml: 3 }}>

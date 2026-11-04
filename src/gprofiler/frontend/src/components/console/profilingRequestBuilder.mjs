@@ -79,6 +79,32 @@ export const groupRowsByService = (selectedRows) =>
         return groups;
     }, {});
 
+export const nsysSelectionSupport = (selectedRows) => {
+    if (!selectedRows || selectedRows.length === 0) {
+        return { disabled: false, missingHosts: [], path: null };
+    }
+    const missing = [];
+    let path = null;
+    for (const row of selectedRows) {
+        if (row.nsysAvailable === true) {
+            const hostCount = Number(row.hostCount);
+            if (selectedRows.length === 1 && (Number.isNaN(hostCount) || hostCount <= 1)) {
+                path = row.nsysPath || null;
+            }
+            continue;
+        }
+        const listed = row.nsysMissingHosts;
+        if (Array.isArray(listed) && listed.length) missing.push(...listed);
+        else if (row.host) missing.push(row.host);
+    }
+    const unsupported = selectedRows.some((row) => row.nsysAvailable !== true);
+    return {
+        disabled: unsupported,
+        missingHosts: [...new Set(missing)].slice(0, 10),
+        path: unsupported ? null : path,
+    };
+};
+
 /**
  * Build the per-service profiling requests for a bulk start/stop action.
  *
@@ -145,8 +171,6 @@ export const buildProfilingRequests = (action, selectedRows, config) => {
             additional_args: {
                 enable_perfspect: enablePerfSpect,
                 enable_nsys: enableNsys,
-                // Timeline flags only make sense with nsys enabled; gate them so a
-                // stale saved toggle can't reach the agent without the capture.
                 nsys_timeline: enableNsys && enableNsysTimeline,
                 nsys_timeline_stacks: enableNsys && enableNsysTimeline && enableNsysTimelineStacks,
                 nsys_upload_rep: enableNsys && enableNsysUploadRep,

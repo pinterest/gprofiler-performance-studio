@@ -797,6 +797,8 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                 status=heartbeat.status,
                 heartbeat_timestamp=heartbeat.timestamp,
                 supported_perf_events=heartbeat.perf_supported_events,  # Use agent field name
+                nsys_available=heartbeat.nsys_available,
+                nsys_path=heartbeat.nsys_path,
             )
 
             # 1b. Auto-subscribe newly-registered hosts to an active service-wide
