@@ -12,6 +12,11 @@ it: the backend stores workload inventory from agent heartbeats, exposes
 workload-aware status views, and resolves workload selections into host/PID
 commands before dispatch.
 
+For the plain-language story of why the first version of this design did not
+scale, how the change-detected inventory fix works, and how the PR stack rolls
+out, read [`WORKLOAD_PROFILING_AT_SCALE.md`](WORKLOAD_PROFILING_AT_SCALE.md)
+first. This spec is the contract; that document is the map.
+
 ## Problem Statement
 
 The existing dynamic profiling flow is host-centric:

@@ -41,7 +41,9 @@ same backend services and storage layer:
    optionally collect Intel® PerfSpect hardware metrics. See
    [`heartbeat_doc/README_HEARTBEAT.md`](heartbeat_doc/README_HEARTBEAT.md) and
    [`heartbeat_doc/PERFSPECT_DYNAMIC_PROFILING.md`](heartbeat_doc/PERFSPECT_DYNAMIC_PROFILING.md)
-   for details.
+   for details. For how workload-level profiling is kept cheap at fleet scale
+   (change-detected inventory, the sync budget, and the rollout order), see
+   [`heartbeat_doc/WORKLOAD_PROFILING_AT_SCALE.md`](heartbeat_doc/WORKLOAD_PROFILING_AT_SCALE.md).
 
 ### Architecture diagram
 
