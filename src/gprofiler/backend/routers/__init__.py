@@ -22,6 +22,7 @@ from backend.routers import (
     installations_routes,
     metrics_routes,
     minesweeper_routes,
+    nsys_routes,
     overview_routes,
     perfspect_routes,
     profiles_routes,
@@ -37,6 +38,7 @@ router.include_router(metrics_routes.router, prefix="/metrics", tags=["metrics"]
 router.include_router(installations_routes.router, prefix="/installations", tags=["app"])
 router.include_router(api_key_routes.router, prefix="/api_key", tags=["auth"])
 router.include_router(profiles_routes.router, prefix="/v2/profiles", tags=["agent"])
+router.include_router(nsys_routes.router, prefix="/v2/nsys_rep", tags=["agent"])
 router.include_router(services_routes.router, prefix="/services", tags=["app"])
 router.include_router(filters_routes.router, prefix="/v1/filters", tags=["filters"])
 router.include_router(overview_routes.router, prefix="/overview", tags=["overview"])

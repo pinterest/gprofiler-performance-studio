@@ -52,6 +52,14 @@ const ProfilingTopPanel = ({
     loading,
     enablePerfSpect,
     onPerfSpectChange,
+    enableNsys,
+    onNsysChange,
+    enableNsysTimeline,
+    onNsysTimelineChange,
+    enableNsysTimelineStacks,
+    onNsysTimelineStacksChange,
+    enableNsysUploadRep,
+    onNsysUploadRepChange,
     profilingFrequency,
     onProfilingFrequencyChange,
     maxProcesses,
@@ -185,24 +193,126 @@ const ProfilingTopPanel = ({
                 <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 4 }}>
                     {/* Left column */}
                     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                        <Tooltip title='Enable Intel PerfSpect hardware metrics collection (auto-installs on agents)'>
-                            <FormControlLabel
-                                control={
-                                    <Checkbox
-                                        checked={enablePerfSpect}
-                                        onChange={(e) => onPerfSpectChange(e.target.checked)}
-                                        size='small'
-                                        color='primary'
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
+                            <Tooltip title='Enable Intel PerfSpect hardware metrics collection (auto-installs on agents)'>
+                                <FormControlLabel
+                                    control={
+                                        <Checkbox
+                                            checked={enablePerfSpect}
+                                            onChange={(e) => onPerfSpectChange(e.target.checked)}
+                                            size='small'
+                                            color='primary'
+                                        />
+                                    }
+                                    label={
+                                        <Typography variant='body2' sx={{ fontSize: '0.875rem' }}>
+                                            PerfSpect HW Metrics
+                                        </Typography>
+                                    }
+                                    sx={{ m: 0 }}
+                                />
+                            </Tooltip>
+                            <Tooltip
+                                title={
+                                    'Enable NVIDIA Nsight Systems (nsys) GPU capture. ' +
+                                    'The profiled host must have nsys installed (not bundled with the agent). ' +
+                                    'Produces a CUDA kernel flamegraph for the Adhoc Profiling view ' +
+                                    '(inspired by GPU flame graphs). Adhoc mode is recommended — ' +
+                                    'continuous mode is left to the operator and is not auto-forced.'
+                                }>
+                                <FormControlLabel
+                                    control={
+                                        <Checkbox
+                                            checked={enableNsys}
+                                            onChange={(e) => onNsysChange(e.target.checked)}
+                                            size='small'
+                                            color='primary'
+                                        />
+                                    }
+                                    label={
+                                        <Typography variant='body2' sx={{ fontSize: '0.875rem' }}>
+                                            GPU (nsys)
+                                        </Typography>
+                                    }
+                                    sx={{ m: 0 }}
+                                />
+                            </Tooltip>
+                        </Box>
+
+                        {enableNsys && (
+                            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, ml: 3 }}>
+                                <Tooltip
+                                    title={
+                                        'Upload a CPU/GPU timeline view (CPU-thread and GPU stream swim ' +
+                                        'lanes, launch↔kernel linked) instead of the GPU flamegraph.'
+                                    }>
+                                    <FormControlLabel
+                                        control={
+                                            <Checkbox
+                                                checked={enableNsysTimeline}
+                                                onChange={(e) => onNsysTimelineChange(e.target.checked)}
+                                                size='small'
+                                                color='primary'
+                                            />
+                                        }
+                                        label={
+                                            <Typography variant='body2' sx={{ fontSize: '0.875rem' }}>
+                                                Timeline view
+                                            </Typography>
+                                        }
+                                        sx={{ m: 0 }}
                                     />
-                                }
-                                label={
-                                    <Typography variant='body2' sx={{ fontSize: '0.875rem' }}>
-                                        PerfSpect HW Metrics
-                                    </Typography>
-                                }
-                                sx={{ m: 0 }}
-                            />
-                        </Tooltip>
+                                </Tooltip>
+                                {enableNsysTimeline && (
+                                    <Tooltip
+                                        title={
+                                            'Also record a CPU backtrace per kernel launch and show it when ' +
+                                            'an event is clicked in the timeline. Enables CPU sampling in ' +
+                                            'nsys — noticeably heavier capture.'
+                                        }>
+                                        <FormControlLabel
+                                            control={
+                                                <Checkbox
+                                                    checked={enableNsysTimelineStacks}
+                                                    onChange={(e) => onNsysTimelineStacksChange(e.target.checked)}
+                                                    size='small'
+                                                    color='primary'
+                                                />
+                                            }
+                                            label={
+                                                <Typography variant='body2' sx={{ fontSize: '0.875rem' }}>
+                                                    Click-for-stack backtraces
+                                                </Typography>
+                                            }
+                                            sx={{ m: 0 }}
+                                        />
+                                    </Tooltip>
+                                )}
+                                <Tooltip
+                                    title={
+                                        'Also upload the raw .nsys-rep capture so it can be downloaded ' +
+                                        'from the Adhoc Profiling view and opened in NVIDIA Nsight ' +
+                                        'Systems. Reports can be large (tens to hundreds of MB).'
+                                    }>
+                                    <FormControlLabel
+                                        control={
+                                            <Checkbox
+                                                checked={enableNsysUploadRep}
+                                                onChange={(e) => onNsysUploadRepChange(e.target.checked)}
+                                                size='small'
+                                                color='primary'
+                                            />
+                                        }
+                                        label={
+                                            <Typography variant='body2' sx={{ fontSize: '0.875rem' }}>
+                                                Keep raw .nsys-rep
+                                            </Typography>
+                                        }
+                                        sx={{ m: 0 }}
+                                    />
+                                </Tooltip>
+                            </Box>
+                        )}
 
                         <Box>
                             <Label>Profiling Frequency (Hz)</Label>
