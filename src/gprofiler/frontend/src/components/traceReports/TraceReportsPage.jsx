@@ -44,6 +44,30 @@ export const runsInWindow = (reports, reportId, windowKey, now = Date.now()) => 
     );
 };
 
+export const ALL_DEVICES = 'all';
+
+// Older entries only carry the platform in their root label ("<platform>: <span>").
+const platformOf = (r) => r.platform || (r.root?.includes(': ') ? r.root.split(': ')[0] : '');
+
+export const deviceKey = (r) => {
+    const platform = platformOf(r);
+    return r.device ? `${platform || 'any'} · ${r.device}` : platform;
+};
+
+// Client-time spent in the path over the stats window: how many users wait, times how long.
+const hotness = (r) => (r.stats?.count || 0) * (r.stats?.p50_ms || 0);
+
+export const pathOptions = (reports, device) =>
+    _.sortBy(
+        _.uniqBy(reports, 'id').filter((r) => device === ALL_DEVICES || deviceKey(r) === device),
+        [(r) => -hotness(r), (r) => r.label || r.id]
+    );
+
+const formatCount = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : `${n}`);
+
+const formatStats = (s) =>
+    s?.count ? ` · ${formatCount(s.count)}/${s.window_hours}h · p50 ${(s.p50_ms / 1000).toFixed(1)} s` : '';
+
 const formatRun = (run) => {
     const at = new Date(run.generated_at).toLocaleString();
     const wall = run.wall_ms ? ` · ${(run.wall_ms / 1000).toFixed(1)} s` : '';
@@ -52,6 +76,7 @@ const formatRun = (run) => {
 
 const TraceReportsPage = () => {
     const [query, setQuery] = useQueryParams({
+        device: withDefault(StringParam, ALL_DEVICES),
         report: StringParam,
         window: withDefault(StringParam, '24h'),
         run: StringParam,
@@ -62,11 +87,10 @@ const TraceReportsPage = () => {
     );
 
     const reports = useMemo(() => data?.reports || [], [data]);
-    const reportOptions = useMemo(
-        () => _.uniqBy(reports, 'id').map((r) => ({ id: r.id, label: r.label || r.id, root: r.root })),
-        [reports]
-    );
-    const reportId = query.report || reportOptions[0]?.id;
+    const devices = useMemo(() => _.sortBy(_.uniq(reports.map(deviceKey).filter(Boolean))), [reports]);
+    const device = devices.includes(query.device) ? query.device : ALL_DEVICES;
+    const reportOptions = useMemo(() => pathOptions(reports, device), [reports, device]);
+    const reportId = _.some(reportOptions, { id: query.report }) ? query.report : reportOptions[0]?.id;
     const runs = useMemo(() => runsInWindow(reports, reportId, query.window), [reports, reportId, query.window]);
     const run = _.find(runs, { path: query.run }) || runs[0];
     const failure = _.find(data?.errors, { id: reportId });
@@ -76,16 +100,32 @@ const TraceReportsPage = () => {
         <Flexbox column sx={{ height: '100%' }}>
             <PageHeader title='Trace Profiles' />
             <Flexbox alignItems='center' spacing={4} sx={{ px: 6, py: 3, flexWrap: 'wrap' }}>
+                <FormControl size='small' sx={{ minWidth: 160 }}>
+                    <InputLabel id='trace-report-device'>Device type</InputLabel>
+                    <Select
+                        labelId='trace-report-device'
+                        label='Device type'
+                        value={device}
+                        onChange={(e) => setQuery({ device: e.target.value, report: undefined, run: undefined })}>
+                        <MenuItem value={ALL_DEVICES}>All</MenuItem>
+                        {devices.map((d) => (
+                            <MenuItem key={d} value={d}>
+                                {d}
+                            </MenuItem>
+                        ))}
+                    </Select>
+                </FormControl>
                 <FormControl size='small' sx={{ minWidth: 320 }}>
-                    <InputLabel id='trace-report-path'>Trace path</InputLabel>
+                    <InputLabel id='trace-report-path'>Trace path (hottest first)</InputLabel>
                     <Select
                         labelId='trace-report-path'
-                        label='Trace path'
+                        label='Trace path (hottest first)'
                         value={reportId || ''}
                         onChange={(e) => setQuery({ report: e.target.value, run: undefined })}>
                         {reportOptions.map((r) => (
                             <MenuItem key={r.id} value={r.id} title={r.root}>
-                                {r.label}
+                                {r.label || r.id}
+                                {formatStats(r.stats)}
                             </MenuItem>
                         ))}
                     </Select>

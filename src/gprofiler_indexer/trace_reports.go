@@ -61,6 +61,10 @@ type TraceReportEntry struct {
 	NSpans      int64           `json:"n_spans,omitempty"`
 	TraceStart  string          `json:"trace_start,omitempty"`
 	TraceEnd    string          `json:"trace_end,omitempty"`
+	Platform    string          `json:"platform,omitempty"`
+	Device      string          `json:"device,omitempty"`
+	Flow        string          `json:"flow,omitempty"`
+	Stats       json.RawMessage `json:"stats,omitempty"`
 	Clusters    json.RawMessage `json:"clusters,omitempty"`
 }
 

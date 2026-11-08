@@ -36,6 +36,8 @@
   "reports": [
     {"id": "web-home-render", "label": "web: home render (end to end)", "root": "home_render",
      "platform": "web", "agg": 10},
+    {"id": "web-home-render-phone", "label": "web: home render (phones)", "root": "home_render",
+     "platform": "web", "device": "phone", "tags": {"device.type": "phone"}, "agg": 10},
     {"id": "checkout-slowest", "label": "checkout: slowest request", "slowest": "checkout",
      "cluster": "checkout-prod", "op": "placeorder"}
   ]

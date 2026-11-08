@@ -57,6 +57,26 @@ class FakeES:
         return [dict(s) for s in SPANS]
 
 
+class SearchES(tf.ZipkinES):
+    """Real query building over canned search responses: one client root joined to SPANS."""
+
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        self.bodies = []
+
+    def search(self, index, body):
+        self.bodies.append(body)
+        if "track_total_hits" in body:
+            return {"hits": {"total": {"value": 1234}}, "aggregations": {"p": {"values": {"50.0": 850e3, "90.0": 2100e3}}}}
+        if "aggs" in body:
+            return {"aggregations": {"t": {"buckets": [{"key": "abc123", "doc_count": 3}]}}}
+        return {"hits": {"hits": [{"_source": {"traceId": "abc123", "name": "timing/home_render", "duration": 120e3}}]}}
+
+    def trace(self, trace_id, date):
+        root = span("r", None, "LOCAL", "web", "timing/home_render", 0, 120)
+        return [root] + [dict(s, parentId=s.get("parentId", "r")) for s in SPANS]
+
+
 class FakeStudio:
     def __init__(self):
         self.calls = []
@@ -112,9 +132,25 @@ class TraceFlameTest(unittest.TestCase):
         self.assertNotIn("file", reports["missing"])
         self.assertIn("LookupError", reports["missing"]["error"])
 
+    def test_root_report_filters_by_tags_and_records_path_meta(self):
+        es = SearchES(self.cfg)
+        args = tf.report_args(self.ap, {"id": "web-home-desktop", "root": "home_render", "platform": "web",
+                                        "device": "desktop", "tags": {"device.typeName": "desktop"}}, self.tmp.name)
+        meta = tf.render(self.cfg, es, None, [], args)
+
+        self.assertEqual(meta["platform"], "web")
+        self.assertEqual(meta["device"], "desktop")
+        self.assertEqual(meta["flow"], "timing/home_render")
+        self.assertEqual(meta["stats"], {"window_hours": 6, "count": 1234, "p50_ms": 850, "p90_ms": 2100})
+        roots_and_stats = [b for b in es.bodies if "aggs" not in b or "track_total_hits" in b]
+        self.assertEqual(len(roots_and_stats), 2)
+        for body in roots_and_stats:
+            self.assertIn({"term": {"_q": "device.typeName=desktop"}}, body["query"]["bool"]["filter"])
+
     def test_report_args_rejects_bad_specs(self):
         for spec in ({"id": "../x", "root": "r"}, {"id": "ok", "root": "r", "slowest": "s"},
-                     {"id": "ok"}, {"id": "ok", "root": "r", "out": "/etc/passwd"}):
+                     {"id": "ok"}, {"id": "ok", "root": "r", "out": "/etc/passwd"},
+                     {"id": "ok", "root": "r", "tags": ["device=phone"]}, {"id": "ok", "root": "r", "tags": {"k": 1}}):
             with self.assertRaises(ValueError, msg=spec):
                 tf.report_args(self.ap, spec, self.tmp.name)
 

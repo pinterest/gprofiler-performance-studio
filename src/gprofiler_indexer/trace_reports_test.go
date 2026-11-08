@@ -17,10 +17,34 @@
 package main
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 	"time"
 )
+
+func TestManifestPathMetaReachesIndex(t *testing.T) {
+	raw := `{"reports":[{"id":"web-home","file":"web-home.html","platform":"web","device":"phone",
+		"flow":"timing/home","stats":{"window_hours":6,"count":12,"p50_ms":800,"p90_ms":2000}}]}`
+	var m traceReportsManifest
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		t.Fatal(err)
+	}
+	out, err := json.Marshal(m.Reports[0].TraceReportEntry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]interface{}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["platform"] != "web" || got["device"] != "phone" || got["flow"] != "timing/home" {
+		t.Errorf("path meta lost: %s", out)
+	}
+	if stats, _ := got["stats"].(map[string]interface{}); stats["count"] != float64(12) {
+		t.Errorf("stats lost: %s", out)
+	}
+}
 
 func TestMergeTraceReportsPrunesAndOrders(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)

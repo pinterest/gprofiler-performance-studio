@@ -232,17 +232,15 @@ class ZipkinES:
             "_source": ["traceId", "name", "duration", "timestamp_millis", f"tags.{self.cfg.cluster_tag}"]})
         return [h["_source"] for h in res["hits"]["hits"]]
 
-    def root_candidates(self, root: str, platform: str, date: Optional[str], hours: float,
-                        max_ms: int, limit: int, min_age_min: float = 0) -> List[Dict[str, Any]]:
-        """Client timing roots (client service + '<root_prefix><root>' span) from the last `hours`
-        (but at least `min_age_min` old, so profiles for the window are indexed) that share a
-        traceId with backend SERVER spans (the client stamped its trace id on the API calls).
-        Returns slowest-first with the number of backend spans per trace."""
-        idx = self.window_indices(date, hours)
+    def root_filter(self, root: str, platform: str, hours: float, min_age_min: float = 0,
+                    tags: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+        """ES filter for client timing roots: client service + '<root_prefix><root>' span, from the
+        last `hours` but at least `min_age_min` old, carrying every tag in `tags`."""
         pre = self.cfg.root_prefix
         name = root if (not pre or root.startswith(pre)) else pre + root
-        flt: List[Dict[str, Any]] = [{"term": {"localEndpoint.serviceName": platform}}, {"term": {"name": name}},
-                                     {"range": {"duration": {"lte": max_ms * 1000}}}]
+        flt: List[Dict[str, Any]] = [{"term": {"localEndpoint.serviceName": platform}}, {"term": {"name": name}}]
+        # Zipkin indexes tag values only as "key=value" terms in _q.
+        flt += [{"term": {"_q": f"{k}={v}"}} for k, v in sorted((tags or {}).items())]
         now = dt.datetime.now(dt.timezone.utc)
         rng: Dict[str, int] = {}
         if hours:
@@ -251,6 +249,28 @@ class ZipkinES:
             rng["lte"] = int((now - dt.timedelta(minutes=min_age_min)).timestamp() * 1000)
         if rng:
             flt.append({"range": {"timestamp_millis": rng}})
+        return flt
+
+    def root_stats(self, root: str, platform: str, date: Optional[str], hours: float,
+                   tags: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+        """How hot a client timing root is: count and p50/p90 duration over the last `hours`."""
+        res = self.search(self.window_indices(date, hours), {
+            "size": 0, "track_total_hits": True,
+            "query": {"bool": {"filter": self.root_filter(root, platform, hours, 0, tags)}},
+            "aggs": {"p": {"percentiles": {"field": "duration", "percents": [50, 90]}}}})
+        pct = res["aggregations"]["p"]["values"]
+        return {"window_hours": hours, "count": res["hits"]["total"]["value"],
+                "p50_ms": round((pct.get("50.0") or 0) / 1000), "p90_ms": round((pct.get("90.0") or 0) / 1000)}
+
+    def root_candidates(self, root: str, platform: str, date: Optional[str], hours: float,
+                        max_ms: int, limit: int, min_age_min: float = 0,
+                        tags: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+        """Client timing roots (see root_filter; at least `min_age_min` old so profiles for the
+        window are indexed) that share a traceId with backend SERVER spans (the client stamped its
+        trace id on the API calls). Returns slowest-first with the number of backend spans per trace."""
+        idx = self.window_indices(date, hours)
+        flt = self.root_filter(root, platform, hours, min_age_min, tags)
+        flt.append({"range": {"duration": {"lte": max_ms * 1000}}})
         res = self.search(idx, {"size": limit, "sort": [{"duration": {"order": "desc"}}],
                                 "query": {"bool": {"filter": flt}},
                                 "_source": ["traceId", "name", "duration", "timestamp_millis"]})
@@ -1133,6 +1153,9 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--batch", action="store_true", help="render every entry of config 'reports' into --out-dir "
                    "and write manifest.json there")
     ap.add_argument("--platform", help="with --root: client service (default: first of config client.services)")
+    ap.add_argument("--tag", action="append", default=[], metavar="KEY=VALUE",
+                    help="with --root: only roots carrying this span tag (repeatable), e.g. a device class")
+    ap.add_argument("--device", help="with --root: device type label recorded in the report metadata")
     ap.add_argument("--hours", type=float, default=6, help="with --root: look back this many hours")
     ap.add_argument("--min-age-min", type=float, default=20,
                     help="with --root: skip traces younger than this (profile indexing lag)")
@@ -1179,14 +1202,23 @@ def render(cfg: Config, es: ZipkinES, src: Optional[StudioAPI], profiled: List[s
     agg_rows: List[Dict[str, Any]] = []
     agg_n = 0
     root_label = None
+    path_meta: Dict[str, Any] = {}
     if args.root:
         platform = args.platform or (cfg.client_services[0] if cfg.client_services else None)
         if not platform:
             raise LookupError("--root needs --platform or client.services in config")
+        tags = parse_tags(args.tag)
         max_ms = args.max_ms if args.max_ms != 5000 else 15000  # client timings run longer than server spans
-        cands = es.root_candidates(args.root, platform, args.date, args.hours, max_ms, 200, args.min_age_min)
+        cands = es.root_candidates(args.root, platform, args.date, args.hours, max_ms, 200, args.min_age_min, tags)
         if not cands:
             raise LookupError(f"no {platform} {args.root} trace joined to backend spans in the last {args.hours}h")
+        path_meta = {"platform": platform, "flow": cands[0]["name"]}
+        if args.device:
+            path_meta["device"] = args.device
+        try:
+            path_meta["stats"] = es.root_stats(args.root, platform, args.date, args.hours, tags)
+        except Exception as ex:  # noqa: BLE001 -- volume is for sorting only; the report is still useful
+            print(f"  warning: root stats unavailable ({str(ex)[:200]})", file=sys.stderr)
         print(f"  {len(cands)}/{cands[0]['total_roots']} {platform} {cands[0]['name']} roots (last {args.hours:g}h, "
               f"≤{max_ms} ms) joined to backend spans", file=sys.stderr)
         by_rich = sorted(cands, key=lambda c: -c["backend_spans"])
@@ -1307,6 +1339,7 @@ def render(cfg: Config, es: ZipkinES, src: Optional[StudioAPI], profiled: List[s
                       "profile": info[a["cluster"]]["proxy"] or (a["cluster"] if info[a["cluster"]]["profiled"] else None)}
                      for a in ranked[:10]],
         "embedded_profiles": sorted(k for k, v in prof.items() if v.get("outcome") == "ok"),
+        **path_meta,
     }
     if args.quiet:
         return meta
@@ -1387,22 +1420,36 @@ def info_ops(info: Dict[str, Dict[str, Any]], target: str) -> Set[str]:
 
 
 REPORT_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
-REPORT_OPTIONS = {"trace_id", "slowest", "root", "platform", "hours", "min_age_min", "pick", "agg", "cluster", "op",
-                  "max_ms", "clip", "embed_hotspots", "span_min_pct", "profile_min_pct", "focus"}
+REPORT_OPTIONS = {"trace_id", "slowest", "root", "platform", "device", "hours", "min_age_min", "pick", "agg",
+                  "cluster", "op", "max_ms", "clip", "embed_hotspots", "span_min_pct", "profile_min_pct", "focus"}
+
+
+def parse_tags(items: List[str]) -> Dict[str, str]:
+    out = {}
+    for it in items:
+        k, sep, v = it.partition("=")
+        if not sep or not k:
+            raise ValueError(f"tag {it!r} must be KEY=VALUE")
+        out[k] = v
+    return out
 
 
 def report_args(ap: argparse.ArgumentParser, spec: Dict[str, Any], out_dir: str) -> argparse.Namespace:
     rid = spec.get("id", "")
     if not REPORT_ID.match(rid):
         raise ValueError(f"report id {rid!r} must match {REPORT_ID.pattern}")
-    unknown = set(spec) - REPORT_OPTIONS - {"id", "label"}
+    unknown = set(spec) - REPORT_OPTIONS - {"id", "label", "tags"}
     if unknown:
         raise ValueError(f"report {rid}: unknown options {sorted(unknown)}")
     if sum(1 for k in ("trace_id", "slowest", "root") if spec.get(k)) != 1:
         raise ValueError(f"report {rid}: exactly one of trace_id, slowest, root is required")
+    tags = spec.get("tags") or {}
+    if not isinstance(tags, dict) or not all(isinstance(k, str) and k and isinstance(v, str) for k, v in tags.items()):
+        raise ValueError(f"report {rid}: tags must map tag names to string values")
     args = ap.parse_args(["--out", os.path.join(out_dir, f"{rid}.html"), "--quiet"])
     for k in REPORT_OPTIONS & set(spec):
         setattr(args, k, spec[k])
+    args.tag = [f"{k}={v}" for k, v in tags.items()]
     return args
 
 
