@@ -57,9 +57,15 @@ export const deviceKey = (r) => {
 // Client-time spent in the path over the stats window: how many users wait, times how long.
 const hotness = (r) => (r.stats?.count || 0) * (r.stats?.p50_ms || 0);
 
-export const pathOptions = (reports, device) =>
+export const TAIL = 'tail';
+export const sampleOf = (r) => r.sample || TAIL;
+export const sampleLabel = (s) => (s === TAIL ? 'Tail (slowest traces)' : `Typical (${s})`);
+
+export const pathOptions = (reports, device, sample) =>
     _.sortBy(
-        _.uniqBy(reports, 'id').filter((r) => device === ALL_DEVICES || deviceKey(r) === device),
+        _.uniqBy(reports, 'id').filter(
+            (r) => (device === ALL_DEVICES || deviceKey(r) === device) && (!sample || sampleOf(r) === sample)
+        ),
         [(r) => -hotness(r), (r) => r.label || r.id]
     );
 
@@ -71,12 +77,14 @@ const formatStats = (s) =>
 const formatRun = (run) => {
     const at = new Date(run.generated_at).toLocaleString();
     const wall = run.wall_ms ? ` · ${(run.wall_ms / 1000).toFixed(1)} s` : '';
-    return `${at}${wall}${run.trace_id ? ` · ${run.trace_id}` : ''}`;
+    const advice = run.advice?.findings ? ` · ${run.advice.findings} findings${run.advice.model ? ' + LLM' : ''}` : '';
+    return `${at}${wall}${advice}${run.trace_id ? ` · ${run.trace_id}` : ''}`;
 };
 
 const TraceReportsPage = () => {
     const [query, setQuery] = useQueryParams({
         device: withDefault(StringParam, ALL_DEVICES),
+        sample: withDefault(StringParam, TAIL),
         report: StringParam,
         window: withDefault(StringParam, '24h'),
         run: StringParam,
@@ -89,7 +97,9 @@ const TraceReportsPage = () => {
     const reports = useMemo(() => data?.reports || [], [data]);
     const devices = useMemo(() => _.sortBy(_.uniq(reports.map(deviceKey).filter(Boolean))), [reports]);
     const device = devices.includes(query.device) ? query.device : ALL_DEVICES;
-    const reportOptions = useMemo(() => pathOptions(reports, device), [reports, device]);
+    const samples = useMemo(() => _.sortBy(_.uniq(reports.map(sampleOf)), (s) => (s === TAIL ? '' : s)), [reports]);
+    const sample = samples.length > 1 ? (samples.includes(query.sample) ? query.sample : samples[0]) : null;
+    const reportOptions = useMemo(() => pathOptions(reports, device, sample), [reports, device, sample]);
     const reportId = _.some(reportOptions, { id: query.report }) ? query.report : reportOptions[0]?.id;
     const runs = useMemo(() => runsInWindow(reports, reportId, query.window), [reports, reportId, query.window]);
     const run = _.find(runs, { path: query.run }) || runs[0];
@@ -115,6 +125,22 @@ const TraceReportsPage = () => {
                         ))}
                     </Select>
                 </FormControl>
+                {sample && (
+                    <FormControl size='small' sx={{ minWidth: 180 }}>
+                        <InputLabel id='trace-report-sample'>Latency</InputLabel>
+                        <Select
+                            labelId='trace-report-sample'
+                            label='Latency'
+                            value={sample}
+                            onChange={(e) => setQuery({ sample: e.target.value, report: undefined, run: undefined })}>
+                            {samples.map((s) => (
+                                <MenuItem key={s} value={s}>
+                                    {sampleLabel(s)}
+                                </MenuItem>
+                            ))}
+                        </Select>
+                    </FormControl>
+                )}
                 <FormControl size='small' sx={{ minWidth: 320 }}>
                     <InputLabel id='trace-report-path'>Trace path (hottest first)</InputLabel>
                     <Select
@@ -180,6 +206,7 @@ const TraceReportsPage = () => {
                         title='trace profile report'
                         src={htmlUrl}
                         sandbox='allow-scripts allow-popups allow-popups-to-escape-sandbox'
+                        allow='clipboard-write'
                         referrerPolicy='no-referrer'
                         style={{ width: '100%', height: '100%', minHeight: 600, border: 0, background: 'white' }}
                     />

@@ -64,7 +64,9 @@ type TraceReportEntry struct {
 	Platform    string          `json:"platform,omitempty"`
 	Device      string          `json:"device,omitempty"`
 	Flow        string          `json:"flow,omitempty"`
+	Sample      string          `json:"sample,omitempty"`
 	Stats       json.RawMessage `json:"stats,omitempty"`
+	Advice      json.RawMessage `json:"advice,omitempty"`
 	Clusters    json.RawMessage `json:"clusters,omitempty"`
 }
 

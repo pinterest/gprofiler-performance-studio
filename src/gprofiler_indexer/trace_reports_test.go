@@ -25,7 +25,8 @@ import (
 
 func TestManifestPathMetaReachesIndex(t *testing.T) {
 	raw := `{"reports":[{"id":"web-home","file":"web-home.html","platform":"web","device":"phone",
-		"flow":"timing/home","stats":{"window_hours":6,"count":12,"p50_ms":800,"p90_ms":2000}}]}`
+		"flow":"timing/home","sample":"p50","stats":{"window_hours":6,"count":12,"p50_ms":800,"p90_ms":2000},
+		"advice":{"findings":3,"top":["a"]}}]}`
 	var m traceReportsManifest
 	if err := json.Unmarshal([]byte(raw), &m); err != nil {
 		t.Fatal(err)
@@ -38,7 +39,8 @@ func TestManifestPathMetaReachesIndex(t *testing.T) {
 	if err := json.Unmarshal(out, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got["platform"] != "web" || got["device"] != "phone" || got["flow"] != "timing/home" {
+	if got["platform"] != "web" || got["device"] != "phone" || got["flow"] != "timing/home" || got["sample"] != "p50" ||
+		got["advice"] == nil {
 		t.Errorf("path meta lost: %s", out)
 	}
 	if stats, _ := got["stats"].(map[string]interface{}); stats["count"] != float64(12) {

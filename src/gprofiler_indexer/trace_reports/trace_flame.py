@@ -56,6 +56,8 @@ from collections import Counter, defaultdict
 from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlencode
 
+import trace_advisor
+
 # --------------------------------------------------------------------------- config
 
 
@@ -106,6 +108,7 @@ class Config:
         self.framework_prefixes: List[str] = fr.get("framework_prefixes", [])
         self.proxy_overrides: Dict[str, str] = c.get("proxy_overrides", {})
         self.min_window_minutes: int = int(c.get("min_window_minutes", 3))
+        self.advisor: Dict[str, Any] = c.get("advisor", {})
         esc = "|".join(re.escape(p) for p in self.app_prefixes) or "(?!)"
         # Application frames: JVM form "<prefix>pkg/Class.method(" built from app_prefixes, plus any
         # extra regexes from config with named groups (?P<cls>...) and (?P<meth>...) — e.g. py-spy's
@@ -252,29 +255,41 @@ class ZipkinES:
         return flt
 
     def root_stats(self, root: str, platform: str, date: Optional[str], hours: float,
-                   tags: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
-        """How hot a client timing root is: count and p50/p90 duration over the last `hours`."""
+                   tags: Optional[Dict[str, str]] = None, extra_pct: Optional[int] = None) -> Dict[str, Any]:
+        """How hot a client timing root is: count and p50/p90/p99 duration over the last `hours`."""
+        percents = sorted({50, 90, 99} | ({extra_pct} if extra_pct else set()))
         res = self.search(self.window_indices(date, hours), {
             "size": 0, "track_total_hits": True,
             "query": {"bool": {"filter": self.root_filter(root, platform, hours, 0, tags)}},
-            "aggs": {"p": {"percentiles": {"field": "duration", "percents": [50, 90]}}}})
+            "aggs": {"p": {"percentiles": {"field": "duration", "percents": percents}}}})
         pct = res["aggregations"]["p"]["values"]
-        return {"window_hours": hours, "count": res["hits"]["total"]["value"],
-                "p50_ms": round((pct.get("50.0") or 0) / 1000), "p90_ms": round((pct.get("90.0") or 0) / 1000)}
+        out: Dict[str, Any] = {"window_hours": hours, "count": res["hits"]["total"]["value"]}
+        for p in percents:
+            out[f"p{p}_ms"] = round((pct.get(f"{float(p)}") or 0) / 1000)
+        return out
 
     def root_candidates(self, root: str, platform: str, date: Optional[str], hours: float,
                         max_ms: int, limit: int, min_age_min: float = 0,
-                        tags: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+                        tags: Optional[Dict[str, str]] = None, min_ms: int = 0,
+                        random_seed: Optional[int] = None) -> List[Dict[str, Any]]:
         """Client timing roots (see root_filter; at least `min_age_min` old so profiles for the
-        window are indexed) that share a traceId with backend SERVER spans (the client stamped its
-        trace id on the API calls). Returns slowest-first with the number of backend spans per trace."""
+        window are indexed) with min_ms <= duration <= max_ms that share a traceId with backend SERVER
+        spans (the client stamped its trace id on the API calls). The slowest `limit` roots, or a
+        random `limit` of them with random_seed. Returns slowest-first with the number of backend
+        spans per trace."""
         idx = self.window_indices(date, hours)
         flt = self.root_filter(root, platform, hours, min_age_min, tags)
-        flt.append({"range": {"duration": {"lte": max_ms * 1000}}})
-        res = self.search(idx, {"size": limit, "sort": [{"duration": {"order": "desc"}}],
-                                "query": {"bool": {"filter": flt}},
+        flt.append({"range": {"duration": {"gte": min_ms * 1000, "lte": max_ms * 1000}}})
+        query: Dict[str, Any] = {"bool": {"filter": flt}}
+        if random_seed is None:
+            order: List[Any] = [{"duration": {"order": "desc"}}]
+        else:
+            query = {"function_score": {"query": query, "boost_mode": "replace",
+                                        "random_score": {"seed": random_seed, "field": "_seq_no"}}}
+            order = ["_score"]
+        res = self.search(idx, {"size": limit, "sort": order, "query": query,
                                 "_source": ["traceId", "name", "duration", "timestamp_millis"]})
-        roots = [h["_source"] for h in res["hits"]["hits"]]
+        roots = sorted((h["_source"] for h in res["hits"]["hits"]), key=lambda r: -r["duration"])
         if not roots:
             return []
         ids = [r["traceId"] for r in roots]
@@ -890,6 +905,11 @@ HTML_TMPL = r"""<!doctype html>
  .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;word-break:break-all}
  h3{margin:10px 0 4px} h4{margin:10px 0 2px} .muted{color:#777}
  .box{border:1px solid #cfe0ff;background:#f3f7ff;border-radius:6px;padding:8px 10px;margin:8px 0}
+ #advice{border-bottom:1px solid #ddd;padding:6px 14px;max-height:340px;overflow:auto}
+ #advice summary{cursor:pointer;padding:2px 0} #advice p{margin:4px 0}
+ .rec{margin:6px 0;padding:6px 9px;border-left:3px solid #1a73e8;background:#f8faff}
+ .fid,.ev{cursor:pointer;color:#1a56b8} .ev:hover,.fid:hover{text-decoration:underline}
+ textarea.prompt{width:100%%;height:180px;box-sizing:border-box;font:11px/1.35 ui-monospace,Menlo,Consolas,monospace}
 </style></head><body>
 <header>
  <b>Trace %(trace_id)s</b> <span class="muted">(%(n_spans)d spans, %(trace_ms).0f ms wall, %(t0)s)</span>
@@ -897,6 +917,7 @@ HTML_TMPL = r"""<!doctype html>
  <input id="q" placeholder="search (regex: service, op, class)" oninput="fg.search(this.value)">
  <span class="muted">width = total work in subtree · click a bar for the profile join</span>
 </header>
+<div id="advice" hidden></div>
 <div id="wrap">
  <div id="left">
   <div id="chart"></div>
@@ -932,6 +953,7 @@ const prof = %(prof_json)s;
 const CL = %(clusters_json)s;      // cluster -> {profiled, proxy, window:[start,end]}
 const STUDIO = %(studio_json)s;    // base URL of Performance Studio
 const APP_PREFIXES = %(app_prefixes_json)s;  // slash-form package prefixes of application frames
+const ADVICE = %(advice_json)s;    // {findings, prompt, llm?: {summary, recommendations, model}, llm_error?}
 function studioLink(cluster, win, search){
   const q = new URLSearchParams({service: cluster, startTime: win[0], endTime: win[1], view: search ? 'table' : 'flamegraph', gtab: '1', rtms: '1', pm: '1', wp: '100'});
   if (search) q.set('search', search);
@@ -943,6 +965,8 @@ const fg = flamegraph().width(Math.max(document.getElementById('chart').clientWi
   .inverted(true).sort(false).selfValue(true).minFrameSize(1).transitionDuration(250)
   .setColorMapper((d, orig) => d.highlight ? '#e6c200' : palette(d.data.svc))
   .label(d => `${d.data.name} — total work ${(d.value/1000).toFixed(1)} ms (${(100*d.value/totalWork).toFixed(2)}%%), wall ${d.data.ms} ms, self ${d.data.self_ms ?? d.data.ms} ms`)
+  .setSearchMatch((d, term) => { if (term.startsWith('cluster=')) return d.data.cluster === term.slice(8);
+                                 try { return new RegExp(term,'i').test(d.data.name); } catch(e){ return false; } })
   .onClick(d => show(d.data, d.value));
 d3.select('#chart').datum(data).call(fg);
 window.addEventListener('load', () => { const ci = data.cluster && CL[data.cluster]; if (ci && prof[ci.proxy||data.cluster]) renderProfile(ci.proxy||data.cluster, null, null); });
@@ -954,7 +978,7 @@ function frameRx(dotted){
   const i=dotted.lastIndexOf('.'); return i<0 ? escRe(dotted) : escRe(dotted.slice(0,i).replace(/\./g,'/')+'.'+dotted.slice(i+1)); }
 function tbl(rows, k1, k2, h1, rxOf){ let t=`<table><tr><th>${h1}</th><th class="num">%% CPU</th></tr>`;
   for(const r of rows){ const rx = rxOf ? rxOf(r) : null;
-    t+=`<tr><td class="mono${rx?' click':''}" ${rx?`title="highlight in the profile below" onclick="psearch(${JSON.stringify(rx).replace(/"/g,'&quot;')})"`:''}>${esc(r[k1])}</td><td class="num">${r[k2]}</td></tr>`; }
+    t+=`<tr><td class="mono${rx?' click':''}" ${rx?`title="highlight in the profile below" onclick="psearch(${esc(JSON.stringify(rx))})"`:''}>${esc(r[k1])}</td><td class="num">${r[k2]}</td></tr>`; }
   return t+'</table>'; }
 
 // ---------------------------------------------------------------- embedded gProfiler profile
@@ -1068,6 +1092,51 @@ function show(d, total){
   document.getElementById('detail').innerHTML = h;
   renderProfile(d.proxy||d.cluster, d.cls||d.op||null, d.search||null);
 }
+// ---------------------------------------------------------------- findings & recommendations
+function spanSearch(term){ document.getElementById('q').value = term; fg.search(term); document.getElementById('chart').scrollIntoView({behavior:'smooth',block:'start'}); }
+function copyPrompt(){
+  const ta = document.getElementById('promptText'), done = m => { document.getElementById('copied').textContent = m; };
+  const fallback = () => { ta.closest('details').open = true; ta.focus(); ta.select();
+    try { done(document.execCommand('copy') ? 'copied' : 'selected: press Ctrl/Cmd+C'); } catch(e){ done('selected: press Ctrl/Cmd+C'); } };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(ADVICE.prompt).then(() => done('copied'), fallback);
+  else fallback();
+}
+(function renderAdvice(){
+  const el = document.getElementById('advice');
+  if (!ADVICE || !(ADVICE.findings||[]).length) return;
+  const EV = [];
+  const ev = (e, cluster) => { EV.push(Object.assign({cluster}, e)); const i = EV.length-1;
+    if (e.span) return `<span class="ev mono" data-ev="${i}" title="highlight in the trace">${esc(e.span)}</span>${e.ms!=null?` ${e.ms} ms`:''}`;
+    if (e.cluster) return `<span class="ev mono" data-ev="${i}" title="highlight this cluster's spans">${esc(e.cluster)}</span>${e.ms!=null?` ${e.ms} ms`:''}`;
+    if (e.frame) return `<span class="ev mono" data-ev="${i}" title="highlight in the profile">${esc(e.frame)}</span>${e.pct!=null?` ${e.pct}%%`:''}`;
+    return ''; };
+  const L = ADVICE.llm;
+  let h = `<details open><summary><b>Recommendations</b> ${L ? `<span class="tag join">LLM · ${esc(L.model)}</span>`
+          : `<span class="muted">rule-based findings only${ADVICE.llm_error ? ' (LLM: '+esc(ADVICE.llm_error)+')' : ''}</span>`}
+          · <b>${ADVICE.findings.length}</b> findings · <button id="copyPrompt" title="the findings and trace context as an LLM prompt">Copy LLM prompt</button> <span id="copied" class="muted"></span></summary>`;
+  if (L){
+    if (L.summary) h += `<p>${esc(L.summary)}</p>`;
+    for (const r of L.recommendations) h += `<div class="rec"><b>${esc(r.title)}</b>${r.owner?` <span class="tag">${esc(r.owner)}</span>`:''}`
+      + `${r.est_savings_ms!=null?` <span class="tag ok">~${r.est_savings_ms} ms</span>`:''}${r.confidence?` <span class="muted">${esc(r.confidence)} confidence</span>`:''}`
+      + `<div>${esc(r.why)}</div><div><i>Action:</i> ${esc(r.action)}</div>`
+      + `${r.evidence.length?`<div class="muted">evidence: ${r.evidence.map(id => `<span class="fid" data-f="${esc(id)}">${esc(id)}</span>`).join(' ')}</div>`:''}</div>`;
+  }
+  h += '<table><tr><th>id</th><th>finding</th><th class="num">impact</th><th>evidence</th></tr>';
+  for (const f of ADVICE.findings) h += `<tr id="f-${esc(f.id)}"><td>${esc(f.id)}</td><td><b>${esc(f.title)}</b><div class="muted">${esc(f.rule)} · ${esc(f.detail)}</div></td>`
+      + `<td class="num">${f.impact_ms!=null?f.impact_ms+' ms':''}</td><td>${f.evidence.map(e => ev(e, f.cluster)).join('<br>')}</td></tr>`;
+  h += '</table><details><summary class="muted">LLM prompt (paste into any LLM)</summary><textarea class="prompt" readonly id="promptText"></textarea></details></details>';
+  el.innerHTML = h; el.hidden = false;
+  document.getElementById('promptText').value = ADVICE.prompt;
+  el.addEventListener('click', e => {
+    const t = e.target.closest('[data-ev],[data-f],#copyPrompt'); if (!t) return;
+    if (t.id === 'copyPrompt'){ e.preventDefault(); copyPrompt(); return; }
+    if (t.dataset.f){ const row = document.getElementById('f-'+t.dataset.f); if (row){ row.scrollIntoView({block:'nearest'}); row.style.background='#fff6cc'; setTimeout(() => { row.style.background=''; }, 1500); } return; }
+    const x = EV[+t.dataset.ev];
+    if (x.span) spanSearch(escRe(x.span));
+    else if (x.frame){ const ci = CL[x.cluster]; renderProfile(prof[x.cluster] ? x.cluster : (ci && ci.proxy) || x.cluster, null, null); psearch(frameRx(x.frame)); }
+    else if (x.cluster) spanSearch('cluster='+x.cluster);
+  });
+})();
 </script></body></html>
 """
 
@@ -1156,6 +1225,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--tag", action="append", default=[], metavar="KEY=VALUE",
                     help="with --root: only roots carrying this span tag (repeatable), e.g. a device class")
     ap.add_argument("--device", help="with --root: device type label recorded in the report metadata")
+    ap.add_argument("--sample", default="tail", type=check_sample,
+                    help="with --root: 'tail' = among the slowest roots (default), or pNN (e.g. p50, p90) = "
+                         f"roots within ±{SAMPLE_BAND * 100:.0f}%% of that duration percentile")
+    ap.add_argument("--no-llm", action="store_true", help="rule-based findings only; skip the advisor LLM call")
     ap.add_argument("--hours", type=float, default=6, help="with --root: look back this many hours")
     ap.add_argument("--min-age-min", type=float, default=20,
                     help="with --root: skip traces younger than this (profile indexing lag)")
@@ -1185,7 +1258,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def render(cfg: Config, es: ZipkinES, src: Optional[StudioAPI], profiled: List[str],
-           args: argparse.Namespace) -> Dict[str, Any]:
+           args: argparse.Namespace, llm: Optional[trace_advisor.LLM] = None) -> Dict[str, Any]:
     """Render one trace page to args.out; returns its manifest entry."""
     trace_id = args.trace_id
     if args.slowest:
@@ -1208,19 +1281,34 @@ def render(cfg: Config, es: ZipkinES, src: Optional[StudioAPI], profiled: List[s
         if not platform:
             raise LookupError("--root needs --platform or client.services in config")
         tags = parse_tags(args.tag)
+        pct = sample_percentile(args.sample)
         max_ms = args.max_ms if args.max_ms != 5000 else 15000  # client timings run longer than server spans
-        cands = es.root_candidates(args.root, platform, args.date, args.hours, max_ms, 200, args.min_age_min, tags)
+        min_ms = 0
+        stats = None
+        try:
+            stats = es.root_stats(args.root, platform, args.date, args.hours, tags, pct)
+        except Exception as ex:  # noqa: BLE001 -- volume is for sorting only; tail sampling does not need it
+            if pct:
+                raise
+            print(f"  warning: root stats unavailable ({str(ex)[:200]})", file=sys.stderr)
+        if pct:
+            # Typical traces: roots within ±SAMPLE_BAND of the percentile, not the slowest ones.
+            target = stats[f"p{pct}_ms"]
+            min_ms, max_ms = int(target * (1 - SAMPLE_BAND)), min(max_ms, int(target * (1 + SAMPLE_BAND)) + 1)
+        # Few roots join to backend spans (only sampled requests carry the trace id), so typical
+        # sampling draws a larger random set from the band; the seed changes every hour.
+        cands = es.root_candidates(args.root, platform, args.date, args.hours, max_ms, 1000 if pct else 200,
+                                   args.min_age_min, tags, min_ms,
+                                   int(dt.datetime.now(dt.timezone.utc).timestamp() // 3600) if pct else None)
         if not cands:
             raise LookupError(f"no {platform} {args.root} trace joined to backend spans in the last {args.hours}h")
-        path_meta = {"platform": platform, "flow": cands[0]["name"]}
+        path_meta = {"platform": platform, "flow": cands[0]["name"], "sample": args.sample}
         if args.device:
             path_meta["device"] = args.device
-        try:
-            path_meta["stats"] = es.root_stats(args.root, platform, args.date, args.hours, tags)
-        except Exception as ex:  # noqa: BLE001 -- volume is for sorting only; the report is still useful
-            print(f"  warning: root stats unavailable ({str(ex)[:200]})", file=sys.stderr)
+        if stats:
+            path_meta["stats"] = stats
         print(f"  {len(cands)}/{cands[0]['total_roots']} {platform} {cands[0]['name']} roots (last {args.hours:g}h, "
-              f"≤{max_ms} ms) joined to backend spans", file=sys.stderr)
+              f"{min_ms}..{max_ms} ms) joined to backend spans", file=sys.stderr)
         by_rich = sorted(cands, key=lambda c: -c["backend_spans"])
         if args.pick == "richest":
             order = by_rich
@@ -1321,12 +1409,21 @@ def render(cfg: Config, es: ZipkinES, src: Optional[StudioAPI], profiled: List[s
     clusters_js = {cl: {"profiled": c["profiled"], "proxy": c["proxy"], "no_samples": bool(c.get("no_samples")),
                         "window": [iso(c["window"][0]), iso(c["window"][1])]}
                    for cl, c in info.items()}
+    try:
+        advice = trace_advisor.advise(cfg.advisor, llm, flame_root, parents, ranked, info, prof, agg_rows, agg_n,
+                                      cfg.client_services, path_meta,
+                                      {"root": flame_root.label(), "wall_ms": round(flame_root.dur / 1000),
+                                       "spans": len(nodes)})
+    except Exception as ex:  # noqa: BLE001 -- the trace/profile join is the report; advice is extra
+        print(f"  warning: findings failed ({type(ex).__name__}: {str(ex)[:200]})", file=sys.stderr)
+        advice = {"findings": [], "prompt": "", "error": f"{type(ex).__name__}: {str(ex)[:200]}"}
     page = HTML_TMPL % {
         "trace_id": html.escape(trace_id) + (f" · {html.escape(flame_root.label())}" if focus else ""),
         "n_spans": len(nodes), "trace_ms": root.dur / 1000, "t0": iso(us_to_dt(root.start)),
         "cluster_rows": cluster_rows(ranked, info), "flame_json": script_json(flame),
         "prof_json": script_json(prof), "clusters_json": script_json(clusters_js),
         "studio_json": script_json(cfg.studio_url), "app_prefixes_json": script_json(cfg.app_prefixes),
+        "advice_json": script_json(advice),
         "agg_html": agg_html(agg_rows, agg_n, root_label, profiled, cfg) if agg_rows else "",
     }
     with open(args.out, "w") as f:
@@ -1339,6 +1436,7 @@ def render(cfg: Config, es: ZipkinES, src: Optional[StudioAPI], profiled: List[s
                       "profile": info[a["cluster"]]["proxy"] or (a["cluster"] if info[a["cluster"]]["profiled"] else None)}
                      for a in ranked[:10]],
         "embedded_profiles": sorted(k for k, v in prof.items() if v.get("outcome") == "ok"),
+        "advice": trace_advisor.summary(advice) if advice["findings"] else None,
         **path_meta,
     }
     if args.quiet:
@@ -1420,8 +1518,23 @@ def info_ops(info: Dict[str, Dict[str, Any]], target: str) -> Set[str]:
 
 
 REPORT_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
-REPORT_OPTIONS = {"trace_id", "slowest", "root", "platform", "device", "hours", "min_age_min", "pick", "agg",
+REPORT_OPTIONS = {"trace_id", "slowest", "root", "platform", "device", "sample", "hours", "min_age_min", "pick", "agg",
                   "cluster", "op", "max_ms", "clip", "embed_hotspots", "span_min_pct", "profile_min_pct", "focus"}
+
+
+SAMPLE_BAND = 0.15
+SAMPLE = re.compile(r"^(tail|p([1-9]\d?))$")
+
+
+def check_sample(s: str) -> str:
+    if not SAMPLE.match(str(s)):
+        raise ValueError(f"sample {s!r} must be 'tail' or pNN (p1..p99)")
+    return s
+
+
+def sample_percentile(s: str) -> Optional[int]:
+    m = SAMPLE.match(s)
+    return int(m.group(2)) if m and m.group(2) else None
 
 
 def parse_tags(items: List[str]) -> Dict[str, str]:
@@ -1446,6 +1559,8 @@ def report_args(ap: argparse.ArgumentParser, spec: Dict[str, Any], out_dir: str)
     tags = spec.get("tags") or {}
     if not isinstance(tags, dict) or not all(isinstance(k, str) and k and isinstance(v, str) for k, v in tags.items()):
         raise ValueError(f"report {rid}: tags must map tag names to string values")
+    if "sample" in spec:
+        check_sample(spec["sample"])
     args = ap.parse_args(["--out", os.path.join(out_dir, f"{rid}.html"), "--quiet"])
     for k in REPORT_OPTIONS & set(spec):
         setattr(args, k, spec[k])
@@ -1454,7 +1569,7 @@ def report_args(ap: argparse.ArgumentParser, spec: Dict[str, Any], out_dir: str)
 
 
 def run_batch(cfg: Config, es: ZipkinES, src: Optional[StudioAPI], profiled: List[str],
-              ap: argparse.ArgumentParser, out_dir: str) -> int:
+              ap: argparse.ArgumentParser, out_dir: str, llm: Optional[trace_advisor.LLM] = None) -> int:
     """Render every configured report; manifest.json lists what was written (and what failed)."""
     os.makedirs(out_dir, exist_ok=True)
     started = dt.datetime.now(dt.timezone.utc)
@@ -1463,7 +1578,7 @@ def run_batch(cfg: Config, es: ZipkinES, src: Optional[StudioAPI], profiled: Lis
         entry: Dict[str, Any] = {"id": spec.get("id"), "label": spec.get("label") or spec.get("id")}
         try:
             args = report_args(ap, spec, out_dir)
-            entry.update(render(cfg, es, src, profiled, args))
+            entry.update(render(cfg, es, src, profiled, args, llm))
             entry["file"] = os.path.basename(args.out)
         except Exception as ex:  # noqa: BLE001 -- one bad report must not stop the others
             entry["error"] = f"{type(ex).__name__}: {str(ex)[:300]}"
@@ -1491,14 +1606,15 @@ def main() -> int:
         except Exception as e:  # noqa: BLE001
             print(f"warning: profile source unavailable ({e}); links only", file=sys.stderr)
             src = None
+    llm = None if args.no_llm else trace_advisor.LLM(cfg.advisor.get("llm"))
     if args.batch:
         if not args.out_dir:
             ap.error("--batch needs --out-dir")
-        return run_batch(cfg, es, src, profiled, ap, args.out_dir)
+        return run_batch(cfg, es, src, profiled, ap, args.out_dir, llm)
     if not (args.trace_id or args.slowest or args.root) or not args.out:
         ap.error("one of --trace-id, --slowest, --root, --batch is required, and --out for single traces")
     try:
-        render(cfg, es, src, profiled, args)
+        render(cfg, es, src, profiled, args, llm)
     except LookupError as e:
         print(e, file=sys.stderr)
         return 1

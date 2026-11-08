@@ -33,11 +33,25 @@
     "checkout-prod": "checkout-canary"
   },
   "min_window_minutes": 3,
+  "advisor": {
+    "_comment": "rules: thresholds per finding rule (false disables one); llm: optional OpenAI-compatible chat completions endpoint that ranks the findings (url/model from env or here; the prompt is embedded in every report either way)",
+    "rules": {"fan_out": {"min_calls": 5, "min_total_ms": 50}, "cpu_hotspot": {"min_pct": 5}},
+    "llm": {
+      "url_env": "TRACE_REPORTS_LLM_URL",
+      "model_env": "TRACE_REPORTS_LLM_MODEL",
+      "api_key_env": "TRACE_REPORTS_LLM_API_KEY",
+      "headers": {},
+      "timeout_seconds": 120,
+      "max_calls_per_run": 30
+    }
+  },
   "reports": [
     {"id": "web-home-render", "label": "web: home render (end to end)", "root": "home_render",
      "platform": "web", "agg": 10},
     {"id": "web-home-render-phone", "label": "web: home render (phones)", "root": "home_render",
      "platform": "web", "device": "phone", "tags": {"device.type": "phone"}, "agg": 10},
+    {"id": "web-home-render-p50", "label": "web: home render (typical)", "root": "home_render",
+     "platform": "web", "sample": "p50", "agg": 10},
     {"id": "checkout-slowest", "label": "checkout: slowest request", "slowest": "checkout",
      "cluster": "checkout-prod", "op": "placeorder"}
   ]
