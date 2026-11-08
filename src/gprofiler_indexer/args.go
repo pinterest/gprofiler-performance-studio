@@ -19,6 +19,7 @@ package main
 import (
 	"flag"
 	"strings"
+	"time"
 )
 
 type CLIArgs struct {
@@ -49,6 +50,14 @@ type CLIArgs struct {
 	PostgresUser     string
 	PostgresPassword string
 	PostgresDB       string
+	// Trace reports (disabled unless TraceReportsConfig is set)
+	TraceReportsConfig        string
+	TraceReportsInterval      time.Duration
+	TraceReportsTimeout       time.Duration
+	TraceReportsS3Prefix      string
+	TraceReportsRetentionDays int
+	TraceReportsScript        string
+	TraceReportsPython        string
 }
 
 func NewCliArgs() *CLIArgs {
@@ -74,6 +83,13 @@ func NewCliArgs() *CLIArgs {
 		PostgresUser:     "gprofiler",
 		PostgresPassword: "",
 		PostgresDB:       "gprofiler_db",
+		// Trace reports defaults
+		TraceReportsInterval:      time.Hour,
+		TraceReportsTimeout:       45 * time.Minute,
+		TraceReportsS3Prefix:      "trace_reports",
+		TraceReportsRetentionDays: 14,
+		TraceReportsScript:        "/trace_reports/trace_flame.py",
+		TraceReportsPython:        "python3",
 	}
 }
 
@@ -128,10 +144,29 @@ func (ca *CLIArgs) ParseArgs() {
 		"PostgreSQL password")
 	flag.StringVar(&ca.PostgresDB, "postgres-db", LookupEnvOrString("GPROFILER_POSTGRES_DB_NAME", ca.PostgresDB),
 		"PostgreSQL database name (default gprofiler_db)")
+	// Trace reports
+	flag.StringVar(&ca.TraceReportsConfig, "trace-reports-config", LookupEnvOrString("TRACE_REPORTS_CONFIG",
+		ca.TraceReportsConfig), "trace report config JSON; enables hourly trace reports when set")
+	flag.DurationVar(&ca.TraceReportsInterval, "trace-reports-interval", LookupEnvOrDuration("TRACE_REPORTS_INTERVAL",
+		ca.TraceReportsInterval), "how often trace reports are rendered (default 1h)")
+	flag.DurationVar(&ca.TraceReportsTimeout, "trace-reports-timeout", LookupEnvOrDuration("TRACE_REPORTS_TIMEOUT",
+		ca.TraceReportsTimeout), "time limit for one trace reports run (default 45m)")
+	flag.StringVar(&ca.TraceReportsS3Prefix, "trace-reports-s3-prefix", LookupEnvOrString("TRACE_REPORTS_S3_PREFIX",
+		ca.TraceReportsS3Prefix), "S3 key prefix for trace reports, after -s3-path-prefix (default trace_reports)")
+	flag.IntVar(&ca.TraceReportsRetentionDays, "trace-reports-retention-days", LookupEnvOrInt("TRACE_REPORTS_RETENTION_DAYS",
+		ca.TraceReportsRetentionDays), "days to keep trace reports (default 14)")
+	flag.StringVar(&ca.TraceReportsScript, "trace-reports-script", LookupEnvOrString("TRACE_REPORTS_SCRIPT",
+		ca.TraceReportsScript), "trace report generator script")
+	flag.StringVar(&ca.TraceReportsPython, "trace-reports-python", LookupEnvOrString("TRACE_REPORTS_PYTHON",
+		ca.TraceReportsPython), "python interpreter for the generator")
 	flag.Parse()
 
 	// Normalize: strip any leading/trailing slashes so concatenation is consistent
 	ca.S3PathPrefix = strings.Trim(ca.S3PathPrefix, "/")
+	ca.TraceReportsS3Prefix = strings.Trim(ca.TraceReportsS3Prefix, "/")
+	if ca.TraceReportsConfig != "" && (ca.TraceReportsS3Prefix == "" || ca.TraceReportsInterval < time.Minute) {
+		logger.Fatal("trace reports need a non-empty -trace-reports-s3-prefix and an interval of at least 1m")
+	}
 
 	if ca.SQSQueue == "" && ca.InputFolder == "" {
 		logger.Fatal("You must supply the name of a queue (-sqs-queue QUEUE)")

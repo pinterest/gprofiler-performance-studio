@@ -25,12 +25,15 @@ ARG DEBIAN_MIRROR=http://deb.debian.org
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 RUN sed -i "s|http://deb.debian.org|${DEBIAN_MIRROR%/}|g" /etc/apt/sources.list.d/debian.sources
 
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
+# python3 runs the optional trace report generator (trace_reports/, stdlib only).
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates python3 && \
+    rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /data
 
 COPY --from=build /go/src/main /indexer
 COPY conf /conf
+COPY trace_reports /trace_reports
 
 RUN useradd -m -s /bin/bash -u 888 non_root && \
     chown -R non_root:non_root /data && \
