@@ -200,10 +200,8 @@ func BufferedClickHouseWrite(args *CLIArgs, channels *RecordChannels, wg *sync.W
 	if err != nil {
 		logger.Fatal(err)
 	}
-	logger.Infof("ClickHouse flush timeouts: stacks=%s metrics=%s",
-		args.stacksFlushInterval(), args.metricsFlushInterval())
-	stacksTicker := time.NewTicker(args.stacksFlushInterval())
-	metricsTicker := time.NewTicker(args.metricsFlushInterval())
+	stacksTicker := time.NewTicker(time.Second * ClickHouseStacksFlushTimeout)
+	metricsTicker := time.NewTicker(time.Second * ClickHouseMetricsFlushTimeout)
 	var buffRecords, buffMetricsRecords recordBuffer
 
 	for {
@@ -215,7 +213,7 @@ func BufferedClickHouseWrite(args *CLIArgs, channels *RecordChannels, wg *sync.W
 				buffRecords.add(stackRecord, stackRecord.InsertionTimestamp)
 				if len(buffRecords.records) >= args.ClickHouseStacksBatchSize {
 					clickhouseClient.flush(&buffRecords, args.ClickHouseStacksTable, FlushReasonSize)
-					stacksTicker.Reset(args.stacksFlushInterval())
+					stacksTicker.Reset(time.Second * ClickHouseStacksFlushTimeout)
 				}
 			} else {
 				channels.StacksRecords = nil
@@ -227,7 +225,7 @@ func BufferedClickHouseWrite(args *CLIArgs, channels *RecordChannels, wg *sync.W
 				buffMetricsRecords.add(metricRecords, time.Now())
 				if len(buffMetricsRecords.records) >= args.ClickHouseMetricsBatchSize {
 					clickhouseClient.flush(&buffMetricsRecords, args.ClickHouseMetricsTable, FlushReasonSize)
-					metricsTicker.Reset(args.metricsFlushInterval())
+					metricsTicker.Reset(time.Second * ClickHouseMetricsFlushTimeout)
 				}
 			} else {
 				channels.MetricsRecords = nil
