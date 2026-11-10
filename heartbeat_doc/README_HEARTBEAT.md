@@ -71,6 +71,7 @@ Tracks agent status and last-seen information. Upserted on `(hostname, service_n
 | `status` | `HostStatus DEFAULT 'active'` | |
 | `heartbeat_timestamp` | `timestamp` | Set by server on upsert |
 | `supported_perf_events` | `text[] NULL` | PMU events reported by the agent; used for bulk request validation |
+| `inventory_digest` | `text NULL` | sha256 of the canonical container/process inventory last **committed** for the host (`gprofiler_dev/heartbeat_inventory.py`). Compared on every beat; equal = no inventory writes. `NULL` = not synced under change detection yet (first rollout, or deferred by `GPROFILER_INVENTORY_SYNC_PER_SEC`) |
 | `created_at` / `updated_at` | `timestamp` | |
 
 Indexes: `hostname`, `service_name`, `status`, `heartbeat_timestamp`.

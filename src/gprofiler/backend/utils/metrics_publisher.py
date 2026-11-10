@@ -61,6 +61,9 @@ class NoopMetricsPublisher:
     
     def send_sli_metric(self, *args, **kwargs) -> bool:
         return False
+
+    def send_counter(self, *args, **kwargs) -> bool:
+        return False
     
     def flush_and_close(self):
         pass
@@ -294,6 +297,23 @@ class MetricsPublisher:
         
         # Log at INFO level for verification (shows actual metric being sent)
         logger.info(f"📊 Sending SLI metric: {metric_line}")
+        return self._send_metric(metric_line)
+
+    def send_counter(self, name: str, value: int, tags: Optional[Dict[str, Any]] = None) -> bool:
+        """
+        Send an operational counter with an explicit value (one line per call, however
+        large the value), as ``put <service>.<name> <ts> <value> service=... tag=...``.
+
+        Use this for high-volume internal counts (e.g. heartbeat inventory outcomes per
+        flush) where emitting one value-1 SLI line per event would be far too chatty.
+        """
+        if not self._enabled or value <= 0:
+            return False
+        tag_parts = [f"service={self._service_name}"]
+        for key, tag_value in (tags or {}).items():
+            tag_parts.append(f"{key}={tag_value}")
+        metric_line = f"put {self._service_name}.{name} {int(time.time())} {int(value)} {' '.join(tag_parts)}"
+        logger.debug(f"Sending counter metric: {metric_line}")
         return self._send_metric(metric_line)
     
     def flush_and_close(self):

@@ -278,7 +278,7 @@ flowchart TB
     end
 
     DB[("PostgreSQL / Aurora")]
-    CRON["periodic task, every minute<br/>CALL refresh_workload_snapshot"]
+    CRON["periodic task, every SNAPSHOT_REFRESH_MINUTES (default 1)<br/>CALL refresh_workload_snapshot"]
     UI["Profiling console"]
 
     AGENT -->|"heartbeat"| REQ
@@ -352,12 +352,14 @@ a lock convoy.
 | Unfiltered, scope `host` / `container` / `process` | Live query |
 | Any filtered request | Live query |
 
-The store is rebuilt every minute by the periodic-tasks worker, guarded by both
+The store is rebuilt every `GPROFILER_WORKLOAD_SNAPSHOT_REFRESH_MINUTES` minutes
+(default 1) by the periodic-tasks worker, guarded by both
 `flock` (process-level) and `pg_try_advisory_lock` (cluster-level) so a slow
 build skips rather than queueing behind another. If the store has not been built — a fresh deploy, or
 the migration not yet applied — the endpoint transparently falls back to the
-live path. Worst-case staleness is therefore roughly one build interval on top
-of the freshness window.
+live path. Worst-case staleness is therefore roughly one refresh interval plus
+one build on top of the freshness window. The build's duration grows with the
+fleet, so the interval is a sizing parameter (see Operational Parameters).
 
 Live queries choose between two aggregation strategies depending on whether the
 scope keys on a specific host, enumerating a page of entities from the shallow
@@ -480,6 +482,13 @@ active-host window applies to the status page, the precompute build, and target
 resolution, which keeps "what the UI offers" and "what a request can target"
 consistent.
 
+A host that stops reporting altogether keeps its last inventory rows, which no
+reader uses but the precompute build still scans. The periodic-tasks worker
+removes them with `prune_stale_host_inventory` once the host has gone
+`GPROFILER_INVENTORY_PRUNE_AFTER` without a beat, measured against the newest
+beat so an ingest outage prunes nothing. It also clears the host's stored
+digest, so a host that comes back re-sends its full inventory.
+
 The window is **15 minutes** by default, set by
 `GPROFILER_WORKLOAD_FRESH_INTERVAL` as a SQL interval string. Because the value
 is interpolated into SQL interval literals, it is validated against a strict
@@ -508,10 +517,12 @@ row is deleted.
 | `GPROFILER_HEARTBEAT_ASYNC_WRITES` | `TRUE` | Off reverts to synchronous per-request writes |
 | `GPROFILER_HEARTBEAT_FLUSH_INTERVAL_SEC` | `1.0` | Coalescing window; larger batches more but delays freshness |
 | `GPROFILER_HEARTBEAT_BUFFER_MAX_HOSTS` | `20000` | Buffer cap per worker; overflow drops the beat |
+| `GPROFILER_INVENTORY_SYNC_PER_SEC` | `2` | Inventory syncs admitted per second per worker (token bucket that banks up to `GPROFILER_INVENTORY_SYNC_BURST_SEC`, default `10`, seconds of budget); a host over budget keeps its freshness update and syncs on a later beat. `0` disables the budget |
 | `GPROFILER_POSTGRES_CONN_PER_THREAD` | `FALSE` | **Must be enabled explicitly** for per-thread connections |
 | `GPROFILER_WEBAPP_THREAD_POOL_SIZE` | `0` | `0` keeps the framework default; with worker count it bounds peak connections |
 | `idle_session_timeout` (DB role) | — | Reaps idle per-thread connections server-side |
-| Precompute refresh | every minute | Upper bound on added staleness for unfiltered reads |
+| `GPROFILER_WORKLOAD_SNAPSHOT_REFRESH_MINUTES` (periodic worker) | `1` | Minutes between precompute builds (1–60); bounds the added staleness of unfiltered reads. Sized for the fleet, see below |
+| `GPROFILER_INVENTORY_PRUNE_AFTER` (periodic worker) | `1 hour` | Time without a beat before a host's inventory is pruned (every 10 minutes); keep well above the freshness window |
 
 The default for `GPROFILER_POSTGRES_CONN_PER_THREAD` is `FALSE`, so a deployment
 that does not set it runs one connection per worker **process** and serializes
@@ -529,6 +540,21 @@ raising the threadpool.
 `GPROFILER_POSTGRES_POOL_SIZE` and `GPROFILER_POSTGRES_POOL_ACQUIRE_TIMEOUT`
 remain in config but are **no longer read** by the connection layer; they are
 leftovers from the reverted pool and should not be tuned.
+
+Several of these parameters are sized for the fleet a deployment has today and
+need revisiting as it grows: the flush interval and buffer cap (beats per
+worker), the threadpool and worker count (peak connections), the inventory sync
+budget (how fast a fleet-wide inventory change lands), and the precompute
+refresh interval. **The refresh interval is the easiest to outgrow unnoticed**,
+because nothing fails when it is too short. Each build reads the inventory of
+every fresh host, so its duration grows with the number of containers and pods.
+Once a build runs past the interval, the next runs skip and unfiltered pages get
+staler, the database spends a core on back-to-back builds, and each build's
+transaction holds back the cleanup of dead `hostheartbeats` row versions for its
+whole duration, so fewer heartbeat updates stay heap-only (HOT). Keep
+`workload_snapshot_meta.build_duration_ms` well inside the interval and raise
+`GPROFILER_WORKLOAD_SNAPSHOT_REFRESH_MINUTES` once the build passes about two
+thirds of it; the cost is staleness, up to one interval plus one build.
 
 ## Failure Handling
 

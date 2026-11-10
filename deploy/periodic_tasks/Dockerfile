@@ -1,10 +1,17 @@
 FROM alpine:3.18.5
 
+# Package source. Builds that cannot reach dl-cdn.alpinelinux.org (e.g. CI behind
+# a DNS allowlist) pass --build-arg ALPINE_MIRROR=<proxy that mirrors
+# dl-cdn.alpinelinux.org/alpine>, i.e. "<mirror>/v3.18/main" must exist under it.
+ARG ALPINE_MIRROR=https://dl-cdn.alpinelinux.org/alpine
+RUN sed -i "s|https://dl-cdn.alpinelinux.org/alpine|${ALPINE_MIRROR%/}|g" /etc/apk/repositories
+
 RUN apk add --no-cache dcron wget rsync ca-certificates postgresql-client logrotate sudo
 
 COPY crontab /etc/cron.d/my-cron-job
 COPY aggregations.sh /aggregations.sh
 COPY refresh_workload_snapshot.sh /refresh_workload_snapshot.sh
+COPY prune_stale_host_inventory.sh /prune_stale_host_inventory.sh
 COPY logrotate_conf.sh /logrotate_conf.sh
 
 
@@ -12,6 +19,7 @@ RUN chmod +x /logrotate_conf.sh
 RUN chmod 0644 /etc/cron.d/my-cron-job
 RUN chmod +x /aggregations.sh
 RUN chmod +x /refresh_workload_snapshot.sh
+RUN chmod +x /prune_stale_host_inventory.sh
 
 
 RUN crontab /etc/cron.d/my-cron-job
@@ -21,6 +29,7 @@ RUN mkdir -p /var/log/cron && touch /var/log/cron/cron.log
 RUN addgroup -S non_root && adduser -S -G non_root -u 888 non_root && \
     chown -R non_root:non_root /aggregations.sh && \
     chown -R non_root:non_root /refresh_workload_snapshot.sh && \
+    chown -R non_root:non_root /prune_stale_host_inventory.sh && \
     chown -R non_root:non_root /logrotate_conf.sh && \
     chown -R non_root:non_root /etc/logrotate.conf && \
     chown -R non_root:non_root /etc/cron.d/my-cron-job && \

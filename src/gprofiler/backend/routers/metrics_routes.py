@@ -56,6 +56,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 from gprofiler_dev import S3ProfileDal
 from gprofiler_dev import config as _dev_config
+from gprofiler_dev.heartbeat_inventory import inventory_digest
 from gprofiler_dev.heartbeat_writer import get_heartbeat_writer
 from gprofiler_dev.postgres.db_manager import DBManager
 
@@ -64,6 +65,25 @@ from pydantic import BaseModel
 
 logger = getLogger(__name__)
 router = APIRouter()
+
+# An agent whose inventory digest disagrees with ours for the same containers computes the
+# canonical form differently (version skew). It is harmless -- that agent just never gets
+# need_inventory=False and keeps sending full inventory -- but worth one log line per
+# process per agent version rather than one per beat.
+_digest_mismatch_versions_warned: set = set()
+
+
+def _warn_digest_mismatch(hostname: str, agent_version: Optional[str]) -> None:
+    key = agent_version or "unknown"
+    if key in _digest_mismatch_versions_warned:
+        return
+    _digest_mismatch_versions_warned.add(key)
+    logger.warning(
+        f"Agent inventory digest differs from the server's for the same containers "
+        f"(first seen from {hostname}, agent_version={key}); hosts on this agent version will "
+        f"keep sending full inventory every beat until agent and server agree on the "
+        f"canonical form (gprofiler_dev.heartbeat_inventory.DIGEST_VERSION)"
+    )
 
 
 # Adhoc profiling models
@@ -790,6 +810,30 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
             # 1. Persist the host heartbeat + normalized inventory. By default this is buffered
             # off the request thread and flushed in coalesced batches by the async writer; the
             # command lookup below stays synchronous so the agent still gets its command now.
+            #
+            # Inventory is change-detected downstream: the digest is computed here, on the
+            # request thread (parallel across the thread pool, not on the single writer
+            # thread), and compared with the digest stored on the host row. ``containers``
+            # absent from the payload means "not reported this beat" and must stay None --
+            # it is NOT the same as ``[]`` ("this host has no containers"), which is a real
+            # inventory that prunes everything previously stored for the host.
+            #
+            # A change-detecting agent sends ``inventory_digest`` on every beat and includes
+            # ``containers`` only when the digest changed or we asked for it. The digest we
+            # store is always computed here from the containers we actually received; the
+            # agent's own digest is only ever compared (see ``need_inventory`` below).
+            containers = (
+                None
+                if heartbeat.containers is None
+                else [container.dict() for container in heartbeat.containers]
+            )
+            agent_digest = heartbeat.inventory_digest
+            if containers is not None:
+                computed_digest = inventory_digest(containers)
+                if agent_digest is not None and agent_digest != computed_digest:
+                    _warn_digest_mismatch(heartbeat.hostname, heartbeat.agent_version)
+            else:
+                computed_digest = agent_digest  # digest-only beat: claim, compared not stored
             heartbeat_fields = dict(
                 hostname=heartbeat.hostname,
                 ip_address=heartbeat.ip_address,
@@ -798,7 +842,8 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                 run_mode=heartbeat.run_mode,
                 namespace=heartbeat.namespace,
                 pod_name=heartbeat.pod_name,
-                containers=[container.dict() for container in (heartbeat.containers or [])],
+                containers=containers,
+                inventory_digest=computed_digest,
                 last_command_id=heartbeat.last_command_id,
                 received_command_ids=heartbeat.received_command_ids,
                 executed_command_ids=heartbeat.executed_command_ids,
@@ -810,6 +855,20 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                 get_heartbeat_writer(db_manager).submit(heartbeat_fields)
             else:
                 db_manager.upsert_host_heartbeat(**heartbeat_fields)
+
+            # 1b. Tell a change-detecting agent whether we hold its inventory. The answer is
+            # based on the digest *committed* for the host (one point read on the unique
+            # index), not on this beat's payload: a full beat whose sync was deferred by the
+            # budget, or is still in the async writer, correctly gets need_inventory=True
+            # and the agent keeps sending until a later beat sees the stored digest match.
+            # That is what makes the agent side stateless-safe: it only stops sending once
+            # the server has confirmed it holds matching inventory. Older agents (no digest)
+            # get no answer and keep sending full inventory as before.
+            need_inventory: Optional[bool] = None
+            if agent_digest is not None:
+                need_inventory = db_manager.get_host_inventory_digest(
+                    hostname=heartbeat.hostname, service_name=heartbeat.service_name
+                ) != agent_digest
 
             # 2. Look up this host's current command once. The agent needs it on every beat,
             # and it also gates auto-subscribe (only hosts *without* a command are candidates),
@@ -906,6 +965,7 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                             "combined_config": combined_config,
                         },
                         command_id=current_command["command_id"],
+                        need_inventory=need_inventory,
                     )
                 else:
                     logger.warning(
@@ -918,6 +978,7 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                 message="Heartbeat received. No profiling commands.",
                 profiling_command=None,
                 command_id=None,
+                need_inventory=need_inventory,
             )
 
         except Exception as e:

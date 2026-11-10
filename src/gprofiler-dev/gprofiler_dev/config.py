@@ -31,7 +31,27 @@ PG_USER = os.getenv("GPROFILER_POSTGRES_USERNAME")
 PG_PORT = os.getenv("GPROFILER_POSTGRES_PORT", 5432)
 PG_PASSWORD = os.getenv("GPROFILER_POSTGRES_PASSWORD")
 POSTGRES_CONN_PER_THREAD = os.getenv("GPROFILER_POSTGRES_CONN_PER_THREAD", "FALSE").upper() == "TRUE"
-PG_CONNECT_TIMEOUT = int(os.getenv("GPROFILER_POSTGRES_CONNECT_TIMEOUT", 3))
+# Raised from 3s: a 3s connect timeout trips on a brief latency blip and kicks off a reconnect
+# wave (the storm). 10s tolerates a transient hiccup while still failing well under the gunicorn
+# worker timeout (300s). Pair with the bounded backoff/retry below and hot-path fail-fast rather
+# than relying on this value alone.
+PG_CONNECT_TIMEOUT = int(os.getenv("GPROFILER_POSTGRES_CONNECT_TIMEOUT", 10))
+# Retry/backoff for PostgresDB.execute() on transient connection errors.
+# During a connection storm, a fixed sleep + reconnect-per-retry across every thread
+# reconnects in lockstep and amplifies the storm. We cap the attempts and use bounded
+# exponential backoff with jitter so retry waves de-synchronize instead of piling up.
+PG_MAX_RETRIES = int(os.getenv("GPROFILER_POSTGRES_MAX_RETRIES", 3))
+# Base backoff in seconds; wait ~= min(base * 2**attempt, cap) + random(0, jitter).
+PG_RETRY_BACKOFF_BASE = float(os.getenv("GPROFILER_POSTGRES_RETRY_BACKOFF_BASE", "0.2"))
+PG_RETRY_BACKOFF_CAP = float(os.getenv("GPROFILER_POSTGRES_RETRY_BACKOFF_CAP", "5.0"))
+PG_RETRY_BACKOFF_JITTER = float(os.getenv("GPROFILER_POSTGRES_RETRY_BACKOFF_JITTER", "0.5"))
+# Reconnect a connection that has been unused for longer than this *before* using it again.
+# The database closes sessions idle for idle_session_timeout (5 min on our roles, see
+# scripts/setup/postgres/migrations/set_idle_session_timeout.sql); psycopg2 only notices on
+# the next round trip, which then fails, backs off, logs an error and reconnects. Per-thread
+# connections idle routinely (hundreds of request threads, a few busy), so that is the
+# normal case, not an incident. Keep this below the server timeout. <= 0 disables.
+PG_IDLE_RECONNECT_SEC = float(os.getenv("GPROFILER_POSTGRES_IDLE_RECONNECT_SEC", "240"))
 # Bounded per-process connection pool: max live connections and how long a caller waits
 # for a free one before erroring. Total DB connections ~= replicas * workers * pool size.
 POSTGRES_POOL_SIZE = int(os.getenv("GPROFILER_POSTGRES_POOL_SIZE", 10))
@@ -42,6 +62,20 @@ POSTGRES_POOL_ACQUIRE_TIMEOUT = int(os.getenv("GPROFILER_POSTGRES_POOL_ACQUIRE_T
 HEARTBEAT_ASYNC_WRITES = os.getenv("GPROFILER_HEARTBEAT_ASYNC_WRITES", "TRUE").upper() == "TRUE"
 HEARTBEAT_FLUSH_INTERVAL_SEC = float(os.getenv("GPROFILER_HEARTBEAT_FLUSH_INTERVAL_SEC", "1.0"))
 HEARTBEAT_BUFFER_MAX_HOSTS = int(os.getenv("GPROFILER_HEARTBEAT_BUFFER_MAX_HOSTS", "20000"))
+
+# Inventory change detection (see gprofiler_dev/heartbeat_inventory.py). A beat whose inventory
+# digest equals the one stored on the host row does no inventory work. When it differs, the
+# full sync is admitted by a per-process token bucket of this many syncs per second (fleet
+# total = this x worker processes). Over budget, the host keeps its freshness update and its
+# old digest, and syncs on a later beat -- this paces the one-time load on first rollout and
+# any fleet-wide inventory change instead of letting it arrive as a herd. <= 0 disables the
+# budget (every differing beat syncs immediately; fine for dev / small fleets).
+INVENTORY_SYNC_PER_SEC = float(os.getenv("GPROFILER_INVENTORY_SYNC_PER_SEC", "2"))
+# How many seconds of budget a worker may bank while it has nothing to sync (token-bucket
+# burst). Syncs are admitted once per writer flush and arrive unevenly, so with a 1-s
+# burst most of a fractional budget was lost (measured: ~half delivered). 10 s keeps the
+# same average rate; the worst case is one flush syncing rate x 10 hosts at once.
+INVENTORY_SYNC_BURST_SEC = float(os.getenv("GPROFILER_INVENTORY_SYNC_BURST_SEC", "10"))
 
 INSTANCE_RUNS_LRU_CACHE_LIMIT = os.getenv("INSTANCE_RUNS_LRU_CACHE_LIMIT", 1000)
 PROFILER_PROCESSES_LRU_CACHE_LIMIT = os.getenv("PROFILER_PROCESSES_LRU_CACHE_LIMIT", 1000)

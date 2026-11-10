@@ -288,14 +288,23 @@ CREATE TABLE HostHeartbeats (
     supported_perf_events text[] NULL,
     created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- sha256 of the inventory last synced into HeartbeatContainers/HeartbeatProcesses for
+    -- this host (see migrations/add_inventory_digest_to_hostheartbeats.sql). A beat whose
+    -- inventory hashes to this value does no inventory work. NULL = not yet synced under
+    -- change detection. (Last column so a fresh install matches the migrated layout.)
+    inventory_digest text NULL,
     CONSTRAINT "unique_host_heartbeat" UNIQUE (hostname, service_name)
 );
 
--- Essential indexes for heartbeats
-CREATE INDEX idx_hostheartbeats_hostname ON HostHeartbeats (hostname);
+-- Essential indexes for heartbeats.
+-- Deliberately NOT indexed (see migrations/drop_redundant_heartbeat_indexes.sql):
+--   * hostname            -- leading column of unique_host_heartbeat already serves it
+--   * heartbeat_timestamp -- rewritten on every beat; an index on it forces a full
+--                            row re-write + all-index maintenance per beat (no HOT
+--                            update). Every reader filters by recency over the whole
+--                            table (<=150k rows), which is a cheap sequential scan.
 CREATE INDEX idx_hostheartbeats_service_name ON HostHeartbeats (service_name);
 CREATE INDEX idx_hostheartbeats_status ON HostHeartbeats (status);
-CREATE INDEX idx_hostheartbeats_heartbeat_timestamp ON HostHeartbeats (heartbeat_timestamp);
 CREATE INDEX idx_hostheartbeats_namespace ON HostHeartbeats (namespace);
 CREATE INDEX idx_hostheartbeats_pod_name ON HostHeartbeats (pod_name);
 
@@ -318,7 +327,7 @@ CREATE TABLE HeartbeatContainers (
     CONSTRAINT unique_heartbeat_container UNIQUE (host_id, container_id)
 );
 
-CREATE INDEX idx_hb_containers_host_id ON HeartbeatContainers (host_id);
+-- host_id lookups are served by unique_heartbeat_container (host_id, container_id).
 CREATE INDEX idx_hb_containers_namespace ON HeartbeatContainers (namespace);
 CREATE INDEX idx_hb_containers_pod_name ON HeartbeatContainers (pod_name);
 CREATE INDEX idx_hb_containers_workload_name ON HeartbeatContainers (workload_name);
@@ -332,8 +341,10 @@ CREATE TABLE HeartbeatProcesses (
     CONSTRAINT unique_heartbeat_process UNIQUE (container_row_id, pid)
 );
 
-CREATE INDEX idx_hb_processes_container_row_id ON HeartbeatProcesses (container_row_id);
-CREATE INDEX idx_hb_processes_process_name ON HeartbeatProcesses (process_name);
+-- No secondary indexes on HeartbeatProcesses: container_row_id lookups are served by
+-- unique_heartbeat_process (container_row_id, pid), and nothing filters by
+-- process_name without first narrowing to a container. This table is the largest
+-- (one row per process fleet-wide) so every extra index is paid on every insert.
 
 -- Cache a block of ids per backend so high-frequency heartbeat inserts don't
 -- contend on the sequence buffer lock (see migrations/increase_heartbeat_sequence_cache.sql).
@@ -392,12 +403,12 @@ CREATE TABLE ProfilingCommands (
     CONSTRAINT "unique_profiling_command_per_host" UNIQUE (hostname, service_name)
 );
 
--- Essential indexes for profiling commands
+-- Essential indexes for profiling commands.
+-- (hostname) and (hostname, service_name) lookups are served by
+-- unique_profiling_command_per_host.
 CREATE INDEX idx_profilingcommands_command_id ON ProfilingCommands (command_id);
-CREATE INDEX idx_profilingcommands_hostname ON ProfilingCommands (hostname);
 CREATE INDEX idx_profilingcommands_service_name ON ProfilingCommands (service_name);
 CREATE INDEX idx_profilingcommands_status ON ProfilingCommands (status);
-CREATE INDEX idx_profilingcommands_hostname_service ON ProfilingCommands (hostname, service_name);
 
 -- Profiling Executions Table (optional - for audit trail)
 CREATE TABLE ProfilingExecutions (
@@ -983,25 +994,29 @@ CREATE OR REPLACE VIEW workload_snapshot AS SELECT * FROM workload_snapshot_0;
 CREATE OR REPLACE VIEW workload_scope_summary AS SELECT * FROM workload_scope_summary_0;
 CREATE OR REPLACE VIEW workload_tab_counts AS SELECT * FROM workload_tab_counts_0;
 
--- Optimized workload_status refresh.
+-- Cheaper workload_status refresh.
 --
--- The first version built Layer 2 by aggregating the flat, process-grain
--- workload_snapshot (~1.9M rows) with naive 7x COUNT(DISTINCT) tab counts and
--- array_agg(DISTINCT pid) coarse GROUP BYs -- the exact patterns the live
--- endpoint was optimized away from -- which took ~18 min at prod scale and,
--- under the ~30s cron, piled up on the meta-row lock.
+-- The previous build (optimize_workload_precompute_build.sql) re-joined the fresh
+-- hosts with their containers (and three times with their processes) in four
+-- statements, and fed every scope's wide container rows to per-group COUNT(DISTINCT)
+-- and (array_agg(... ORDER BY heartbeat_timestamp))[1] aggregates -- one sort per
+-- aggregate per group. Its cost grows with containers and pods, so it outgrows the
+-- one-minute cadence as container-reporting (e.g. Kubernetes) hosts are added.
 --
--- This version:
---   * Computes Layer 2 (tab counts + service/namespace/pod summaries) from the
---     SOURCE tables at the appropriate grain, reusing the tiered / two-grain
---     tricks (COUNT(*) FROM (SELECT DISTINCT ...) counts; container-grain
---     aggregates; distinct-subquery process_count; host-grain any_active). Prod
---     read-only prototypes: tab_counts 7.7s, service summary 5.3s.
---   * Guards against overlap with a non-blocking advisory lock, so a slow build
---     can never queue behind another (no pile-up), regardless of cron cadence.
---   * No longer populates the Layer 1 workload_snapshot table (nothing reads it
---     yet -- filtered reads still use the live path). Re-introduce an optimized
---     snapshot build when the filtered-read-from-snapshot path is implemented.
+-- This version reads the inventory once into narrow temp tables and keeps the passes
+-- over container and process rows few:
+--   * one aggregate per (service, namespace, pod) container group -- NULL namespace and
+--     pod groups included -- that the pod, namespace and service rows are built from;
+--   * distinct counts at the grains where rows are (nearly) unique are taken once and
+--     reused. A group's distinct (host, container name) pairs are its share of the
+--     container tab count and, when it spans one host, its container_count. A pod's
+--     process rows are its process_count when they come from one host that lists each
+--     pid once. The rare pods that span hosts, or sit on a host listing a pid twice,
+--     are recounted exactly from their own rows.
+-- Output (tables, columns, values, sort_seq order) is unchanged, with one refinement:
+-- a row's l_* columns now always come from a single source row -- the latest-beating
+-- host of the group and its lowest container row -- where the previous per-column
+-- array_agg picks could mix containers of that host.
 --
 -- any_active for the coarse scopes is computed at the host grain (a host with an
 -- active whole-host command marks its groups active). For service scope this is
@@ -1010,6 +1025,7 @@ CREATE OR REPLACE VIEW workload_tab_counts AS SELECT * FROM workload_tab_counts_
 
 CREATE OR REPLACE PROCEDURE refresh_workload_snapshot(IN fresh_interval interval DEFAULT '15 minutes')
     LANGUAGE plpgsql
+    SET work_mem = '128MB'
 AS $procedure$
 DECLARE
     cur_gen  smallint;
@@ -1017,8 +1033,6 @@ DECLARE
     sum_tbl  text;
     cnt_tbl  text;
     t0       timestamptz := clock_timestamp();
-    src_cte  text;
-    agg_tail text;
     sum_cols text := 'scope, sort_seq, row_id, service_name, hostname, namespace, pod_name, container_name,'
                   || 'host_count, namespace_count, pod_count, container_count, process_count, pids,'
                   || 'l_hostname, l_ip_address, l_namespace, l_pod_name, l_container_name, l_workload_name, l_workload_kind,'
@@ -1039,141 +1053,229 @@ BEGIN
     EXECUTE format('TRUNCATE %I', sum_tbl);
     EXECUTE format('TRUNCATE %I', cnt_tbl);
 
-    -- Tab counts: tiered, each counted at the shallowest grain that exposes it,
-    -- via COUNT(*) FROM (SELECT DISTINCT ...) (hash-distinct, not sort-per-agg).
-    EXECUTE format($f$
-        INSERT INTO %1$I (scope, count)
-        WITH fresh AS MATERIALIZED (
-            SELECT id, hostname, service_name FROM HostHeartbeats
-            WHERE heartbeat_timestamp > NOW() - %2$L::interval
-        )
-        SELECT k, v FROM (
-            SELECT
-                (SELECT COUNT(DISTINCT service_name) FROM fresh) AS c_service,
-                (SELECT COUNT(DISTINCT hostname) FROM fresh) AS active_hosts,
-                (SELECT COUNT(*) FROM (SELECT DISTINCT service_name, hostname FROM fresh) d) AS c_host,
-                (SELECT COUNT(*) FROM (SELECT DISTINCT f.service_name, hc.namespace
-                    FROM fresh f JOIN HeartbeatContainers hc ON hc.host_id = f.id
-                    WHERE hc.namespace IS NOT NULL) d) AS c_namespace,
-                (SELECT COUNT(*) FROM (SELECT DISTINCT f.service_name, hc.namespace, hc.pod_name
-                    FROM fresh f JOIN HeartbeatContainers hc ON hc.host_id = f.id
-                    WHERE hc.pod_name IS NOT NULL) d) AS c_pod,
-                (SELECT COUNT(*) FROM (SELECT DISTINCT f.service_name, f.hostname, hc.namespace, hc.pod_name, hc.container_name
-                    FROM fresh f JOIN HeartbeatContainers hc ON hc.host_id = f.id
-                    WHERE hc.container_name IS NOT NULL) d) AS c_container,
-                (SELECT COUNT(*) FROM (SELECT DISTINCT f.id, hp.pid
-                    FROM fresh f JOIN HeartbeatContainers hc ON hc.host_id = f.id
-                    JOIN HeartbeatProcesses hp ON hp.container_row_id = hc.id
-                    WHERE hp.pid IS NOT NULL) d) AS c_process
-        ) t,
-        LATERAL (VALUES ('service', c_service), ('host', c_host), ('namespace', c_namespace),
-                        ('pod', c_pod), ('container', c_container), ('process', c_process),
-                        ('active_hosts', active_hosts)) x(k, v)
-    $f$, cnt_tbl, fresh_interval);
+    -- Fresh hosts with their command (ProfilingCommands is unique per host and
+    -- service). recency ranks hosts newest beat first; a group's l_* columns come
+    -- from its lowest-recency host. svc_id ranks service names in the database
+    -- collation, so ordering by svc_id is ordering by service_name.
+    CREATE TEMP TABLE wl_fresh AS
+    SELECT h.id AS host_id, h.hostname, host(h.ip_address) AS ip_address, h.service_name,
+           h.agent_version, h.run_mode, h.heartbeat_timestamp,
+           row_number() OVER (ORDER BY h.heartbeat_timestamp DESC, h.id) AS recency,
+           dense_rank() OVER (ORDER BY h.service_name) AS svc_id,
+           COALESCE(c.command_type, 'N/A') AS command_type, c.status AS command_status, c.combined_config,
+           (c.command_type = 'start' AND c.status IN ('pending', 'sent', 'completed')) AS host_active
+    FROM HostHeartbeats h
+    LEFT JOIN ProfilingCommands c ON c.hostname = h.hostname AND c.service_name = h.service_name
+    WHERE h.heartbeat_timestamp > NOW() - fresh_interval;
+    ANALYZE wl_fresh;
 
-    -- Shared container-grain source for the coarse summaries.
-    src_cte := format($c$
-        fresh AS MATERIALIZED (
-            SELECT id, hostname, host(ip_address) AS ip_address, service_name, agent_version, run_mode, heartbeat_timestamp
-            FROM HostHeartbeats WHERE heartbeat_timestamp > NOW() - %L::interval
-        ),
-        cc AS (SELECT hostname, service_name, command_type, status, combined_config FROM ProfilingCommands),
-        cont AS (
-            SELECT f.id, f.hostname, f.ip_address, f.service_name, f.agent_version, f.run_mode, f.heartbeat_timestamp,
-                   hc.namespace, hc.pod_name, hc.container_name, hc.workload_name, hc.workload_kind,
-                   COALESCE(c.command_type, 'N/A') AS command_type, c.status AS command_status, c.combined_config,
-                   (c.command_type = 'start' AND c.status IN ('pending','sent','completed')) AS host_active
-            FROM fresh f
-            LEFT JOIN cc c ON c.hostname = f.hostname AND c.service_name = f.service_name
-            LEFT JOIN HeartbeatContainers hc ON hc.host_id = f.id
-        )
-    $c$, fresh_interval);
+    CREATE TEMP TABLE wl_svc AS
+    SELECT DISTINCT svc_id, service_name FROM wl_fresh;
 
-    -- Per-group aggregate tail over the container-grain `cont` relation (unqualified cols).
-    agg_tail := $a$
-        COUNT(DISTINCT hostname) AS host_count,
-        COUNT(DISTINCT namespace) FILTER (WHERE namespace IS NOT NULL) AS namespace_count,
-        COUNT(DISTINCT pod_name) FILTER (WHERE pod_name IS NOT NULL) AS pod_count,
-        COUNT(DISTINCT container_name) FILTER (WHERE container_name IS NOT NULL) AS container_count,
-        bool_or(host_active) AS any_active,
-        (array_agg(hostname ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_hostname,
-        (array_agg(ip_address ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_ip_address,
-        (array_agg(namespace ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_namespace,
-        (array_agg(pod_name ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_pod_name,
-        (array_agg(container_name ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_container_name,
-        (array_agg(workload_name ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_workload_name,
-        (array_agg(workload_kind ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_workload_kind,
-        (array_agg(command_type ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_command_type,
-        (array_agg(command_status ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_command_status,
-        (array_agg(combined_config ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_combined_config,
-        (array_agg(agent_version ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_agent_version,
-        (array_agg(run_mode ORDER BY heartbeat_timestamp DESC NULLS LAST))[1] AS l_run_mode,
-        MAX(heartbeat_timestamp) AS l_heartbeat_timestamp
-    $a$;
+    -- Their containers, carrying the host columns the groups aggregate and pick on.
+    CREATE TEMP TABLE wl_cont AS
+    SELECT hc.id AS container_row_id, f.host_id, f.recency, f.svc_id, f.heartbeat_timestamp, f.host_active,
+           hc.namespace, hc.pod_name, hc.container_name, hc.workload_name, hc.workload_kind
+    FROM wl_fresh f
+    JOIN HeartbeatContainers hc ON hc.host_id = f.host_id;
+    ANALYZE wl_cont;
 
-    -- service
+    -- One row per (service, namespace, pod) container group. host_container_count is
+    -- its number of distinct (host, container name) pairs; min_host = max_host marks a
+    -- group on one host.
+    CREATE TEMP TABLE wl_grp AS
+    SELECT svc_id, namespace, pod_name, COUNT(container_name) AS host_container_count,
+           bool_or(any_active) AS any_active, MAX(l_heartbeat_timestamp) AS l_heartbeat_timestamp,
+           MIN(latest) AS latest, MIN(host_id) AS min_host, MAX(host_id) AS max_host
+    FROM (SELECT svc_id, namespace, pod_name, host_id, container_name, bool_or(host_active) AS any_active,
+                 MAX(heartbeat_timestamp) AS l_heartbeat_timestamp, MIN(ARRAY[recency, container_row_id]) AS latest
+          FROM wl_cont
+          GROUP BY svc_id, namespace, pod_name, host_id, container_name) d
+    GROUP BY svc_id, namespace, pod_name;
+    ANALYZE wl_grp;
+
+    -- Distinct container names per (service, namespace), and distinct hosts per namespace.
+    CREATE TEMP TABLE wl_names AS
+    SELECT DISTINCT svc_id, namespace, container_name FROM wl_cont WHERE container_name IS NOT NULL;
+
+    CREATE TEMP TABLE wl_ns_hosts AS
+    SELECT svc_id, namespace, COUNT(*) AS host_count
+    FROM (SELECT DISTINCT svc_id, namespace, host_id FROM wl_cont WHERE namespace IS NOT NULL) d
+    GROUP BY svc_id, namespace;
+
+    -- Process counts, from one join of the processes:
+    --   service / namespace: distinct (pid, process_name), deduplicated across hosts
+    --     (concat_ws skips a NULL name, so 'pid' and 'pid:name' keep the pairs apart);
+    --   pod: process rows and the hosts they come from;
+    --   host: process rows and distinct pids (the process tab count).
+    -- Grouping under COLLATE "C" is byte equality, the same as the database collation's
+    -- (deterministic) equality, and avoids locale-aware comparisons.
+    CREATE TEMP TABLE wl_proc AS
+    WITH p AS MATERIALIZED (
+        SELECT c.svc_id, c.namespace, c.pod_name, c.host_id, hp.pid, hp.process_name
+        FROM wl_cont c
+        JOIN HeartbeatProcesses hp ON hp.container_row_id = c.container_row_id
+    )
+    SELECT CASE GROUPING(namespace COLLATE "C") WHEN 0 THEN 'namespace' ELSE 'service' END AS kind,
+           svc_id, (namespace COLLATE "C") COLLATE "default" AS namespace, NULL::text AS pod_name,
+           NULL::bigint AS host_id, COUNT(DISTINCT concat_ws(':', pid, process_name) COLLATE "C") AS n,
+           NULL::bigint AS d, NULL::bigint AS min_host, NULL::bigint AS max_host
+    FROM p
+    GROUP BY GROUPING SETS ((svc_id, namespace COLLATE "C"), (svc_id))
+    UNION ALL
+    SELECT 'pod', svc_id, namespace, pod_name, NULL, COUNT(*), NULL, MIN(host_id), MAX(host_id)
+    FROM p
+    WHERE pod_name IS NOT NULL
+    GROUP BY svc_id, namespace, pod_name
+    UNION ALL
+    SELECT 'host', NULL, NULL, NULL, host_id, COUNT(*), COUNT(DISTINCT pid), NULL, NULL
+    FROM p
+    GROUP BY host_id;
+    ANALYZE wl_proc;
+
+    -- Pod counts. A pod on one host has host_count 1 and container_count equal to its
+    -- (host, container name) pairs; its process rows are its distinct (pid, name) pairs
+    -- when they come from one host that lists each pid once. Other pods are recounted
+    -- from their own rows. pod_name is set here, so (service, pod_name) are the hash
+    -- keys and the NULL-safe namespace match is a cheap filter.
+    CREATE TEMP TABLE wl_pod AS
+    SELECT g.svc_id, g.namespace, g.pod_name, g.any_active, g.l_heartbeat_timestamp, g.latest,
+           g.min_host = g.max_host AND (pp.min_host IS NULL OR (pp.min_host = pp.max_host AND ph.n = ph.d)) AS regular,
+           g.host_container_count, COALESCE(pp.n, 0) AS process_rows
+    FROM wl_grp g
+    LEFT JOIN wl_proc pp ON pp.kind = 'pod' AND pp.svc_id = g.svc_id AND pp.pod_name = g.pod_name
+                        AND pp.namespace IS NOT DISTINCT FROM g.namespace
+    LEFT JOIN wl_proc ph ON ph.kind = 'host' AND ph.host_id = pp.min_host
+    WHERE g.pod_name IS NOT NULL;
+    ANALYZE wl_pod;
+
+    CREATE TEMP TABLE wl_pod_recount AS
+    SELECT c.svc_id, c.namespace, c.pod_name, COUNT(DISTINCT c.host_id) AS host_count,
+           COUNT(DISTINCT c.container_name) AS container_count,
+           COUNT(DISTINCT CASE WHEN hp.pid IS NOT NULL THEN concat_ws(':', hp.pid, hp.process_name) END) AS process_count
+    FROM wl_pod o
+    JOIN wl_cont c ON c.svc_id = o.svc_id AND c.pod_name = o.pod_name AND c.namespace IS NOT DISTINCT FROM o.namespace
+    LEFT JOIN HeartbeatProcesses hp ON hp.container_row_id = c.container_row_id
+    WHERE NOT o.regular
+    GROUP BY c.svc_id, c.namespace, c.pod_name;
+
+    -- service: grouped at the host grain, so hosts without containers count too.
     EXECUTE format($f$
         INSERT INTO %1$I (%2$s)
-        WITH %3$s,
-        pc AS (SELECT service_name, COUNT(*) AS process_count FROM (
-                   SELECT DISTINCT f.service_name, hp.pid, hp.process_name
-                   FROM fresh f JOIN HeartbeatContainers hc ON hc.host_id = f.id
-                   JOIN HeartbeatProcesses hp ON hp.container_row_id = hc.id WHERE hp.pid IS NOT NULL
-               ) d GROUP BY service_name)
-        SELECT 'service', row_number() OVER (ORDER BY ca.service_name ASC NULLS LAST), ca.service_name,
-               ca.service_name, NULL, NULL, NULL, NULL,
-               ca.host_count, ca.namespace_count, ca.pod_count, ca.container_count, COALESCE(pc.process_count, 0), NULL::integer[],
-               ca.l_hostname, ca.l_ip_address, ca.l_namespace, ca.l_pod_name, ca.l_container_name, ca.l_workload_name, ca.l_workload_kind,
-               NULL::text, NULL::integer, ca.l_command_type, ca.l_command_status, ca.l_combined_config, ca.any_active, NULL::text,
-               ca.l_agent_version, ca.l_run_mode, ca.l_heartbeat_timestamp
-        FROM (SELECT service_name, %4$s FROM cont GROUP BY service_name) ca
-        LEFT JOIN pc ON pc.service_name = ca.service_name
-    $f$, sum_tbl, sum_cols, src_cte, agg_tail);
+        WITH
+        grp AS (
+            SELECT svc_id, COUNT(*) AS host_count, bool_or(host_active) AS any_active,
+                   MAX(heartbeat_timestamp) AS l_heartbeat_timestamp, MIN(recency) AS latest
+            FROM wl_fresh
+            GROUP BY svc_id),
+        nss AS (
+            SELECT svc_id, COUNT(*) AS namespace_count FROM wl_ns_hosts GROUP BY svc_id),
+        pods AS (
+            SELECT svc_id, COUNT(DISTINCT pod_name COLLATE "C") AS pod_count
+            FROM wl_grp
+            WHERE pod_name IS NOT NULL
+            GROUP BY svc_id),
+        conts AS (
+            SELECT svc_id, COUNT(DISTINCT container_name COLLATE "C") AS container_count
+            FROM wl_names
+            GROUP BY svc_id),
+        latest_cont AS (
+            SELECT DISTINCT ON (host_id) host_id, namespace, pod_name, container_name, workload_name, workload_kind
+            FROM wl_cont
+            WHERE recency IN (SELECT latest FROM grp)
+            ORDER BY host_id, container_row_id)
+        SELECT 'service', g.svc_id, s.service_name,
+               s.service_name, NULL, NULL, NULL, NULL,
+               g.host_count, COALESCE(ns.namespace_count, 0), COALESCE(pd.pod_count, 0), COALESCE(ct.container_count, 0),
+               COALESCE(pc.n, 0), NULL::integer[],
+               f.hostname, f.ip_address, lc.namespace, lc.pod_name, lc.container_name, lc.workload_name, lc.workload_kind,
+               NULL::text, NULL::integer, f.command_type, f.command_status, f.combined_config, g.any_active, NULL::text,
+               f.agent_version, f.run_mode, g.l_heartbeat_timestamp
+        FROM grp g
+        JOIN wl_svc s ON s.svc_id = g.svc_id
+        JOIN wl_fresh f ON f.recency = g.latest
+        LEFT JOIN latest_cont lc ON lc.host_id = f.host_id
+        LEFT JOIN nss ns ON ns.svc_id = g.svc_id
+        LEFT JOIN pods pd ON pd.svc_id = g.svc_id
+        LEFT JOIN conts ct ON ct.svc_id = g.svc_id
+        LEFT JOIN wl_proc pc ON pc.kind = 'service' AND pc.svc_id = g.svc_id
+    $f$, sum_tbl, sum_cols);
 
     -- namespace
     EXECUTE format($f$
         INSERT INTO %1$I (%2$s)
-        WITH %3$s,
-        pc AS (SELECT service_name, namespace, COUNT(*) AS process_count FROM (
-                   SELECT DISTINCT f.service_name, hc.namespace, hp.pid, hp.process_name
-                   FROM fresh f JOIN HeartbeatContainers hc ON hc.host_id = f.id
-                   JOIN HeartbeatProcesses hp ON hp.container_row_id = hc.id
-                   WHERE hp.pid IS NOT NULL AND hc.namespace IS NOT NULL
-               ) d GROUP BY service_name, namespace)
-        SELECT 'namespace', row_number() OVER (ORDER BY ca.service_name ASC NULLS LAST, ca.namespace ASC NULLS LAST),
-               ca.service_name || '|' || COALESCE(ca.namespace, ''),
-               ca.service_name, NULL, ca.namespace, NULL, NULL,
-               ca.host_count, ca.namespace_count, ca.pod_count, ca.container_count, COALESCE(pc.process_count, 0), NULL::integer[],
-               ca.l_hostname, ca.l_ip_address, ca.l_namespace, ca.l_pod_name, ca.l_container_name, ca.l_workload_name, ca.l_workload_kind,
-               NULL::text, NULL::integer, ca.l_command_type, ca.l_command_status, ca.l_combined_config, ca.any_active, NULL::text,
-               ca.l_agent_version, ca.l_run_mode, ca.l_heartbeat_timestamp
-        FROM (SELECT service_name, namespace, %4$s FROM cont WHERE namespace IS NOT NULL GROUP BY service_name, namespace) ca
-        LEFT JOIN pc ON pc.service_name = ca.service_name AND COALESCE(pc.namespace, '') = COALESCE(ca.namespace, '')
-    $f$, sum_tbl, sum_cols, src_cte, agg_tail);
+        WITH
+        grp AS (
+            SELECT svc_id, namespace, bool_or(any_active) AS any_active,
+                   MAX(l_heartbeat_timestamp) AS l_heartbeat_timestamp, MIN(latest) AS latest,
+                   COUNT(pod_name) AS pod_count
+            FROM wl_grp
+            WHERE namespace IS NOT NULL
+            GROUP BY svc_id, namespace),
+        conts AS (
+            SELECT svc_id, namespace, COUNT(*) AS container_count
+            FROM wl_names
+            WHERE namespace IS NOT NULL
+            GROUP BY svc_id, namespace)
+        SELECT 'namespace', row_number() OVER (ORDER BY g.svc_id, g.namespace),
+               s.service_name || '|' || g.namespace,
+               s.service_name, NULL, g.namespace, NULL, NULL,
+               nh.host_count, 1, g.pod_count, COALESCE(ct.container_count, 0), COALESCE(pc.n, 0), NULL::integer[],
+               f.hostname, f.ip_address, l.namespace, l.pod_name, l.container_name, l.workload_name, l.workload_kind,
+               NULL::text, NULL::integer, f.command_type, f.command_status, f.combined_config, g.any_active, NULL::text,
+               f.agent_version, f.run_mode, g.l_heartbeat_timestamp
+        FROM grp g
+        JOIN wl_svc s ON s.svc_id = g.svc_id
+        JOIN wl_ns_hosts nh ON nh.svc_id = g.svc_id AND nh.namespace = g.namespace
+        JOIN wl_cont l ON l.container_row_id = g.latest[2]
+        JOIN wl_fresh f ON f.host_id = l.host_id
+        LEFT JOIN conts ct ON ct.svc_id = g.svc_id AND ct.namespace = g.namespace
+        LEFT JOIN wl_proc pc ON pc.kind = 'namespace' AND pc.svc_id = g.svc_id AND pc.namespace = g.namespace
+    $f$, sum_tbl, sum_cols);
 
-    -- pod
+    -- pod: sort_seq is numbered on the narrow pod rows, before the wide host and
+    -- container columns are joined on.
     EXECUTE format($f$
         INSERT INTO %1$I (%2$s)
-        WITH %3$s,
-        pc AS (SELECT service_name, namespace, pod_name, COUNT(*) AS process_count FROM (
-                   SELECT DISTINCT f.service_name, hc.namespace, hc.pod_name, hp.pid, hp.process_name
-                   FROM fresh f JOIN HeartbeatContainers hc ON hc.host_id = f.id
-                   JOIN HeartbeatProcesses hp ON hp.container_row_id = hc.id
-                   WHERE hp.pid IS NOT NULL AND hc.pod_name IS NOT NULL
-               ) d GROUP BY service_name, namespace, pod_name)
-        SELECT 'pod', row_number() OVER (ORDER BY ca.service_name ASC NULLS LAST, ca.namespace ASC NULLS LAST, ca.pod_name ASC NULLS LAST),
-               ca.service_name || '|' || COALESCE(ca.namespace, '') || '|' || COALESCE(ca.pod_name, ''),
-               ca.service_name, NULL, ca.namespace, ca.pod_name, NULL,
-               ca.host_count, ca.namespace_count, ca.pod_count, ca.container_count, COALESCE(pc.process_count, 0), NULL::integer[],
-               ca.l_hostname, ca.l_ip_address, ca.l_namespace, ca.l_pod_name, ca.l_container_name, ca.l_workload_name, ca.l_workload_kind,
-               NULL::text, NULL::integer, ca.l_command_type, ca.l_command_status, ca.l_combined_config, ca.any_active, NULL::text,
-               ca.l_agent_version, ca.l_run_mode, ca.l_heartbeat_timestamp
-        FROM (SELECT service_name, namespace, pod_name, %4$s FROM cont WHERE pod_name IS NOT NULL GROUP BY service_name, namespace, pod_name) ca
-        LEFT JOIN pc ON pc.service_name = ca.service_name
-                    AND COALESCE(pc.namespace, '') = COALESCE(ca.namespace, '')
-                    AND pc.pod_name = ca.pod_name
-    $f$, sum_tbl, sum_cols, src_cte, agg_tail);
+        SELECT 'pod', k.sort_seq, s.service_name || '|' || COALESCE(k.namespace, '') || '|' || k.pod_name,
+               s.service_name, NULL, k.namespace, k.pod_name, NULL,
+               k.host_count, (k.namespace IS NOT NULL)::integer, 1, k.container_count, k.process_count, NULL::integer[],
+               f.hostname, f.ip_address, l.namespace, l.pod_name, l.container_name, l.workload_name, l.workload_kind,
+               NULL::text, NULL::integer, f.command_type, f.command_status, f.combined_config, k.any_active, NULL::text,
+               f.agent_version, f.run_mode, k.l_heartbeat_timestamp
+        FROM (SELECT o.svc_id, o.namespace, o.pod_name, o.any_active, o.l_heartbeat_timestamp, o.latest,
+                     COALESCE(r.host_count, 1) AS host_count,
+                     COALESCE(r.container_count, o.host_container_count) AS container_count,
+                     COALESCE(r.process_count, o.process_rows) AS process_count,
+                     row_number() OVER (ORDER BY o.svc_id, o.namespace, o.pod_name) AS sort_seq
+              FROM wl_pod o
+              LEFT JOIN wl_pod_recount r ON r.svc_id = o.svc_id AND r.pod_name = o.pod_name
+                                        AND r.namespace IS NOT DISTINCT FROM o.namespace) k
+        JOIN wl_svc s ON s.svc_id = k.svc_id
+        JOIN wl_cont l ON l.container_row_id = k.latest[2]
+        JOIN wl_fresh f ON f.host_id = l.host_id
+    $f$, sum_tbl, sum_cols);
 
+    -- Tab counts. Within a service a hostname is one host row, so host_id stands in
+    -- for hostname in the container count.
+    EXECUTE format($f$
+        INSERT INTO %1$I (scope, count)
+        SELECT 'service', COUNT(*) FROM %2$I WHERE scope = 'service'
+        UNION ALL
+        SELECT 'namespace', COUNT(*) FROM %2$I WHERE scope = 'namespace'
+        UNION ALL
+        SELECT 'pod', COUNT(*) FROM %2$I WHERE scope = 'pod'
+        UNION ALL
+        SELECT 'host', COUNT(*) FROM wl_fresh
+        UNION ALL
+        SELECT 'active_hosts', COUNT(*) FROM (SELECT DISTINCT hostname FROM wl_fresh) d
+        UNION ALL
+        SELECT 'container', COALESCE(SUM(host_container_count), 0) FROM wl_grp
+        UNION ALL
+        SELECT 'process', COALESCE(SUM(d), 0) FROM wl_proc WHERE kind = 'host'
+    $f$, cnt_tbl, sum_tbl);
+
+    DROP TABLE wl_fresh, wl_svc, wl_cont, wl_grp, wl_names, wl_ns_hosts, wl_proc, wl_pod, wl_pod_recount;
     EXECUTE format('ANALYZE %I', sum_tbl);
 
     -- Atomic swap of the read-side views + flip the pointer, in this transaction.
@@ -1187,5 +1289,66 @@ BEGIN
     WHERE id = 1;
 
     PERFORM pg_advisory_unlock(3126073);
+END;
+$procedure$;
+
+-- Prune the workload inventory (HeartbeatContainers / HeartbeatProcesses) of hosts with
+-- no beat for stale_after, measured against the newest beat so an ingest outage prunes
+-- nothing; clears the host's inventory_digest so a returning host re-sends it. Run by
+-- the periodic-tasks worker. Rationale: migrations/add_prune_stale_host_inventory.sql.
+CREATE OR REPLACE PROCEDURE prune_stale_host_inventory(
+    IN stale_after interval DEFAULT '1 hour',
+    IN batch_hosts integer DEFAULT 200,
+    IN max_batches integer DEFAULT 50
+)
+    LANGUAGE plpgsql
+AS $procedure$
+DECLARE
+    cutoff       timestamp;
+    candidates   bigint[];
+    pruned       bigint[];
+    n_rows       bigint;
+    n_hosts      bigint := 0;
+    n_containers bigint := 0;
+    t0           timestamptz := clock_timestamp();
+BEGIN
+    SELECT MAX(updated_at) - stale_after INTO cutoff FROM HostHeartbeats;
+
+    SELECT array_agg(id ORDER BY id) INTO candidates
+    FROM (
+        SELECT h.id
+        FROM HostHeartbeats h
+        WHERE h.updated_at < cutoff
+          AND EXISTS (SELECT 1 FROM HeartbeatContainers c WHERE c.host_id = h.id)
+        ORDER BY h.id
+        LIMIT batch_hosts * max_batches
+    ) s;
+
+    FOR i IN 0 .. coalesce(cardinality(candidates), 0) - 1 BY batch_hosts LOOP
+        -- SKIP LOCKED: a host whose row is locked is being written by a beat right now.
+        WITH stale AS (
+            SELECT id FROM HostHeartbeats
+            WHERE id = ANY (candidates[i + 1 : i + batch_hosts])
+              AND updated_at < cutoff
+            FOR UPDATE SKIP LOCKED
+        ), cleared AS (
+            UPDATE HostHeartbeats h SET inventory_digest = NULL
+            FROM stale
+            WHERE h.id = stale.id
+            RETURNING h.id
+        )
+        SELECT array_agg(id) INTO pruned FROM cleared;
+
+        IF pruned IS NOT NULL THEN
+            DELETE FROM HeartbeatContainers WHERE host_id = ANY (pruned);
+            GET DIAGNOSTICS n_rows = ROW_COUNT;
+            n_hosts := n_hosts + cardinality(pruned);
+            n_containers := n_containers + n_rows;
+        END IF;
+        COMMIT;
+    END LOOP;
+
+    RAISE NOTICE 'prune_stale_host_inventory: pruned % hosts (% containers and their processes) with no beat for %, in %',
+        n_hosts, n_containers, stale_after, clock_timestamp() - t0;
 END;
 $procedure$;
