@@ -70,13 +70,20 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 	sess := session.Must(session.NewSessionWithOptions(sessionOptions))
 
 	for task := range tasks {
+		var timings messageTimings
+		pickedAt := time.Now()
+		timings.QueueWait = sinceOrZero(task.SentAt, task.ReceivedAt)
+		timings.Dispatch = sinceOrZero(task.ReceivedAt, pickedAt)
+
 		useSQS := task.Service != ""
 		serviceName := task.Service
 		log.Debugf("got new file %s from service %s (ID: %d)", task.Filename, serviceName, task.ServiceId)
 
 		if useSQS {
 			fullPath := s3KeyPath(args.S3PathPrefix, fmt.Sprintf("products/%s/stacks/%s", task.Service, task.Filename))
+			fetchStart := time.Now()
 			buf, err = GetFileFromS3(sess, args.S3Bucket, fullPath)
+			timings.S3Fetch = time.Since(fetchStart)
 			if err != nil {
 				log.Errorf("Error while fetching file from S3: %v", err)
 				// SLI Metric: S3 fetch failure (server error - counts against SLO)
@@ -113,7 +120,9 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 		}
 
 		// Parse stack frame file and write to ClickHouse
+		processStart := time.Now()
 		err := pw.ParseStackFrameFile(sess, task, args.S3Bucket, args.S3PathPrefix, timestamp, buf)
+		timings.Process = time.Since(processStart)
 		if err != nil {
 			log.Errorf("Error while parsing stack frame file: %v", err)
 
@@ -138,7 +147,16 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 
 		// Delete message from SQS after successful processing
 		if useSQS {
+			deleteStart := time.Now()
 			deleteMessageWithMetrics(sess, task)
+			deletedAt := time.Now()
+			timings.Delete = deletedAt.Sub(deleteStart)
+			timings.Total = sinceOrZero(task.SentAt, deletedAt)
+
+			log.Infof("processed %s from service %s: queue_wait=%s dispatch=%s s3_fetch=%s process=%s delete=%s total=%s receive_count=%d",
+				task.Filename, serviceName, timings.QueueWait, timings.Dispatch, timings.S3Fetch,
+				timings.Process, timings.Delete, timings.Total, task.ReceiveCount)
+			GetMetricsPublisher().SendMessageTimings(timings)
 
 			// SLI Metric: Success! Event processed completely
 			// SendSLIMetric handles nil/enabled checks internally
