@@ -26,6 +26,7 @@ from backend.routers import (
     perfspect_routes,
     profiles_routes,
     services_routes,
+    trace_reports_routes,
 )
 from fastapi import APIRouter
 
@@ -42,3 +43,4 @@ router.include_router(filters_routes.router, prefix="/v1/filters", tags=["filter
 router.include_router(overview_routes.router, prefix="/overview", tags=["overview"])
 router.include_router(minesweeper_routes.router, prefix="/snapshots", tags=["snapshots"])
 router.include_router(perfspect_routes.router, prefix="/perfspect", tags=["perfspect"])
+router.include_router(trace_reports_routes.router, prefix="/trace_reports", tags=["trace_reports"])
