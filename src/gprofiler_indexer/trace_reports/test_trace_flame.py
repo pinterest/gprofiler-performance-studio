@@ -29,8 +29,16 @@ EVIL = "</script><img src=x onerror=alert(1)>"
 
 
 def span(sid, parent, kind, service, name, start_ms, dur_ms, **tags):
-    s = {"traceId": "abc123", "id": sid, "kind": kind, "name": name, "localEndpoint": {"serviceName": service},
-         "timestamp": T0 + start_ms * 1000, "duration": dur_ms * 1000, "tags": tags}
+    s = {
+        "traceId": "abc123",
+        "id": sid,
+        "kind": kind,
+        "name": name,
+        "localEndpoint": {"serviceName": service},
+        "timestamp": T0 + start_ms * 1000,
+        "duration": dur_ms * 1000,
+        "tags": tags,
+    }
     if parent:
         s["parentId"] = parent
     return s
@@ -44,11 +52,18 @@ SPANS = [
     span("c", "b", "LOCAL", "items", "com.example.store.ItemStore", 20, 50),
 ]
 
-PROFILE = {"name": "all", "value": 10_000, "children": [
-    {"name": "com/example/thrift/ItemService$Processor$getitems.process(ItemService.java)", "value": 4_000,
-     "children": [{"name": "com/example/store/ItemStore.load(ItemStore.java)", "value": 3_000}]},
-    {"name": "java/lang/Thread.run(Thread.java)", "value": 6_000},
-]}
+PROFILE = {
+    "name": "all",
+    "value": 10_000,
+    "children": [
+        {
+            "name": "com/example/thrift/ItemService$Processor$getitems.process(ItemService.java)",
+            "value": 4_000,
+            "children": [{"name": "com/example/store/ItemStore.load(ItemStore.java)", "value": 3_000}],
+        },
+        {"name": "java/lang/Thread.run(Thread.java)", "value": 6_000},
+    ],
+}
 
 
 class FakeES:
@@ -68,8 +83,10 @@ class SearchES(tf.ZipkinES):
     def search(self, index, body):
         self.bodies.append(body)
         if "track_total_hits" in body:
-            return {"hits": {"total": {"value": 1234}},
-                    "aggregations": {"p": {"values": {"50.0": 850e3, "90.0": 2100e3, "99.0": 6000e3}}}}
+            return {
+                "hits": {"total": {"value": 1234}},
+                "aggregations": {"p": {"values": {"50.0": 850e3, "90.0": 2100e3, "99.0": 6000e3}}},
+            }
         if "aggs" in body:
             return {"aggregations": {"t": {"buckets": [{"key": "abc123", "doc_count": 3}]}}}
         return {"hits": {"hits": [{"_source": {"traceId": "abc123", "name": "timing/home_render", "duration": 120e3}}]}}
@@ -94,8 +111,10 @@ class TraceFlameTest(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, "config.example.json")) as f:
             conf = json.load(f)
-        conf["reports"] = [{"id": "items", "label": "items", "trace_id": "abc123"},
-                           {"id": "missing", "trace_id": "nope"}]
+        conf["reports"] = [
+            {"id": "items", "label": "items", "trace_id": "abc123"},
+            {"id": "missing", "trace_id": "nope"},
+        ]
         self.config = os.path.join(self.tmp.name, "config.json")
         with open(self.config, "w") as f:
             json.dump(conf, f)
@@ -136,15 +155,26 @@ class TraceFlameTest(unittest.TestCase):
 
     def test_root_report_filters_by_tags_and_records_path_meta(self):
         es = SearchES(self.cfg)
-        args = tf.report_args(self.ap, {"id": "web-home-desktop", "root": "home_render", "platform": "web",
-                                        "device": "desktop", "tags": {"device.typeName": "desktop"}}, self.tmp.name)
+        args = tf.report_args(
+            self.ap,
+            {
+                "id": "web-home-desktop",
+                "root": "home_render",
+                "platform": "web",
+                "device": "desktop",
+                "tags": {"device.typeName": "desktop"},
+            },
+            self.tmp.name,
+        )
         meta = tf.render(self.cfg, es, None, [], args)
 
         self.assertEqual(meta["platform"], "web")
         self.assertEqual(meta["device"], "desktop")
         self.assertEqual(meta["flow"], "timing/home_render")
         self.assertEqual(meta["sample"], "tail")
-        self.assertEqual(meta["stats"], {"window_hours": 6, "count": 1234, "p50_ms": 850, "p90_ms": 2100, "p99_ms": 6000})
+        self.assertEqual(
+            meta["stats"], {"window_hours": 6, "count": 1234, "p50_ms": 850, "p90_ms": 2100, "p99_ms": 6000}
+        )
         roots_and_stats = [b for b in es.bodies if "aggs" not in b or "track_total_hits" in b]
         self.assertEqual(len(roots_and_stats), 2)
         for body in roots_and_stats:
@@ -152,8 +182,9 @@ class TraceFlameTest(unittest.TestCase):
 
     def test_typical_sample_picks_roots_near_the_percentile(self):
         es = SearchES(self.cfg)
-        args = tf.report_args(self.ap, {"id": "web-home-p50", "root": "home_render", "platform": "web",
-                                        "sample": "p50"}, self.tmp.name)
+        args = tf.report_args(
+            self.ap, {"id": "web-home-p50", "root": "home_render", "platform": "web", "sample": "p50"}, self.tmp.name
+        )
         meta = tf.render(self.cfg, es, None, [], args)
 
         self.assertEqual(meta["sample"], "p50")
@@ -161,7 +192,9 @@ class TraceFlameTest(unittest.TestCase):
         self.assertIn("random_score", roots["query"]["function_score"])
         flt = roots["query"]["function_score"]["query"]["bool"]["filter"]
         dur = next(f["range"]["duration"] for f in flt if "duration" in f.get("range", {}))
-        self.assertEqual(dur, {"gte": int(850 * (1 - tf.SAMPLE_BAND)) * 1000, "lte": (int(850 * (1 + tf.SAMPLE_BAND)) + 1) * 1000})
+        self.assertEqual(
+            dur, {"gte": int(850 * (1 - tf.SAMPLE_BAND)) * 1000, "lte": (int(850 * (1 + tf.SAMPLE_BAND)) + 1) * 1000}
+        )
 
     def test_llm_recommendations_are_embedded_escaped(self):
         class FakeLLM(advisor.LLM):
@@ -171,9 +204,19 @@ class TraceFlameTest(unittest.TestCase):
 
             def complete(self, system, user):
                 self.prompts.append(user)
-                return json.dumps({"summary": EVIL, "recommendations": [
-                    {"title": "Batch getitems " + EVIL, "evidence": ["F1", "F999"], "est_savings_ms": 40,
-                     "confidence": "high"}]})
+                return json.dumps(
+                    {
+                        "summary": EVIL,
+                        "recommendations": [
+                            {
+                                "title": "Batch getitems " + EVIL,
+                                "evidence": ["F1", "F999"],
+                                "est_savings_ms": 40,
+                                "confidence": "high",
+                            }
+                        ],
+                    }
+                )
 
         llm = FakeLLM()
         out = os.path.join(self.tmp.name, "r.html")
@@ -193,10 +236,16 @@ class TraceFlameTest(unittest.TestCase):
         self.assertIn("Report context (JSON)", advice_js["prompt"])
 
     def test_report_args_rejects_bad_specs(self):
-        for spec in ({"id": "../x", "root": "r"}, {"id": "ok", "root": "r", "slowest": "s"},
-                     {"id": "ok"}, {"id": "ok", "root": "r", "out": "/etc/passwd"},
-                     {"id": "ok", "root": "r", "tags": ["device=phone"]}, {"id": "ok", "root": "r", "tags": {"k": 1}},
-                     {"id": "ok", "root": "r", "sample": "median"}, {"id": "ok", "root": "r", "sample": "p100"}):
+        for spec in (
+            {"id": "../x", "root": "r"},
+            {"id": "ok", "root": "r", "slowest": "s"},
+            {"id": "ok"},
+            {"id": "ok", "root": "r", "out": "/etc/passwd"},
+            {"id": "ok", "root": "r", "tags": ["device=phone"]},
+            {"id": "ok", "root": "r", "tags": {"k": 1}},
+            {"id": "ok", "root": "r", "sample": "median"},
+            {"id": "ok", "root": "r", "sample": "p100"},
+        ):
             with self.assertRaises(ValueError, msg=spec):
                 tf.report_args(self.ap, spec, self.tmp.name)
 
@@ -226,6 +275,7 @@ class AdvisorTest(unittest.TestCase):
             for c in n.children:
                 parents[id(c)] = n
                 link(c)
+
         link(root)
         return root, nodes, parents
 
@@ -234,8 +284,10 @@ class AdvisorTest(unittest.TestCase):
         spans = [span("a", None, "SERVER", "api", "/feed", 0, 230, server_host_type="api-prod")]
         for i in range(6):
             sid = f"c{i}"
-            spans += [span(sid, "a", "CLIENT", "api", "getitem", 10 + 30 * i, 30),
-                      span(sid, "a", "SERVER", "items", "getitem", 11 + 30 * i, 28, server_host_type="items-prod")]
+            spans += [
+                span(sid, "a", "CLIENT", "api", "getitem", 10 + 30 * i, 30),
+                span(sid, "a", "SERVER", "items", "getitem", 11 + 30 * i, 28, server_host_type="items-prod"),
+            ]
         root, nodes, parents = self.tree(spans)
         ranked = tf.rank_clusters(nodes, parents, 3)
         info = {a["cluster"]: {"profiled": False, "proxy": None} for a in ranked}
@@ -256,10 +308,12 @@ class AdvisorTest(unittest.TestCase):
 
     def test_critical_path_follows_concurrent_server_work_not_a_childless_wait(self):
         # The app's request span has no children; the request's server side hangs off the page root.
-        spans = [span("r", None, "LOCAL", "web", "timing/related", 0, 1000),
-                 span("q", "r", "CLIENT", "web", "first_page_load", 0, 1000),
-                 span("e", "r", "SERVER", "cdn", "edge", 10, 900),
-                 span("e2", "e", "SERVER", "api", "/related", 50, 800, server_host_type="api-prod")]
+        spans = [
+            span("r", None, "LOCAL", "web", "timing/related", 0, 1000),
+            span("q", "r", "CLIENT", "web", "first_page_load", 0, 1000),
+            span("e", "r", "SERVER", "cdn", "edge", 10, 900),
+            span("e2", "e", "SERVER", "api", "/related", 50, 800, server_host_type="api-prod"),
+        ]
         root, nodes, parents = self.tree(spans)
         held = {n.label(): us // 1000 for n, us in advisor.critical_path(root)}
 
@@ -269,12 +323,31 @@ class AdvisorTest(unittest.TestCase):
         self.assertEqual(advisor.owner_of(next(n for n in nodes if n.service == "cdn"), parents), "cdn")
 
     def test_parse_recommendations_keeps_only_known_shape(self):
-        content = "Sure:\n" + json.dumps({"summary": "s" * 2000, "recommendations": [
-            "not a dict", {"title": "t", "evidence": ["F1", "F7", 3], "est_savings_ms": True, "confidence": "certain"}]})
+        content = "Sure:\n" + json.dumps(
+            {
+                "summary": "s" * 2000,
+                "recommendations": [
+                    "not a dict",
+                    {"title": "t", "evidence": ["F1", "F7", 3], "est_savings_ms": True, "confidence": "certain"},
+                ],
+            }
+        )
         out = advisor.parse_recommendations(content, {"F1", "F2"})
         self.assertEqual(len(out["summary"]), 600)
-        self.assertEqual(out["recommendations"], [{"title": "t", "why": "", "action": "", "owner": "",
-                                                   "evidence": ["F1"], "est_savings_ms": None, "confidence": None}])
+        self.assertEqual(
+            out["recommendations"],
+            [
+                {
+                    "title": "t",
+                    "why": "",
+                    "action": "",
+                    "owner": "",
+                    "evidence": ["F1"],
+                    "est_savings_ms": None,
+                    "confidence": None,
+                }
+            ],
+        )
 
     def test_llm_disabled_without_url_or_model(self):
         self.assertFalse(advisor.LLM({}).enabled)

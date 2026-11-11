@@ -9,11 +9,10 @@ import gzip
 import json
 
 import pytest
+from backend.routers import trace_reports_routes
 from botocore.exceptions import ClientError
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
-from backend.routers import trace_reports_routes
 
 GOOD = "web-home/20261107T2100Z.html"
 
@@ -61,8 +60,10 @@ def test_html_is_served_sandboxed(client):
     assert "allow-same-origin" not in r.headers["content-security-policy"]
 
 
-@pytest.mark.parametrize("path", ["../index.json", "index.json", "a/b/20261107T2100Z.html",
-                                  "Web/20261107T2100Z.html", f"{GOOD}/../../secret"])
+@pytest.mark.parametrize(
+    "path",
+    ["../index.json", "index.json", "a/b/20261107T2100Z.html", "Web/20261107T2100Z.html", f"{GOOD}/../../secret"],
+)
 def test_html_rejects_paths_outside_reports(client, path):
     assert client.get("/api/trace_reports/html", params={"path": path}).status_code == 400
 

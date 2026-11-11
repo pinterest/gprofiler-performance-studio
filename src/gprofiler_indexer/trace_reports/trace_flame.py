@@ -39,6 +39,7 @@ Usage
   python3 trace_flame.py --config config.json --root <root-span-name> --platform <client-service> --out t.html
   python3 trace_flame.py --config config.json --batch --out-dir <dir>   # every entry of config "reports"
 """
+
 from __future__ import annotations
 
 import argparse
@@ -97,9 +98,14 @@ class Config:
         # Studio API base URL used to read profiles (/api/flamegraph, /api/services): the env variable,
         # else "url", else a host picked from the hosts file (one "host[:port]" per line, re-read every
         # run so replaced webapp hosts are followed) with "port" overriding the listed port.
-        hosts_file = os.environ.get(ps.get("hosts_file_env", "TRACE_REPORTS_PROFILE_HOSTS_FILE")) or ps.get("hosts_file")
-        self.profile_api_url: str = (os.environ.get(ps.get("url_env", "TRACE_REPORTS_PROFILE_API_URL"))
-                                     or ps.get("url") or hosts_file_url(hosts_file, ps.get("port"))).rstrip("/")
+        hosts_file = os.environ.get(ps.get("hosts_file_env", "TRACE_REPORTS_PROFILE_HOSTS_FILE")) or ps.get(
+            "hosts_file"
+        )
+        self.profile_api_url: str = (
+            os.environ.get(ps.get("url_env", "TRACE_REPORTS_PROFILE_API_URL"))
+            or ps.get("url")
+            or hosts_file_url(hosts_file, ps.get("port"))
+        ).rstrip("/")
         self.profile_timeout_s: int = int(ps.get("timeout_seconds", 120))
         self.studio_url: str = c["studio_url"].rstrip("/")
         self.reports: List[Dict[str, Any]] = c.get("reports", [])
@@ -129,8 +135,28 @@ class Config:
 SYNTHETIC = re.compile(r"lambda\$|access\$|\$\$Lambda|^\$|\$\d+$")
 FQ_CLASS = re.compile(r"^[a-z][\w$]*(?:\.[\w$]+){2,}$")  # looks like a.b.c.ClassName (Zipkin lower-cases it)
 IDENT = re.compile(r"^[a-z_][\w]*$")  # looks like a method/function name (Thrift op, Python func)
-GENERIC_OPS = {"get", "post", "put", "delete", "wsgi", "call", "run", "execute", "process", "handle", "apply",
-               "handler", "api", "tasks", "params", "encode", "decode", "init", "main", "unknown_function"}
+GENERIC_OPS = {
+    "get",
+    "post",
+    "put",
+    "delete",
+    "wsgi",
+    "call",
+    "run",
+    "execute",
+    "process",
+    "handle",
+    "apply",
+    "handler",
+    "api",
+    "tasks",
+    "params",
+    "encode",
+    "decode",
+    "init",
+    "main",
+    "unknown_function",
+}
 
 
 def op_frame_keys(cls: str, meth: str) -> Set[str]:
@@ -142,7 +168,7 @@ def op_frame_keys(cls: str, meth: str) -> Set[str]:
     keys.add(m)
     for pre in ("send_", "recv_", "process_"):
         if m.startswith(pre):
-            keys.add(m[len(pre):])
+            keys.add(m[len(pre) :])
     if "." not in cls:  # JVM class (py-spy "classes" are file paths; their basename is not a symbol)
         seg = cls.rsplit("/", 1)[-1].rsplit("$", 1)[-1].lower()
         for suf in ("_args", "_result"):
@@ -157,6 +183,7 @@ def op_search_regex(*ops: str) -> str:
     "pkg/Class.meth(" / "Service$Processor$meth" and py-spy "meth (/path.py:N)" frame forms."""
     o = "|".join(re.escape(x) for x in ops if x)
     return rf"(?:^|[.$/])(?:send_|recv_|process_)?(?:{o})(?:_args|_result)?(?:[.($]| \()"
+
 
 # --------------------------------------------------------------------------- trace store (Zipkin ES)
 
@@ -177,8 +204,9 @@ class ZipkinES:
         hdrs = {"Content-Type": "application/json"}
         if self._creds():
             hdrs["Authorization"] = self._auth
-        req = urllib.request.Request(f"{self.cfg.es_url}/{index}/_search?ignore_unavailable=true",
-                                     data=json.dumps(body).encode(), headers=hdrs)
+        req = urllib.request.Request(
+            f"{self.cfg.es_url}/{index}/_search?ignore_unavailable=true", data=json.dumps(body).encode(), headers=hdrs
+        )
         with urllib.request.urlopen(req, timeout=60) as r:
             return json.load(r)
 
@@ -205,8 +233,11 @@ class ZipkinES:
         spans: List[Dict[str, Any]] = []
         after: Optional[List[Any]] = None
         while True:
-            body: Dict[str, Any] = {"size": page, "query": {"term": {"traceId": trace_id}},
-                                    "sort": [{"timestamp_millis": "asc"}, {"_doc": "asc"}]}
+            body: Dict[str, Any] = {
+                "size": page,
+                "query": {"term": {"traceId": trace_id}},
+                "sort": [{"timestamp_millis": "asc"}, {"_doc": "asc"}],
+            }
             if after:
                 body["search_after"] = after
             hits = self.search(idx, body).get("hits", {}).get("hits", [])
@@ -218,8 +249,9 @@ class ZipkinES:
             raise LookupError(f"trace {trace_id} not found in {idx}")
         return spans
 
-    def slowest(self, service: str, cluster: Optional[str], op: Optional[str], date: Optional[str],
-                max_ms: int, limit: int) -> List[Dict[str, Any]]:
+    def slowest(
+        self, service: str, cluster: Optional[str], op: Optional[str], date: Optional[str], max_ms: int, limit: int
+    ) -> List[Dict[str, Any]]:
         must: List[Dict[str, Any]] = [
             {"term": {"localEndpoint.serviceName": service}},
             {"match": {"kind": "SERVER"}},
@@ -229,14 +261,20 @@ class ZipkinES:
             must.append({"term": {f"tags.{self.cfg.cluster_tag}": cluster}})
         if op:
             must.append({"term": {"name": op}})
-        res = self.search(self.window_indices(date, 24), {
-            "size": limit, "sort": [{"duration": {"order": "desc"}}],
-            "query": {"bool": {"must": must}},
-            "_source": ["traceId", "name", "duration", "timestamp_millis", f"tags.{self.cfg.cluster_tag}"]})
+        res = self.search(
+            self.window_indices(date, 24),
+            {
+                "size": limit,
+                "sort": [{"duration": {"order": "desc"}}],
+                "query": {"bool": {"must": must}},
+                "_source": ["traceId", "name", "duration", "timestamp_millis", f"tags.{self.cfg.cluster_tag}"],
+            },
+        )
         return [h["_source"] for h in res["hits"]["hits"]]
 
-    def root_filter(self, root: str, platform: str, hours: float, min_age_min: float = 0,
-                    tags: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+    def root_filter(
+        self, root: str, platform: str, hours: float, min_age_min: float = 0, tags: Optional[Dict[str, str]] = None
+    ) -> List[Dict[str, Any]]:
         """ES filter for client timing roots: client service + '<root_prefix><root>' span, from the
         last `hours` but at least `min_age_min` old, carrying every tag in `tags`."""
         pre = self.cfg.root_prefix
@@ -254,24 +292,45 @@ class ZipkinES:
             flt.append({"range": {"timestamp_millis": rng}})
         return flt
 
-    def root_stats(self, root: str, platform: str, date: Optional[str], hours: float,
-                   tags: Optional[Dict[str, str]] = None, extra_pct: Optional[int] = None) -> Dict[str, Any]:
+    def root_stats(
+        self,
+        root: str,
+        platform: str,
+        date: Optional[str],
+        hours: float,
+        tags: Optional[Dict[str, str]] = None,
+        extra_pct: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """How hot a client timing root is: count and p50/p90/p99 duration over the last `hours`."""
         percents = sorted({50, 90, 99} | ({extra_pct} if extra_pct else set()))
-        res = self.search(self.window_indices(date, hours), {
-            "size": 0, "track_total_hits": True,
-            "query": {"bool": {"filter": self.root_filter(root, platform, hours, 0, tags)}},
-            "aggs": {"p": {"percentiles": {"field": "duration", "percents": percents}}}})
+        res = self.search(
+            self.window_indices(date, hours),
+            {
+                "size": 0,
+                "track_total_hits": True,
+                "query": {"bool": {"filter": self.root_filter(root, platform, hours, 0, tags)}},
+                "aggs": {"p": {"percentiles": {"field": "duration", "percents": percents}}},
+            },
+        )
         pct = res["aggregations"]["p"]["values"]
         out: Dict[str, Any] = {"window_hours": hours, "count": res["hits"]["total"]["value"]}
         for p in percents:
             out[f"p{p}_ms"] = round((pct.get(f"{float(p)}") or 0) / 1000)
         return out
 
-    def root_candidates(self, root: str, platform: str, date: Optional[str], hours: float,
-                        max_ms: int, limit: int, min_age_min: float = 0,
-                        tags: Optional[Dict[str, str]] = None, min_ms: int = 0,
-                        random_seed: Optional[int] = None) -> List[Dict[str, Any]]:
+    def root_candidates(
+        self,
+        root: str,
+        platform: str,
+        date: Optional[str],
+        hours: float,
+        max_ms: int,
+        limit: int,
+        min_age_min: float = 0,
+        tags: Optional[Dict[str, str]] = None,
+        min_ms: int = 0,
+        random_seed: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
         """Client timing roots (see root_filter; at least `min_age_min` old so profiles for the
         window are indexed) with min_ms <= duration <= max_ms that share a traceId with backend SERVER
         spans (the client stamped its trace id on the API calls). The slowest `limit` roots, or a
@@ -284,18 +343,39 @@ class ZipkinES:
         if random_seed is None:
             order: List[Any] = [{"duration": {"order": "desc"}}]
         else:
-            query = {"function_score": {"query": query, "boost_mode": "replace",
-                                        "random_score": {"seed": random_seed, "field": "_seq_no"}}}
+            query = {
+                "function_score": {
+                    "query": query,
+                    "boost_mode": "replace",
+                    "random_score": {"seed": random_seed, "field": "_seq_no"},
+                }
+            }
             order = ["_score"]
-        res = self.search(idx, {"size": limit, "sort": order, "query": query,
-                                "_source": ["traceId", "name", "duration", "timestamp_millis"]})
+        res = self.search(
+            idx,
+            {
+                "size": limit,
+                "sort": order,
+                "query": query,
+                "_source": ["traceId", "name", "duration", "timestamp_millis"],
+            },
+        )
         roots = sorted((h["_source"] for h in res["hits"]["hits"]), key=lambda r: -r["duration"])
         if not roots:
             return []
         ids = [r["traceId"] for r in roots]
-        agg = self.search(idx, {"size": 0, "query": {"bool": {"filter": [
-            {"terms": {"traceId": ids}}, {"exists": {"field": f"tags.{self.cfg.cluster_tag}"}}]}},
-            "aggs": {"t": {"terms": {"field": "traceId", "size": len(ids)}}}})
+        agg = self.search(
+            idx,
+            {
+                "size": 0,
+                "query": {
+                    "bool": {
+                        "filter": [{"terms": {"traceId": ids}}, {"exists": {"field": f"tags.{self.cfg.cluster_tag}"}}]
+                    }
+                },
+                "aggs": {"t": {"terms": {"field": "traceId", "size": len(ids)}}},
+            },
+        )
         joined = {b["key"]: b["doc_count"] for b in agg["aggregations"]["t"]["buckets"]}
         out = []
         for r in roots:
@@ -310,9 +390,28 @@ class ZipkinES:
 
 
 class Node:
-    __slots__ = ("id", "kind", "parent_id", "service", "name", "start", "dur", "tags", "children",
-                 "self_us", "eff_us", "eff_start", "cluster", "host", "fq_class", "class_case", "members", "skew_us",
-                 "op_key", "op_alt")
+    __slots__ = (
+        "id",
+        "kind",
+        "parent_id",
+        "service",
+        "name",
+        "start",
+        "dur",
+        "tags",
+        "children",
+        "self_us",
+        "eff_us",
+        "eff_start",
+        "cluster",
+        "host",
+        "fq_class",
+        "class_case",
+        "members",
+        "skew_us",
+        "op_key",
+        "op_alt",
+    )
 
     def __init__(self, s: Dict[str, Any], cluster_tags: List[str], host_tag: Optional[str] = None):
         self.id = s.get("id") or s.get("spanId")
@@ -390,15 +489,15 @@ def intersect_len(a: List[Tuple[int, int]], b: List[Tuple[int, int]]) -> int:
     return tot
 
 
-def build_tree(spans: List[Dict[str, Any]], cfg: Config, clip: bool = False,
-               group_services: Optional[List[str]] = None) -> Tuple[Node, List[Node]]:
+def build_tree(
+    spans: List[Dict[str, Any]], cfg: Config, clip: bool = False, group_services: Optional[List[str]] = None
+) -> Tuple[Node, List[Node]]:
     """Span list -> tree. clip=True confines every span to its parent's interval (client resource
     timings routinely outlive the performance-timing root). group_services: services whose leaf
     siblings with the same name are folded into one '<name> ×N' node valued at the union of their
     intervals (parallel downloads are not N× the work)."""
     # Drop unfinished/unknown spans (no timestamp and no duration): they would stretch the trace to epoch 0.
-    spans = [s for s in spans if (s.get("id") or s.get("spanId"))
-             and (s.get("timestamp") or s.get("timestamp_millis"))]
+    spans = [s for s in spans if (s.get("id") or s.get("spanId")) and (s.get("timestamp") or s.get("timestamp_millis"))]
     tags, htag = cfg.cluster_tags, cfg.host_tag
     nodes = [Node(s, tags, htag) for s in spans]
     by_id: Dict[str, List[Node]] = defaultdict(list)
@@ -406,17 +505,28 @@ def build_tree(spans: List[Dict[str, Any]], cfg: Config, clip: bool = False,
         by_id[n.id].append(n)
     t0 = min(n.start for n in nodes)
     t1 = max(n.end for n in nodes)
-    root = Node({"id": "root", "name": "trace", "localEndpoint": {"serviceName": "all"},
-                 "timestamp": t0, "duration": t1 - t0, "kind": "LOCAL"}, tags)
+    root = Node(
+        {
+            "id": "root",
+            "name": "trace",
+            "localEndpoint": {"serviceName": "all"},
+            "timestamp": t0,
+            "duration": t1 - t0,
+            "kind": "LOCAL",
+        },
+        tags,
+    )
     missing: Dict[str, Node] = {}
 
     def best(cands: List[Node], n: Node, prefer: str) -> Node:
         """Among candidate parents (some clients reuse one span id for several requests), prefer the
         wanted kind, then one that fully contains the child, then the closest start time (robust to
         client clock skew, unlike overlap)."""
+
         def score(c: Node) -> Tuple[int, int, int]:
             fits = 1 if c.start <= n.start and c.end >= n.end else 0
             return (1 if c.kind == prefer else 0, fits, -abs(c.start - n.start))
+
         return max(cands, key=score)
 
     def pick_parent(n: Node) -> Optional[Node]:
@@ -429,9 +539,17 @@ def build_tree(spans: List[Dict[str, Any]], cfg: Config, clip: bool = False,
         if not cands:
             m = missing.get(n.parent_id)
             if m is None:
-                m = Node({"id": f"missing-{n.parent_id}", "name": f"[missing parent {n.parent_id}]",
-                          "localEndpoint": {"serviceName": "[missing]"}, "timestamp": n.start,
-                          "duration": 0, "kind": "LOCAL"}, tags)
+                m = Node(
+                    {
+                        "id": f"missing-{n.parent_id}",
+                        "name": f"[missing parent {n.parent_id}]",
+                        "localEndpoint": {"serviceName": "[missing]"},
+                        "timestamp": n.start,
+                        "duration": 0,
+                        "kind": "LOCAL",
+                    },
+                    tags,
+                )
                 missing[n.parent_id] = m
                 root.children.append(m)
             return m
@@ -462,11 +580,17 @@ def build_tree(spans: List[Dict[str, Any]], cfg: Config, clip: bool = False,
 
     def correct_skew(n: Node) -> None:
         for c in n.children:
-            if c.kind == "SERVER" and n.kind == "CLIENT" and c.service != n.service and n.dur > 0 \
-                    and (c.start < n.start or c.end > n.end):
+            if (
+                c.kind == "SERVER"
+                and n.kind == "CLIENT"
+                and c.service != n.service
+                and n.dur > 0
+                and (c.start < n.start or c.end > n.end)
+            ):
                 latency = max((n.dur - c.dur) // 2, 0)
                 shift(c, c.start - latency - n.start)
             correct_skew(c)
+
     correct_skew(root)
     t0 = min(n.start for n in nodes)
     root.start, root.dur = t0, max(n.end for n in nodes) - t0
@@ -480,11 +604,13 @@ def build_tree(spans: List[Dict[str, Any]], cfg: Config, clip: bool = False,
             moved: List[Tuple[Node, List[Node]]] = []
             for c in n.children:
                 if n is not root and (c.end <= n.start or c.start >= n.end):
-                    i = next((k for k in range(len(chain) - 1, -1, -1)
-                              if c.start < chain[k].end and c.end > chain[k].start), 0)
+                    i = next(
+                        (k for k in range(len(chain) - 1, -1, -1) if c.start < chain[k].end and c.end > chain[k].start),
+                        0,
+                    )
                     chain[i].children.append(c)
                     c.tags = dict(c.tags, _moved_from=n.label())
-                    moved.append((c, chain[:i + 1]))
+                    moved.append((c, chain[: i + 1]))
                 else:
                     keep.append(c)
             n.children = keep
@@ -492,9 +618,11 @@ def build_tree(spans: List[Dict[str, Any]], cfg: Config, clip: bool = False,
                 reparent(c, chain + [n])
             for c, ch in moved:
                 reparent(c, ch)
+
         reparent(root, [])
 
     if group_services:
+
         def group(n: Node) -> None:
             buckets: Dict[Tuple[str, str], List[Node]] = defaultdict(list)
             for c in n.children:
@@ -503,14 +631,22 @@ def build_tree(spans: List[Dict[str, Any]], cfg: Config, clip: bool = False,
             for (svc, name), leaves in buckets.items():
                 if len(leaves) < 3:
                     continue
-                g = Node({"id": f"group-{id(n)}-{name}", "name": f"{name} ×{len(leaves)}",
-                          "localEndpoint": {"serviceName": svc}, "kind": "CLIENT",
-                          "timestamp": min(c.start for c in leaves),
-                          "duration": max(c.end for c in leaves) - min(c.start for c in leaves)}, tags)
+                g = Node(
+                    {
+                        "id": f"group-{id(n)}-{name}",
+                        "name": f"{name} ×{len(leaves)}",
+                        "localEndpoint": {"serviceName": svc},
+                        "kind": "CLIENT",
+                        "timestamp": min(c.start for c in leaves),
+                        "duration": max(c.end for c in leaves) - min(c.start for c in leaves),
+                    },
+                    tags,
+                )
                 g.members = [(c.start, c.end) for c in leaves]
                 n.children = [c for c in n.children if c not in leaves] + [g]
             for c in n.children:
                 group(c)
+
         group(root)
 
     def finish(n: Node, lo: int, hi: int) -> None:
@@ -541,8 +677,9 @@ class StudioAPI:
 
     def _get(self, path: str, params: Optional[Dict[str, str]] = None) -> Optional[str]:
         url = f"{self.base}{path}" + (f"?{urlencode(params)}" if params else "")
-        with urllib.request.urlopen(urllib.request.Request(url, headers={"Accept": "application/json"}),
-                                    timeout=self.timeout) as r:
+        with urllib.request.urlopen(
+            urllib.request.Request(url, headers={"Accept": "application/json"}), timeout=self.timeout
+        ) as r:
             if r.status == 204:
                 return None
             return r.read().decode()
@@ -563,16 +700,21 @@ def display_frame(cls: str, meth: str) -> str:
     return f"{cls.replace('/', '.')}.{meth}"
 
 
-def profile_summary(tree: Dict[str, Any], cfg: Config, want_classes: Set[str], want_ops: Optional[Set[str]] = None,
-                    top: int = 12) -> Dict[str, Any]:
+def profile_summary(
+    tree: Dict[str, Any], cfg: Config, want_classes: Set[str], want_ops: Optional[Set[str]] = None, top: int = 12
+) -> Dict[str, Any]:
     """Hot app methods for the cluster + symbol join for the spans of this trace: by class (spans
     named by a fully-qualified class) and by method name (spans named by a Thrift op / function)."""
     total = tree.get("value", 0) or 1
     incl: Counter = Counter()
     selfc: Counter = Counter()
     app_total = 0
-    classes: Dict[str, Dict[str, Any]] = {c: {"incl": 0, "methods": Counter(), "leaves": Counter()} for c in want_classes}
-    ops: Dict[str, Dict[str, Any]] = {o: {"incl": 0, "frames": Counter(), "leaves": Counter()} for o in (want_ops or ())}
+    classes: Dict[str, Dict[str, Any]] = {
+        c: {"incl": 0, "methods": Counter(), "leaves": Counter()} for c in want_classes
+    }
+    ops: Dict[str, Dict[str, Any]] = {
+        o: {"incl": 0, "frames": Counter(), "leaves": Counter()} for o in (want_ops or ())
+    }
 
     def walk(n: Dict[str, Any], active: frozenset, in_app: bool, anc_v: float, active_cls: frozenset) -> None:
         nonlocal app_total
@@ -628,7 +770,8 @@ def profile_summary(tree: Dict[str, Any], cfg: Config, want_classes: Set[str], w
         if d["incl"] <= 0:
             continue
         out_classes[c] = {
-            "pct": pct(d["incl"]), "samples": d["incl"],
+            "pct": pct(d["incl"]),
+            "samples": d["incl"],
             "methods": [{"name": k, "pct": pct(v)} for k, v in d["methods"].most_common(6)],
             "leaves": [{"frame": k, "pct": pct(v)} for k, v in d["leaves"].most_common(6)],
         }
@@ -637,20 +780,24 @@ def profile_summary(tree: Dict[str, Any], cfg: Config, want_classes: Set[str], w
         if d["incl"] <= 0:
             continue
         out_ops[o] = {
-            "pct": pct(d["incl"]), "samples": d["incl"],
+            "pct": pct(d["incl"]),
+            "samples": d["incl"],
             "frames": [{"frame": k, "pct": pct(v)} for k, v in d["frames"].most_common(8)],
             "leaves": [{"frame": k, "pct": pct(v)} for k, v in d["leaves"].most_common(6)],
         }
     return {
-        "total_samples": total, "app_pct": round(100 * app_total / total, 1),
+        "total_samples": total,
+        "app_pct": round(100 * app_total / total, 1),
         "top": [fmt(k, v) for k, v in incl.most_common(top)],
         "top_self": [fmt(k, v) for k, v in selfc.most_common(top) if v > 0],
-        "classes": out_classes, "ops": out_ops,
+        "classes": out_classes,
+        "ops": out_ops,
     }
 
 
-def fetch_profile(src: StudioAPI, cluster: str, s: dt.datetime,
-                  e: dt.datetime) -> Tuple[str, Optional[Dict[str, Any]], Optional[str]]:
+def fetch_profile(
+    src: StudioAPI, cluster: str, s: dt.datetime, e: dt.datetime
+) -> Tuple[str, Optional[Dict[str, Any]], Optional[str]]:
     try:
         tree = src.flamegraph(cluster, s, e)
     except urllib.error.HTTPError as ex:
@@ -676,6 +823,7 @@ def prune_tree(tree: Dict[str, Any], min_frac: float) -> Dict[str, Any]:
         kids = [rec(c) for c in (n.get("children") or []) if (c.get("value") or 0) >= thr]
         kids.sort(key=lambda k: -k["value"])
         return {"name": short(n.get("name", "")), "value": n.get("value", 0), "children": kids}
+
     return rec(tree)
 
 
@@ -693,8 +841,13 @@ def us_to_dt(us: int) -> dt.datetime:
 def script_json(v: Any) -> str:
     """JSON safe to inline in <script>: span and frame names are untrusted and may contain '</script>'."""
     s = json.dumps(v, separators=(",", ":"))
-    return s.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026") \
-        .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+    return (
+        s.replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
 
 
 def profile_window(start_us: int, end_us: int, min_minutes: int) -> Tuple[dt.datetime, dt.datetime]:
@@ -711,8 +864,16 @@ def deep_link(cfg: Config, cluster: str, s: dt.datetime, e: dt.datetime, search:
     # highlighted flame graph); flame graph for the cluster-level link. Same parameter set Studio's
     # own ProfilingStatusPage uses: gtab=graph tab, rtms=mixed runtime stacks, pm=process inclusion,
     # wp=weight percentile.
-    q = {"service": cluster, "startTime": iso(s), "endTime": iso(e),
-         "view": "table" if search else "flamegraph", "gtab": "1", "rtms": "1", "pm": "1", "wp": "100"}
+    q = {
+        "service": cluster,
+        "startTime": iso(s),
+        "endTime": iso(e),
+        "view": "table" if search else "flamegraph",
+        "gtab": "1",
+        "rtms": "1",
+        "pm": "1",
+        "wp": "100",
+    }
     if search:
         q["search"] = search
     return f"{cfg.studio_url}/profiles?{urlencode(q)}"
@@ -735,6 +896,7 @@ def proxy_cluster(cfg: Config, cluster: str, profiled: List[str]) -> Optional[st
                 break
             n += 1
         return n
+
     return max(cands, key=lambda p: (common(p, cluster), -len(p)))
 
 
@@ -749,9 +911,20 @@ def rank_clusters(nodes: List[Node], parents: Dict[int, Node], min_minutes: int)
     for n in nodes:
         if not n.cluster:
             continue
-        a = agg.setdefault(n.cluster, {"cluster": n.cluster, "spans": 0, "self_ms": 0.0, "wall_ms": 0.0,
-                                       "start": n.start, "end": n.end, "ops": Counter(), "classes": set(),
-                                       "op_keys": set()})
+        a = agg.setdefault(
+            n.cluster,
+            {
+                "cluster": n.cluster,
+                "spans": 0,
+                "self_ms": 0.0,
+                "wall_ms": 0.0,
+                "start": n.start,
+                "end": n.end,
+                "ops": Counter(),
+                "classes": set(),
+                "op_keys": set(),
+            },
+        )
         a["spans"] += 1
         if n.op_key:
             a["op_keys"].add(n.op_key)
@@ -786,7 +959,9 @@ def rank_clusters(nodes: List[Node], parents: Dict[int, Node], min_minutes: int)
     out = sorted(agg.values(), key=lambda a: -a["excl_ms"])
     for a in out:
         a["window"] = profile_window(a["start"], a["end"], min_minutes)
-        a["ops"] = [k for k, _ in a["ops"].most_common(4) if not FQ_CLASS.match(k)] or [k for k, _ in a["ops"].most_common(2)]
+        a["ops"] = [k for k, _ in a["ops"].most_common(4) if not FQ_CLASS.match(k)] or [
+            k for k, _ in a["ops"].most_common(2)
+        ]
     return out
 
 
@@ -807,10 +982,15 @@ def to_flame(n: Node, info: Dict[str, Dict[str, Any]], parents: Dict[int, Node],
     kids = sorted((to_flame(c, info, parents, cfg) for c in n.children), key=lambda k: -k["total"])
     # value = SELF time, so widths are additive and a frame's width is its subtree's total work.
     d: Dict[str, Any] = {
-        "name": n.label(), "value": n.self_us, "children": kids,
+        "name": n.label(),
+        "value": n.self_us,
+        "children": kids,
         "total": n.self_us + sum(k["total"] for k in kids),
-        "svc": n.service, "kind": n.kind, "ms": round(n.dur / 1000, 2),
-        "self_ms": round(n.self_us / 1000, 2), "start": iso(us_to_dt(n.start)) if n.start else "",
+        "svc": n.service,
+        "kind": n.kind,
+        "ms": round(n.dur / 1000, 2),
+        "self_ms": round(n.self_us / 1000, 2),
+        "start": iso(us_to_dt(n.start)) if n.start else "",
     }
     if n.kind == "LOCAL":
         del d["kind"]
@@ -828,7 +1008,6 @@ def to_flame(n: Node, info: Dict[str, Dict[str, Any]], parents: Dict[int, Node],
         d["host"] = n.host
     cl = n.cluster or (owning_cluster(n, parents) if (n.fq_class or n.op_key) else None)
     if cl and cl in info:
-        c = info[cl]
         # Studio's frame search is a case-insensitive regex over frame names, which are in JVM
         # slash form (com/example/.../ClassName.method). Search for the class path exactly.
         search = None
@@ -1141,7 +1320,9 @@ function copyPrompt(){
 """
 
 
-def aggregate_clusters(es: ZipkinES, cfg: Config, trace_ids: List[str], date: Optional[str]) -> Tuple[int, List[Dict[str, Any]]]:
+def aggregate_clusters(
+    es: ZipkinES, cfg: Config, trace_ids: List[str], date: Optional[str]
+) -> Tuple[int, List[Dict[str, Any]]]:
     """Cluster ranking across several traces: mean exclusive ms per trace (absent = 0) and presence."""
     acc: Dict[str, Dict[str, Any]] = {}
     n = 0
@@ -1157,11 +1338,14 @@ def aggregate_clusters(es: ZipkinES, cfg: Config, trace_ids: List[str], date: Op
             for c in x.children:
                 parents[id(c)] = x
                 link(c)
+
         link(root)
         n += 1
         for a in rank_clusters(nodes, parents, cfg.min_window_minutes):
-            r = acc.setdefault(a["cluster"], {"cluster": a["cluster"], "excl_ms": 0.0, "self_ms": 0.0,
-                                              "traces": 0, "spans": 0, "ops": Counter()})
+            r = acc.setdefault(
+                a["cluster"],
+                {"cluster": a["cluster"], "excl_ms": 0.0, "self_ms": 0.0, "traces": 0, "spans": 0, "ops": Counter()},
+            )
             r["excl_ms"] += a["excl_ms"]
             r["self_ms"] += a["self_ms"]
             r["traces"] += 1
@@ -1176,15 +1360,24 @@ def aggregate_clusters(es: ZipkinES, cfg: Config, trace_ids: List[str], date: Op
 
 
 def agg_html(rows: List[Dict[str, Any]], n: int, label: Optional[str], profiled: List[str], cfg: Config) -> str:
-    out = [f'<h3>Across {n} joined traces of {html.escape(label or "")}</h3>',
-           '<div class="muted">mean exclusive ms per trace (absent counts as 0) · in how many of the traces</div>',
-           '<table><tr><th>cluster</th><th class="num">mean excl ms</th><th class="num">traces</th><th>profile</th></tr>']
+    out = [
+        f'<h3>Across {n} joined traces of {html.escape(label or "")}</h3>',
+        '<div class="muted">mean exclusive ms per trace (absent counts as 0) · in how many of the traces</div>',
+        '<table><tr><th>cluster</th><th class="num">mean excl ms</th><th class="num">traces</th><th>profile</th></tr>',
+    ]
     for r in rows[:30]:
         px = proxy_cluster(cfg, r["cluster"], profiled) if profiled else None
-        tag = ('<span class="tag ok">yes</span>' if r["cluster"] in profiled else
-               (f'<span class="tag proxy">proxy {html.escape(px)}</span>' if px else '<span class="tag none">no</span>'))
-        out.append(f'<tr><td class="mono" title="{html.escape(", ".join(r["ops"]))}">{html.escape(r["cluster"])}</td>'
-                   f'<td class="num">{r["mean_excl_ms"]:.0f}</td><td class="num">{r["traces"]}/{n}</td><td>{tag}</td></tr>')
+        tag = (
+            '<span class="tag ok">yes</span>'
+            if r["cluster"] in profiled
+            else (
+                f'<span class="tag proxy">proxy {html.escape(px)}</span>' if px else '<span class="tag none">no</span>'
+            )
+        )
+        out.append(
+            f'<tr><td class="mono" title="{html.escape(", ".join(r["ops"]))}">{html.escape(r["cluster"])}</td>'
+            f'<td class="num">{r["mean_excl_ms"]:.0f}</td><td class="num">{r["traces"]}/{n}</td><td>{tag}</td></tr>'
+        )
     out.append("</table>")
     return "\n".join(out)
 
@@ -1202,9 +1395,11 @@ def cluster_rows(ranked: List[Dict[str, Any]], info: Dict[str, Dict[str, Any]]) 
         else:
             tag = '<span class="tag none">no</span>'
         link = f'<a target="_blank" href="{html.escape(c["link"])}">open</a>' if c.get("link") else ""
-        rows.append(f'<tr><td class="mono">{html.escape(a["cluster"])}</td><td class="num">{a["excl_ms"]:.0f}</td>'
-                    f'<td class="num">{a["self_ms"]:.0f}</td>'
-                    f'<td class="num">{a["spans"]}</td><td>{tag} {link}</td></tr>')
+        rows.append(
+            f'<tr><td class="mono">{html.escape(a["cluster"])}</td><td class="num">{a["excl_ms"]:.0f}</td>'
+            f'<td class="num">{a["self_ms"]:.0f}</td>'
+            f'<td class="num">{a["spans"]}</td><td>{tag} {link}</td></tr>'
+        )
     return "\n".join(rows)
 
 
@@ -1217,48 +1412,104 @@ def build_parser() -> argparse.ArgumentParser:
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--trace-id")
     g.add_argument("--slowest", metavar="TRACE_SERVICE", help="pick the slowest SERVER span's trace")
-    g.add_argument("--root", metavar="SPAN_NAME", help="end-to-end: a client timing root span (config "
-                   "client.root_prefix is prepended) whose trace joined to backend spans; rooted at that span")
-    g.add_argument("--batch", action="store_true", help="render every entry of config 'reports' into --out-dir "
-                   "and write manifest.json there")
+    g.add_argument(
+        "--root",
+        metavar="SPAN_NAME",
+        help="end-to-end: a client timing root span (config "
+        "client.root_prefix is prepended) whose trace joined to backend spans; rooted at that span",
+    )
+    g.add_argument(
+        "--batch",
+        action="store_true",
+        help="render every entry of config 'reports' into --out-dir " "and write manifest.json there",
+    )
     ap.add_argument("--platform", help="with --root: client service (default: first of config client.services)")
-    ap.add_argument("--tag", action="append", default=[], metavar="KEY=VALUE",
-                    help="with --root: only roots carrying this span tag (repeatable), e.g. a device class")
+    ap.add_argument(
+        "--tag",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="with --root: only roots carrying this span tag (repeatable), e.g. a device class",
+    )
     ap.add_argument("--device", help="with --root: device type label recorded in the report metadata")
-    ap.add_argument("--sample", default="tail", type=check_sample,
-                    help="with --root: 'tail' = among the slowest roots (default), or pNN (e.g. p50, p90) = "
-                         f"roots within ±{SAMPLE_BAND * 100:.0f}%% of that duration percentile")
+    ap.add_argument(
+        "--sample",
+        default="tail",
+        type=check_sample,
+        help="with --root: 'tail' = among the slowest roots (default), or pNN (e.g. p50, p90) = "
+        f"roots within ±{SAMPLE_BAND * 100:.0f}%% of that duration percentile",
+    )
     ap.add_argument("--no-llm", action="store_true", help="rule-based findings only; skip the advisor LLM call")
     ap.add_argument("--hours", type=float, default=6, help="with --root: look back this many hours")
-    ap.add_argument("--min-age-min", type=float, default=20,
-                    help="with --root: skip traces younger than this (profile indexing lag)")
-    ap.add_argument("--pick", choices=["median", "richest", "slowest"], default="median",
-                    help="with --root: the joined trace with the median number of backend spans (default; "
-                         "extremes are usually bots or shared trace ids), the most, or the slowest client timing")
-    ap.add_argument("--agg", type=int, default=0, metavar="N",
-                    help="with --root: also rank clusters across the N richest joined traces")
+    ap.add_argument(
+        "--min-age-min",
+        type=float,
+        default=20,
+        help="with --root: skip traces younger than this (profile indexing lag)",
+    )
+    ap.add_argument(
+        "--pick",
+        choices=["median", "richest", "slowest"],
+        default="median",
+        help="with --root: the joined trace with the median number of backend spans (default; "
+        "extremes are usually bots or shared trace ids), the most, or the slowest client timing",
+    )
+    ap.add_argument(
+        "--agg",
+        type=int,
+        default=0,
+        metavar="N",
+        help="with --root: also rank clusters across the N richest joined traces",
+    )
     ap.add_argument("--cluster", help="with --slowest: restrict to this cluster tag value")
     ap.add_argument("--op", help="with --slowest: restrict to this span name")
-    ap.add_argument("--max-ms", type=int, default=5000, help="with --slowest/--root: ignore spans above this (timeouts)")
-    ap.add_argument("--clip", action="store_true", help="confine spans to their parent's interval (default with --root)")
+    ap.add_argument(
+        "--max-ms", type=int, default=5000, help="with --slowest/--root: ignore spans above this (timeouts)"
+    )
+    ap.add_argument(
+        "--clip", action="store_true", help="confine spans to their parent's interval (default with --root)"
+    )
     ap.add_argument("--date", help="UTC day YYYY-MM-DD (default today)")
-    ap.add_argument("--embed-hotspots", type=int, default=6, metavar="K",
-                    help="embed profiles for the top K clusters by exclusive time (clusters with node-span "
-                         "classes are always included; 0 = links only)")
-    ap.add_argument("--span-min-pct", type=float, default=0.02, metavar="PCT",
-                    help="fold spans whose subtree work is below this %% of the root into their parent (0 = keep all)")
-    ap.add_argument("--profile-min-pct", type=float, default=0.03, metavar="PCT",
-                    help="embedded profile flame graph drops frames below this %% of samples (size/detail trade-off)")
+    ap.add_argument(
+        "--embed-hotspots",
+        type=int,
+        default=6,
+        metavar="K",
+        help="embed profiles for the top K clusters by exclusive time (clusters with node-span "
+        "classes are always included; 0 = links only)",
+    )
+    ap.add_argument(
+        "--span-min-pct",
+        type=float,
+        default=0.02,
+        metavar="PCT",
+        help="fold spans whose subtree work is below this %% of the root into their parent (0 = keep all)",
+    )
+    ap.add_argument(
+        "--profile-min-pct",
+        type=float,
+        default=0.03,
+        metavar="PCT",
+        help="embedded profile flame graph drops frames below this %% of samples (size/detail trade-off)",
+    )
     ap.add_argument("--no-profiles", action="store_true", help="links only; do not contact the profile source")
-    ap.add_argument("--focus", metavar="REGEX", help="re-root the flame graph at the longest span matching 'service: op'")
+    ap.add_argument(
+        "--focus", metavar="REGEX", help="re-root the flame graph at the longest span matching 'service: op'"
+    )
     ap.add_argument("--out", help="output HTML (single-trace modes)")
     ap.add_argument("--out-dir", help="with --batch: output directory")
     ap.add_argument("--quiet", action="store_true", help="no text summary on stdout")
     return ap
 
 
-def render(cfg: Config, es: ZipkinES, src: Optional[StudioAPI], profiled: List[str],
-           args: argparse.Namespace, llm: Optional[trace_advisor.LLM] = None) -> Dict[str, Any]:
+def render(
+    cfg: Config,
+    es: ZipkinES,
+    src: Optional[StudioAPI],
+    profiled: List[str],
+    args: argparse.Namespace,
+    llm: Optional[trace_advisor.LLM] = None,
+) -> Dict[str, Any]:
     """Render one trace page to args.out; returns its manifest entry."""
     trace_id = args.trace_id
     if args.slowest:
@@ -1266,8 +1517,11 @@ def render(cfg: Config, es: ZipkinES, src: Optional[StudioAPI], profiled: List[s
         if not cands:
             raise LookupError("no matching server spans")
         for c in cands:
-            print(f"  candidate {c['traceId']} {c['name']} {c['duration']/1000:.0f} ms "
-                  f"{(c.get('tags') or {}).get(cfg.cluster_tag)}", file=sys.stderr)
+            print(
+                f"  candidate {c['traceId']} {c['name']} {c['duration']/1000:.0f} ms "
+                f"{(c.get('tags') or {}).get(cfg.cluster_tag)}",
+                file=sys.stderr,
+            )
         trace_id = cands[0]["traceId"]
 
     focus = args.focus
@@ -1297,9 +1551,18 @@ def render(cfg: Config, es: ZipkinES, src: Optional[StudioAPI], profiled: List[s
             min_ms, max_ms = int(target * (1 - SAMPLE_BAND)), min(max_ms, int(target * (1 + SAMPLE_BAND)) + 1)
         # Few roots join to backend spans (only sampled requests carry the trace id), so typical
         # sampling draws a larger random set from the band; the seed changes every hour.
-        cands = es.root_candidates(args.root, platform, args.date, args.hours, max_ms, 1000 if pct else 200,
-                                   args.min_age_min, tags, min_ms,
-                                   int(dt.datetime.now(dt.timezone.utc).timestamp() // 3600) if pct else None)
+        cands = es.root_candidates(
+            args.root,
+            platform,
+            args.date,
+            args.hours,
+            max_ms,
+            1000 if pct else 200,
+            args.min_age_min,
+            tags,
+            min_ms,
+            int(dt.datetime.now(dt.timezone.utc).timestamp() // 3600) if pct else None,
+        )
         if not cands:
             raise LookupError(f"no {platform} {args.root} trace joined to backend spans in the last {args.hours}h")
         path_meta = {"platform": platform, "flow": cands[0]["name"], "sample": args.sample}
@@ -1307,8 +1570,11 @@ def render(cfg: Config, es: ZipkinES, src: Optional[StudioAPI], profiled: List[s
             path_meta["device"] = args.device
         if stats:
             path_meta["stats"] = stats
-        print(f"  {len(cands)}/{cands[0]['total_roots']} {platform} {cands[0]['name']} roots (last {args.hours:g}h, "
-              f"{min_ms}..{max_ms} ms) joined to backend spans", file=sys.stderr)
+        print(
+            f"  {len(cands)}/{cands[0]['total_roots']} {platform} {cands[0]['name']} roots (last {args.hours:g}h, "
+            f"{min_ms}..{max_ms} ms) joined to backend spans",
+            file=sys.stderr,
+        )
         by_rich = sorted(cands, key=lambda c: -c["backend_spans"])
         if args.pick == "richest":
             order = by_rich
@@ -1318,14 +1584,16 @@ def render(cfg: Config, es: ZipkinES, src: Optional[StudioAPI], profiled: List[s
             mid = len(by_rich) // 2
             order = sorted(by_rich, key=lambda c: abs(by_rich.index(c) - mid))
         for c in order[:5]:
-            print(f"  candidate {c['traceId']} client {c['duration']/1000:.0f} ms, {c['backend_spans']} backend spans",
-                  file=sys.stderr)
+            print(
+                f"  candidate {c['traceId']} client {c['duration']/1000:.0f} ms, {c['backend_spans']} backend spans",
+                file=sys.stderr,
+            )
         trace_id = order[0]["traceId"]
         root_label = f"{platform}: {order[0]['name']}"
         focus = focus or re.escape(root_label)
         clip = True
         if args.agg:
-            agg_n, agg_rows = aggregate_clusters(es, cfg, [c["traceId"] for c in order[:args.agg]], args.date)
+            agg_n, agg_rows = aggregate_clusters(es, cfg, [c["traceId"] for c in order[: args.agg]], args.date)
 
     spans = es.trace(trace_id, args.date)
     root, nodes = build_tree(spans, cfg, clip=clip, group_services=cfg.client_services if args.root else None)
@@ -1335,32 +1603,46 @@ def render(cfg: Config, es: ZipkinES, src: Optional[StudioAPI], profiled: List[s
         for c in n.children:
             parents[id(c)] = n
             link_parents(c)
+
     link_parents(root)
     ranked = rank_clusters(nodes, parents, cfg.min_window_minutes)
 
     info: Dict[str, Dict[str, Any]] = {}
     for a in ranked:
         px = proxy_cluster(cfg, a["cluster"], profiled) if profiled else None
-        info[a["cluster"]] = {"profiled": a["cluster"] in profiled, "proxy": px if px != a["cluster"] else None,
-                              "link": deep_link(cfg, px or a["cluster"], *a["window"]), "window": a["window"],
-                              "classes": a["classes"], "op_keys": a["op_keys"]}
+        info[a["cluster"]] = {
+            "profiled": a["cluster"] in profiled,
+            "proxy": px if px != a["cluster"] else None,
+            "link": deep_link(cfg, px or a["cluster"], *a["window"]),
+            "window": a["window"],
+            "classes": a["classes"],
+            "op_keys": a["op_keys"],
+        }
 
     prof: Dict[str, Any] = {}
     if src and args.embed_hotspots:
+
         def fetch_into(target: str, s: dt.datetime, e: dt.datetime, classes: Set[str], op_keys: Set[str]) -> bool:
             """Fetch target's profile for the window into prof[target]; True if it has samples."""
             if target in prof:
                 return prof[target].get("outcome") == "ok"
-            print(f"  profile: {target} {iso(s)}..{iso(e)} (join {len(classes)} span classes, {len(op_keys)} op names)",
-                  file=sys.stderr)
+            print(
+                f"  profile: {target} {iso(s)}..{iso(e)} (join {len(classes)} span classes, {len(op_keys)} op names)",
+                file=sys.stderr,
+            )
             try:
                 outcome, tree, note = fetch_profile(src, target, s, e)
                 if tree is not None:
-                    prof[target] = {"outcome": "ok", "note": note, "cluster": target,
-                                    "window": [iso(s), iso(e)], "link": deep_link(cfg, target, s, e),
-                                    "min_pct": args.profile_min_pct,
-                                    "tree": prune_tree(tree, args.profile_min_pct / 100),
-                                    **profile_summary(tree, cfg, classes, op_keys)}
+                    prof[target] = {
+                        "outcome": "ok",
+                        "note": note,
+                        "cluster": target,
+                        "window": [iso(s), iso(e)],
+                        "link": deep_link(cfg, target, s, e),
+                        "min_pct": args.profile_min_pct,
+                        "tree": prune_tree(tree, args.profile_min_pct / 100),
+                        **profile_summary(tree, cfg, classes, op_keys),
+                    }
                     return True
                 prof[target] = {"outcome": outcome, "detail": note}
             except Exception as ex:  # noqa: BLE001
@@ -1404,37 +1686,69 @@ def render(cfg: Config, es: ZipkinES, src: Optional[StudioAPI], profiled: List[s
     if args.span_min_pct > 0:
         folded = prune_flame(flame, flame["total"] * args.span_min_pct / 100)
         if folded:
-            print(f"  folded {folded} spans under {args.span_min_pct}% of the root's work into their parents", file=sys.stderr)
+            print(
+                f"  folded {folded} spans under {args.span_min_pct}% of the root's work into their parents",
+                file=sys.stderr,
+            )
     strip_totals(flame)
-    clusters_js = {cl: {"profiled": c["profiled"], "proxy": c["proxy"], "no_samples": bool(c.get("no_samples")),
-                        "window": [iso(c["window"][0]), iso(c["window"][1])]}
-                   for cl, c in info.items()}
+    clusters_js = {
+        cl: {
+            "profiled": c["profiled"],
+            "proxy": c["proxy"],
+            "no_samples": bool(c.get("no_samples")),
+            "window": [iso(c["window"][0]), iso(c["window"][1])],
+        }
+        for cl, c in info.items()
+    }
     try:
-        advice = trace_advisor.advise(cfg.advisor, llm, flame_root, parents, ranked, info, prof, agg_rows, agg_n,
-                                      cfg.client_services, path_meta,
-                                      {"root": flame_root.label(), "wall_ms": round(flame_root.dur / 1000),
-                                       "spans": len(nodes)})
+        advice = trace_advisor.advise(
+            cfg.advisor,
+            llm,
+            flame_root,
+            parents,
+            ranked,
+            info,
+            prof,
+            agg_rows,
+            agg_n,
+            cfg.client_services,
+            path_meta,
+            {"root": flame_root.label(), "wall_ms": round(flame_root.dur / 1000), "spans": len(nodes)},
+        )
     except Exception as ex:  # noqa: BLE001 -- the trace/profile join is the report; advice is extra
         print(f"  warning: findings failed ({type(ex).__name__}: {str(ex)[:200]})", file=sys.stderr)
         advice = {"findings": [], "prompt": "", "error": f"{type(ex).__name__}: {str(ex)[:200]}"}
     page = HTML_TMPL % {
         "trace_id": html.escape(trace_id) + (f" · {html.escape(flame_root.label())}" if focus else ""),
-        "n_spans": len(nodes), "trace_ms": root.dur / 1000, "t0": iso(us_to_dt(root.start)),
-        "cluster_rows": cluster_rows(ranked, info), "flame_json": script_json(flame),
-        "prof_json": script_json(prof), "clusters_json": script_json(clusters_js),
-        "studio_json": script_json(cfg.studio_url), "app_prefixes_json": script_json(cfg.app_prefixes),
+        "n_spans": len(nodes),
+        "trace_ms": root.dur / 1000,
+        "t0": iso(us_to_dt(root.start)),
+        "cluster_rows": cluster_rows(ranked, info),
+        "flame_json": script_json(flame),
+        "prof_json": script_json(prof),
+        "clusters_json": script_json(clusters_js),
+        "studio_json": script_json(cfg.studio_url),
+        "app_prefixes_json": script_json(cfg.app_prefixes),
         "advice_json": script_json(advice),
         "agg_html": agg_html(agg_rows, agg_n, root_label, profiled, cfg) if agg_rows else "",
     }
     with open(args.out, "w") as f:
         f.write(page)
     meta = {
-        "trace_id": trace_id, "root": flame_root.label(), "n_spans": len(nodes),
-        "wall_ms": round(root.dur / 1000), "trace_start": iso(us_to_dt(root.start)),
+        "trace_id": trace_id,
+        "root": flame_root.label(),
+        "n_spans": len(nodes),
+        "wall_ms": round(root.dur / 1000),
+        "trace_start": iso(us_to_dt(root.start)),
         "trace_end": iso(us_to_dt(root.end)),
-        "clusters": [{"cluster": a["cluster"], "excl_ms": round(a["excl_ms"]),
-                      "profile": info[a["cluster"]]["proxy"] or (a["cluster"] if info[a["cluster"]]["profiled"] else None)}
-                     for a in ranked[:10]],
+        "clusters": [
+            {
+                "cluster": a["cluster"],
+                "excl_ms": round(a["excl_ms"]),
+                "profile": info[a["cluster"]]["proxy"] or (a["cluster"] if info[a["cluster"]]["profiled"] else None),
+            }
+            for a in ranked[:10]
+        ],
         "embedded_profiles": sorted(k for k, v in prof.items() if v.get("outcome") == "ok"),
         "advice": trace_advisor.summary(advice) if advice["findings"] else None,
         **path_meta,
@@ -1447,16 +1761,23 @@ def render(cfg: Config, es: ZipkinES, src: Optional[StudioAPI], profiled: List[s
     print(f"{'cluster':<48}{'excl ms':>9}{'self ms':>9}{'spans':>6}  profile")
     for a in ranked[:15]:
         c = info[a["cluster"]]
-        st = (f"profiled but NO SAMPLES -> proxy={c['proxy']}" if c.get("no_samples") else
-              "profiled" if c["profiled"] else (f"proxy={c['proxy']}" if c["proxy"] else "NOT PROFILED"))
-        print(f"{a['cluster']:<48}{a['excl_ms']:>9.0f}{a['self_ms']:>9.0f}{a['spans']:>6}  {st}  ops={','.join(a['ops'])}")
+        st = (
+            f"profiled but NO SAMPLES -> proxy={c['proxy']}"
+            if c.get("no_samples")
+            else "profiled" if c["profiled"] else (f"proxy={c['proxy']}" if c["proxy"] else "NOT PROFILED")
+        )
+        print(
+            f"{a['cluster']:<48}{a['excl_ms']:>9.0f}{a['self_ms']:>9.0f}{a['spans']:>6}  {st}  ops={','.join(a['ops'])}"
+        )
     if agg_rows:
         print(f"\nacross {agg_n} joined {root_label} traces (mean exclusive ms per trace):")
         print(f"{'cluster':<48}{'mean excl':>10}{'traces':>8}  profile")
         for r in agg_rows[:15]:
             px = proxy_cluster(cfg, r["cluster"], profiled) if profiled else None
             st = "profiled" if r["cluster"] in profiled else (f"proxy={px}" if px else "NOT PROFILED")
-            print(f"{r['cluster']:<48}{r['mean_excl_ms']:>10.0f}{r['traces']:>5}/{agg_n:<2}  {st}  ops={','.join(r['ops'])}")
+            print(
+                f"{r['cluster']:<48}{r['mean_excl_ms']:>10.0f}{r['traces']:>5}/{agg_n:<2}  {st}  ops={','.join(r['ops'])}"
+            )
     for k, v in prof.items():
         if v.get("outcome") != "ok":
             print(f"\n{k}: profile {v.get('outcome')} {v.get('detail') or ''}")
@@ -1478,8 +1799,10 @@ def render(cfg: Config, es: ZipkinES, src: Optional[StudioAPI], profiled: List[s
                 print(f"   {j['pct']:6.2f}%  {cls.rsplit('.', 1)[-1]:<58} spans={len(w):<3} wall p50={med:.0f}ms")
             missing = [c for c in info_classes(info, k) if c not in v["classes"]]
             if missing:
-                print(f"   {len(missing)} span classes absent from the hot profile (off-CPU waits), e.g. "
-                      + ", ".join(m.rsplit('.', 1)[-1] for m in missing[:4]))
+                print(
+                    f"   {len(missing)} span classes absent from the hot profile (off-CPU waits), e.g. "
+                    + ", ".join(m.rsplit(".", 1)[-1] for m in missing[:4])
+                )
         want_ops = info_ops(info, k)
         if want_ops:
             print("   symbol join (span method name -> CPU share of same-named frames):")
@@ -1495,8 +1818,10 @@ def render(cfg: Config, es: ZipkinES, src: Optional[StudioAPI], profiled: List[s
                 print(f"   {j['pct']:6.2f}%  {op:<28} spans={len(w):<3} wall p50={med:.0f}ms  {top_frame}")
             missing_ops = sorted(o for o in want_ops if o not in v["ops"])
             if missing_ops:
-                print(f"   {len(missing_ops)} span method names absent from the hot profile: "
-                      + ", ".join(missing_ops[:6]))
+                print(
+                    f"   {len(missing_ops)} span method names absent from the hot profile: "
+                    + ", ".join(missing_ops[:6])
+                )
     print(f"\nwrote {args.out}")
     return meta
 
@@ -1518,8 +1843,26 @@ def info_ops(info: Dict[str, Dict[str, Any]], target: str) -> Set[str]:
 
 
 REPORT_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
-REPORT_OPTIONS = {"trace_id", "slowest", "root", "platform", "device", "sample", "hours", "min_age_min", "pick", "agg",
-                  "cluster", "op", "max_ms", "clip", "embed_hotspots", "span_min_pct", "profile_min_pct", "focus"}
+REPORT_OPTIONS = {
+    "trace_id",
+    "slowest",
+    "root",
+    "platform",
+    "device",
+    "sample",
+    "hours",
+    "min_age_min",
+    "pick",
+    "agg",
+    "cluster",
+    "op",
+    "max_ms",
+    "clip",
+    "embed_hotspots",
+    "span_min_pct",
+    "profile_min_pct",
+    "focus",
+}
 
 
 SAMPLE_BAND = 0.15
@@ -1568,8 +1911,15 @@ def report_args(ap: argparse.ArgumentParser, spec: Dict[str, Any], out_dir: str)
     return args
 
 
-def run_batch(cfg: Config, es: ZipkinES, src: Optional[StudioAPI], profiled: List[str],
-              ap: argparse.ArgumentParser, out_dir: str, llm: Optional[trace_advisor.LLM] = None) -> int:
+def run_batch(
+    cfg: Config,
+    es: ZipkinES,
+    src: Optional[StudioAPI],
+    profiled: List[str],
+    ap: argparse.ArgumentParser,
+    out_dir: str,
+    llm: Optional[trace_advisor.LLM] = None,
+) -> int:
     """Render every configured report; manifest.json lists what was written (and what failed)."""
     os.makedirs(out_dir, exist_ok=True)
     started = dt.datetime.now(dt.timezone.utc)

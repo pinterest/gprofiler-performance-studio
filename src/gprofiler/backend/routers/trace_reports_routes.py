@@ -52,8 +52,9 @@ def report_key(path: str) -> str:
 def list_trace_reports():
     """Published reports, newest first: {updated_at, reports: [{id, label, generated_at, path, ...}], errors}."""
     try:
-        raw = S3ProfileDal(logger).get_object("/".join(p for p in (S3_PATH_PREFIX, TRACE_REPORTS_S3_PREFIX,
-                                                                    "index.json") if p))
+        raw = S3ProfileDal(logger).get_object(
+            "/".join(p for p in (S3_PATH_PREFIX, TRACE_REPORTS_S3_PREFIX, "index.json") if p)
+        )
     except ClientError as e:
         if e.response.get("Error", {}).get("Code") == "NoSuchKey":
             return {"updated_at": None, "reports": [], "errors": []}
@@ -65,7 +66,9 @@ def list_trace_reports():
 
 
 @router.get("/html", response_class=HTMLResponse, responses={404: {"description": "report not found"}})
-def get_trace_report(path: str = Query(..., description="report path from the index, e.g. my-report/20260101T0000Z.html")):
+def get_trace_report(
+    path: str = Query(..., description="report path from the index, e.g. my-report/20260101T0000Z.html")
+):
     key = report_key(path)
     try:
         body = S3ProfileDal(logger).get_object(key, is_gzip=True)
@@ -74,8 +77,11 @@ def get_trace_report(path: str = Query(..., description="report path from the in
             raise HTTPException(404, detail="report not found")
         logger.exception("failed to read trace report %s", key)
         raise HTTPException(502, detail="trace report unavailable")
-    return HTMLResponse(body, headers={
-        "Content-Security-Policy": REPORT_CSP,
-        "X-Content-Type-Options": "nosniff",
-        "Cache-Control": "private, max-age=86400, immutable",
-    })
+    return HTMLResponse(
+        body,
+        headers={
+            "Content-Security-Policy": REPORT_CSP,
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, max-age=86400, immutable",
+        },
+    )
