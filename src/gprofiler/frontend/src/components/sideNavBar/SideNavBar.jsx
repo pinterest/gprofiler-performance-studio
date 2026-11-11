@@ -63,13 +63,6 @@ let navigationItems = [
         icon: <ComparisonPageIcon fill={COLORS.SILVER_GREY} />,
         selectedIcon: <ComparisonPageIcon />,
     },
-    {
-        key: PAGES.traceReports.key,
-        label: PAGES.traceReports.label,
-        to: PAGES.traceReports.to,
-        icon: <Icon name={ICONS_NAMES.Time} color={COLORS.SILVER_GREY} />,
-        selectedIcon: <Icon name={ICONS_NAMES.Time} color={COLORS.PRIMARY_BLUE} />,
-    },
 ];
 
 const SideNavBar = ({ onSidebarToggle, isCollapsed }) => {

@@ -36,8 +36,6 @@ export const DATA_URLS = {
     GET_ADHOC_FLAMEGRAPHS: `${API_PREFIX}/metrics/adhoc_flamegraphs`,
     GET_ADHOC_FLAMEGRAPH_CONTENT: `${API_PREFIX}/metrics/adhoc_flamegraph_content`,
     GET_PERFSPECT_REPORT_DOWNLOAD: `${API_PREFIX}/perfspect/download_report`,
-    GET_TRACE_REPORTS: `${API_PREFIX}/trace_reports`,
-    GET_TRACE_REPORT_HTML: `${API_PREFIX}/trace_reports/html`,
     GET_INSTANCE_TYPE: `${API_PREFIX}/metrics/instance_type_count`,
     GET_GRAPH_METRICS: `${API_PREFIX}/metrics/graph`,
     GET_FUCNTION_CPU_GRAPH: `${API_PREFIX}/metrics/function_cpu`,

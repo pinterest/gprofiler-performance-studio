@@ -59,9 +59,6 @@ BACKEND_ROOT = os.path.dirname(os.path.realpath(__file__))
 
 MAX_PROFILING_REQUEST_HOSTS = int(os.getenv("MAX_PROFILING_REQUEST_HOSTS", 20))
 
-# S3 key prefix (after S3_PATH_PREFIX) where the indexer publishes trace reports
-TRACE_REPORTS_S3_PREFIX = os.getenv("TRACE_REPORTS_S3_PREFIX", "trace_reports").strip("/")
-
 # Per-worker threadpool size for sync route handlers (Starlette/anyio default: 40).
 # Caps concurrent requests per worker; requests beyond GPROFILER_POSTGRES_POOL_SIZE
 # wait for a pooled DB connection. 0 keeps the framework default.

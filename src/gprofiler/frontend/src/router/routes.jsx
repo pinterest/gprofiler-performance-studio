@@ -19,7 +19,6 @@
 import ProfilingStatusPage from '../components/console/ProfilingStatusPage';
 import InstallationPage from '../components/installation/InstallationPage';
 import OverviewPage from '../components/overview/OverviewPage';
-import TraceReportsPage from '../components/traceReports/TraceReportsPage';
 import WelcomePage from '../components/welcome/WelcomePage';
 import { PAGES } from '../utils/consts';
 
@@ -28,5 +27,4 @@ export const ROUTES = [
     { path: PAGES.welcome.to, exact: true, component: <WelcomePage /> },
     { path: PAGES.installation.to, exact: false, component: <InstallationPage /> },
     { path: PAGES.profiling.to, exact: false, component: <ProfilingStatusPage /> },
-    { path: PAGES.traceReports.to, exact: false, component: <TraceReportsPage /> },
 ];
