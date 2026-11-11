@@ -32,6 +32,11 @@ export const PAGES = {
         label: 'Comparison',
         to: '/compare',
     },
+    traceReports: {
+        key: 'traceReports',
+        label: 'Trace Profiles',
+        to: '/traces',
+    },
     installation: {
         key: 'installation',
         label: 'Install Service',
