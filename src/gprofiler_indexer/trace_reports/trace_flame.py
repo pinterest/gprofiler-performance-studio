@@ -918,8 +918,8 @@ def rank_clusters(nodes: List[Node], parents: Dict[int, Node], min_minutes: int)
                 "spans": 0,
                 "self_ms": 0.0,
                 "wall_ms": 0.0,
-                "start": n.start,
-                "end": n.end,
+                "start": n.start + n.skew_us,
+                "end": n.end + n.skew_us,
                 "ops": Counter(),
                 "classes": set(),
                 "op_keys": set(),
@@ -932,8 +932,10 @@ def rank_clusters(nodes: List[Node], parents: Dict[int, Node], min_minutes: int)
             a["op_keys"].add(n.op_alt)
         a["self_ms"] += n.self_us / 1000
         a["wall_ms"] += n.dur / 1000
-        a["start"] = min(a["start"], n.start)
-        a["end"] = max(a["end"], n.end)
+        # Profile windows use the host's own clock: profiles are timestamped by the same hosts, while
+        # skew correction can move a subtree by minutes to fit a client span with a wrong clock.
+        a["start"] = min(a["start"], n.start + n.skew_us)
+        a["end"] = max(a["end"], n.end + n.skew_us)
         a["ops"][n.name] += 1
         iv = (n.eff_start, n.eff_start + n.eff_us)
         own[n.cluster].append(iv)

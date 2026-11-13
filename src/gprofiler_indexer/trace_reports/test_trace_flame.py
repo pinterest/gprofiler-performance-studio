@@ -355,5 +355,34 @@ class AdvisorTest(unittest.TestCase):
         self.assertTrue(advisor.LLM({"url": "http://x", "model": "m"}).enabled)
 
 
+class ProfileWindowTest(unittest.TestCase):
+    def test_window_follows_the_server_clock_not_the_skew_corrected_one(self):
+        cfg = tf.Config(os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.example.json"))
+        # The client's clock is an hour behind the server's: skew correction moves the server
+        # subtree into the client span for display, but its profiles are an hour later.
+        hour_ms = 3600 * 1000
+        spans = [
+            span("r", None, "CLIENT", "web", "pwt/home_feed_render", 0, 1000),
+            span("r", None, "SERVER", "api", "/feed", hour_ms + 100, 800, server_host_type="api-prod"),
+        ]
+        root, nodes = tf.build_tree(spans, cfg)
+        parents = {}
+
+        def link(n):
+            for c in n.children:
+                parents[id(c)] = n
+                link(c)
+
+        link(root)
+        server = next(n for n in nodes if n.cluster == "api-prod")
+        self.assertLess(abs(server.start - root.start), 1_000_000)  # displayed inside the client span
+
+        (api,) = tf.rank_clusters(nodes, parents, 3)
+        s, e = api["window"]
+        server_start = tf.us_to_dt(T0 + (hour_ms + 100) * 1000)
+        self.assertLessEqual(s, server_start)
+        self.assertGreaterEqual(e, server_start)
+
+
 if __name__ == "__main__":
     unittest.main()
