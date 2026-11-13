@@ -5,18 +5,15 @@ import {
     Box,
     Button,
     Checkbox,
-    FormControl,
     FormControlLabel,
-    MenuItem,
     Paper,
-    Select,
     Radio,
     RadioGroup,
     TextField,
     Tooltip,
     Typography,
 } from '@mui/material';
-import React, { useState } from 'react';
+import React from 'react';
 
 import Icon from '../../common/icon/Icon';
 import { ICONS_NAMES } from '../../common/icon/iconsData';
@@ -63,8 +60,6 @@ const ProfilingTopPanel = ({
     onNsysTimelineStacksChange,
     enableNsysUploadRep,
     onNsysUploadRepChange,
-    nsysCaptureMode,
-    onNsysCaptureModeChange,
     profilingFrequency,
     onProfilingFrequencyChange,
     maxProcesses,
@@ -79,7 +74,6 @@ const ProfilingTopPanel = ({
 }) => {
     const selectedCount = selectionModel.length;
     const isAdhoc = profilingMode === 'adhoc';
-    const [nsysModeMenuOpen, setNsysModeMenuOpen] = useState(false);
 
     const handleProfilerConfigChange = (profilerKey, value) => {
         onProfilerConfigsChange((prev) => ({ ...prev, [profilerKey]: value }));
@@ -316,29 +310,6 @@ const ProfilingTopPanel = ({
                                         }
                                         sx={{ m: 0 }}
                                     />
-                                </Tooltip>
-                                <Tooltip
-                                    placement='top'
-                                    disableInteractive
-                                    open={nsysModeMenuOpen ? false : undefined}
-                                    title={
-                                        'Profile runs nsys profile until the process exits. ' +
-                                        'Launch starts cuda_burn with nsys launch; Start Profiling ' +
-                                        'calls nsys start and Stop Profiling calls nsys stop, and ' +
-                                        'cuda_burn keeps running.'
-                                    }>
-                                    <FormControl size='small' sx={{ minWidth: 160 }}>
-                                        <Select
-                                            value={nsysCaptureMode === 'launch' ? 'launch' : 'profile'}
-                                            onChange={(e) => onNsysCaptureModeChange(e.target.value)}
-                                            onOpen={() => setNsysModeMenuOpen(true)}
-                                            onClose={() => setNsysModeMenuOpen(false)}
-                                            aria-label='Nsight mode'
-                                        >
-                                            <MenuItem value='profile'>Profile</MenuItem>
-                                            <MenuItem value='launch'>Launch</MenuItem>
-                                        </Select>
-                                    </FormControl>
                                 </Tooltip>
                             </Box>
                         )}

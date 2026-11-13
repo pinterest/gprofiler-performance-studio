@@ -17,7 +17,6 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
-    CUDA_BURN_NSYS_LAUNCH_WORKLOAD,
     HOST_LEVEL_SCOPES,
     buildProfilingRequests,
     buildTargetEntity,
@@ -249,37 +248,16 @@ describe('buildProfilingRequests — nsys timeline flags', () => {
         assert.equal(onRequests[0].additional_args.nsys_upload_rep, true);
     });
 
-    it('defaults the capture mode to profile and does not send a workload', () => {
+    it('GPU capture attaches to the hardcoded nsys session and does not launch a workload', () => {
         const { requests } = buildProfilingRequests('start', [makeRow()], {
             ...baseConfig,
             enableNsys: true,
-        });
-        assert.equal(requests[0].additional_args.nsys_capture_mode, 'profile');
-        assert.equal(requests[0].additional_args.nsys_workload, undefined);
-    });
-
-    it('launch mode sends nsys launch of the sandbox cuda_burn and keeps profiling_mode cpu', () => {
-        const { requests } = buildProfilingRequests('start', [makeRow()], {
-            ...baseConfig,
-            enableNsys: true,
-            nsysCaptureMode: 'launch',
             enableNsysUploadRep: true,
         });
         assert.equal(requests[0].profiling_mode, 'cpu');
         assert.equal(requests[0].additional_args.nsys_capture_mode, 'launch');
-        assert.equal(requests[0].additional_args.nsys_workload, CUDA_BURN_NSYS_LAUNCH_WORKLOAD);
-        assert.equal(requests[0].additional_args.nsys_upload_rep, true);
-        assert.match(CUDA_BURN_NSYS_LAUNCH_WORKLOAD, /cuda_burn 3600$/);
-    });
-
-    it('gates launch mode on the GPU checkbox', () => {
-        const { requests } = buildProfilingRequests('start', [makeRow()], {
-            ...baseConfig,
-            enableNsys: false,
-            nsysCaptureMode: 'launch',
-        });
-        assert.equal(requests[0].additional_args.nsys_capture_mode, 'profile');
         assert.equal(requests[0].additional_args.nsys_workload, undefined);
+        assert.equal(requests[0].additional_args.nsys_upload_rep, true);
     });
 
     it('gates stacks on the timeline itself being enabled', () => {
@@ -386,7 +364,7 @@ describe('buildProfilingRequests — scope matrix (start)', () => {
             nsys_timeline: false,
             nsys_timeline_stacks: false,
             nsys_upload_rep: false,
-            nsys_capture_mode: 'profile',
+            nsys_capture_mode: 'launch',
             profiler_configs: profilerConfigs,
             max_processes: 25,
         });

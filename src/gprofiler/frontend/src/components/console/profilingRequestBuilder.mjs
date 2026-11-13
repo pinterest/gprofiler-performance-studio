@@ -90,25 +90,19 @@ export const groupRowsByService = (selectedRows) =>
  * @param {number} config.duration
  * @param {number} config.profilingFrequency
  * @param {boolean} config.enablePerfSpect
- * @param {boolean} [config.enableNsys] - When true, agents with nsys run GPU capture
- *   (Adhoc mode is recommended by the UI; this builder does not force continuous=false).
+ * @param {boolean} [config.enableNsys] - When true, agents attach to the
+ *   client-created nsys session gprofiler-cuda-burn (nsys start / nsys stop).
+ *   Adhoc mode is recommended by the UI; this builder does not force continuous=false.
  * @param {boolean} [config.enableNsysTimeline] - With enableNsys, upload the CPU/GPU
  *   timeline view instead of the GPU flamegraph.
  * @param {boolean} [config.enableNsysTimelineStacks] - With the timeline, also record a
  *   CPU backtrace per kernel launch (heavier capture) for click-for-stack.
  * @param {boolean} [config.enableNsysUploadRep] - With enableNsys, also upload the raw
  *   .nsys-rep capture for download (openable in NVIDIA Nsight Systems; can be large).
- * @param {string} [config.nsysCaptureMode] - 'profile' (nsys profile until exit) or
- *   'launch' (nsys launch, then start/stop). Launch is the cuda_burn sandbox path.
  * @param {object} config.profilerConfigs
  * @param {number} config.maxProcesses
  * @returns {{grouped: Record<string, Array<object>>, requests: Array<object>}}
  */
-// First milestone only. Launch mode starts this sandbox binary and keeps it
-// alive across start/stop. There is no free-form workload field.
-export const CUDA_BURN_NSYS_LAUNCH_WORKLOAD =
-    '/home/lassis/code/gprofiler/gprofiler-performance-studio/deploy/k8s-sandbox/gpu/cuda_burn 3600';
-
 export const buildProfilingRequests = (action, selectedRows, config) => {
     const {
         scope,
@@ -120,7 +114,6 @@ export const buildProfilingRequests = (action, selectedRows, config) => {
         enableNsysTimeline = false,
         enableNsysTimelineStacks = false,
         enableNsysUploadRep = false,
-        nsysCaptureMode = 'profile',
         profilerConfigs,
         maxProcesses,
     } = config;
@@ -158,10 +151,7 @@ export const buildProfilingRequests = (action, selectedRows, config) => {
                 nsys_timeline: enableNsys && enableNsysTimeline,
                 nsys_timeline_stacks: enableNsys && enableNsysTimeline && enableNsysTimelineStacks,
                 nsys_upload_rep: enableNsys && enableNsysUploadRep,
-                nsys_capture_mode: enableNsys && nsysCaptureMode === 'launch' ? 'launch' : 'profile',
-                ...(enableNsys && nsysCaptureMode === 'launch'
-                    ? { nsys_workload: CUDA_BURN_NSYS_LAUNCH_WORKLOAD }
-                    : {}),
+                nsys_capture_mode: 'launch',
                 profiler_configs: profilerConfigs,
                 max_processes: maxProcesses,
             },
