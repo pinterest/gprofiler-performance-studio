@@ -50,7 +50,8 @@ func deleteMessageWithMetrics(sess *session.Session, task SQSMessage) {
 	}
 }
 
-func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesWriter, wg *sync.WaitGroup) {
+func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesWriter,
+	deleter *messageDeleter, wg *sync.WaitGroup) {
 	var buf []byte
 	var err error
 	var temp string
@@ -70,13 +71,20 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 	sess := session.Must(session.NewSessionWithOptions(sessionOptions))
 
 	for task := range tasks {
+		var timings messageTimings
+		pickedAt := time.Now()
+		timings.QueueWait = sinceOrZero(task.SentAt, task.ReceivedAt)
+		timings.Dispatch = sinceOrZero(task.ReceivedAt, pickedAt)
+
 		useSQS := task.Service != ""
 		serviceName := task.Service
 		log.Debugf("got new file %s from service %s (ID: %d)", task.Filename, serviceName, task.ServiceId)
 
 		if useSQS {
 			fullPath := s3KeyPath(args.S3PathPrefix, fmt.Sprintf("products/%s/stacks/%s", task.Service, task.Filename))
+			fetchStart := time.Now()
 			buf, err = GetFileFromS3(sess, args.S3Bucket, fullPath)
+			timings.S3Fetch = time.Since(fetchStart)
 			if err != nil {
 				log.Errorf("Error while fetching file from S3: %v", err)
 				// SLI Metric: S3 fetch failure (server error - counts against SLO)
@@ -112,8 +120,18 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 			timestamp = time.Now().UTC()
 		}
 
+		// The message is deleted once all its rows are in ClickHouse, not when
+		// the worker is done with it, so a failed insert leaves it in the queue.
+		var pending *pendingMessage
+		if useSQS {
+			pending = &pendingMessage{task: task}
+			task.ack = newMessageAck(func() { deleter.enqueue(pending) })
+		}
+
 		// Parse stack frame file and write to ClickHouse
+		processStart := time.Now()
 		err := pw.ParseStackFrameFile(sess, task, args.S3Bucket, args.S3PathPrefix, timestamp, buf)
+		timings.Process = time.Since(processStart)
 		if err != nil {
 			log.Errorf("Error while parsing stack frame file: %v", err)
 
@@ -130,26 +148,19 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 					},
 				)
 
-				// Delete message from SQS after unsuccessful parse/write into column DB
+				// Delete message from SQS after unsuccessful parse/write into column DB.
+				// The worker's hold on the ack is never released, so it isn't deleted twice.
 				deleteMessageWithMetrics(sess, task)
 			}
 			continue
 		}
 
-		// Delete message from SQS after successful processing
+		// Release the worker's hold. The deleter logs the timings and the SLI
+		// success once the message's last row is inserted.
 		if useSQS {
-			deleteMessageWithMetrics(sess, task)
-
-			// SLI Metric: Success! Event processed completely
-			// SendSLIMetric handles nil/enabled checks internally
-			GetMetricsPublisher().SendSLIMetric(
-				ResponseTypeSuccess,
-				"event_processing",
-				map[string]string{
-					"service":  serviceName,
-					"filename": task.Filename,
-				},
-			)
+			pending.timings = timings
+			pending.handedOffAt = time.Now()
+			task.ack.release(1)
 		}
 	}
 	log.Debugf("Worker %d finished", workerIdx)

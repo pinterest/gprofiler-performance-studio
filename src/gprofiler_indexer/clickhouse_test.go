@@ -78,7 +78,7 @@ func ingestData(tb testing.TB, args *CLIArgs, filename string) {
 	tasksWaitGroup.Add(1)
 
 	tasks := make(chan SQSMessage, 1)
-	go Worker(0, args, tasks, callStackWriter, &tasksWaitGroup)
+	go Worker(0, args, tasks, callStackWriter, nil, &tasksWaitGroup)
 	buffWriterWaitGroup.Add(1)
 	go BufferedClickHouseWrite(args, &channels, &buffWriterWaitGroup)
 

@@ -177,7 +177,7 @@ func NewProfilesWriter(channels *RecordChannels) *ProfilesWriter {
 }
 
 func (pw *ProfilesWriter) writeStacks(weights FrameValuesMap, frames map[string]Frame,
-	serviceId uint32, instanceType string, hostname string, timestamp time.Time) {
+	serviceId uint32, instanceType string, hostname string, timestamp time.Time, ack *messageAck) {
 	idx := 0
 	for rawContainerName, containerWeights := range weights {
 		containerName, k8sName, _ := ContainerAndK8sName(rawContainerName)
@@ -211,7 +211,9 @@ func (pw *ProfilesWriter) writeStacks(weights FrameValuesMap, frames map[string]
 				Parent:             prevHashAsInt,
 				Name:               frame.Name,
 				InsertionTimestamp: time.Now().UTC(),
+				ack:                ack,
 			}
+			ack.hold()
 			pw.stacksRecords <- record
 			idx += 1
 		}
@@ -221,7 +223,7 @@ func (pw *ProfilesWriter) writeStacks(weights FrameValuesMap, frames map[string]
 
 func (pw *ProfilesWriter) writeMetrics(serviceId uint32, instanceType string,
 	hostname string, timestamp time.Time, cpuAverageUsedPercent float64,
-	memoryAverageUsedPercent float64, path string) {
+	memoryAverageUsedPercent float64, path string, ack *messageAck) {
 
 	metricRecord := MetricRecord{
 		Timestamp:                timestamp,
@@ -231,7 +233,9 @@ func (pw *ProfilesWriter) writeMetrics(serviceId uint32, instanceType string,
 		CPUAverageUsedPercent:    cpuAverageUsedPercent,
 		MemoryAverageUsedPercent: memoryAverageUsedPercent,
 		HTMLPath:                 path,
+		ack:                      ack,
 	}
+	ack.hold()
 	log.Infof("DEBUG: Sending metric record to channel - ServiceId=%d, HostName=%s, HTMLPath=%s", 
 		serviceId, hostname, path)
 	pw.metricsRecords <- metricRecord
@@ -285,7 +289,7 @@ func (pw *ProfilesWriter) ParseStackFrameFile(sess *session.Session, task SQSMes
 		nRecords, len(mapFrames))
 	pw.chMutex.Lock()
 	pw.writeStacks(weights, mapFrames, uint32(serviceId),
-		fileInfo.Metadata.CloudInfo.InstanceType, fileInfo.Metadata.Hostname, timestamp)
+		fileInfo.Metadata.CloudInfo.InstanceType, fileInfo.Metadata.Hostname, timestamp, task.ack)
 	pw.chMutex.Unlock()
 
 	var htmlBlobPath string
@@ -386,7 +390,7 @@ func (pw *ProfilesWriter) ParseStackFrameFile(sess *session.Session, task SQSMes
 		log.Infof("DEBUG: Writing metrics for hostname=%s", fileInfo.Metadata.Hostname)
 		pw.writeMetrics(uint32(serviceId), fileInfo.Metadata.CloudInfo.InstanceType,
 			fileInfo.Metadata.Hostname, timestamp, fileInfo.Metrics.CPUAvg,
-			fileInfo.Metrics.MemoryAvg, htmlBlobPath)
+			fileInfo.Metrics.MemoryAvg, htmlBlobPath, task.ack)
 	} else {
 		log.Infof("DEBUG: SKIPPING metrics write for hostname=%s - condition failed", fileInfo.Metadata.Hostname)
 	}
