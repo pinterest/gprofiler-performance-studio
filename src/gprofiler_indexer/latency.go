@@ -42,22 +42,24 @@ const (
 // messageTimings holds how long one SQS message spent in each stage, from
 // the moment SQS accepted it until the indexer deleted it.
 type messageTimings struct {
-	QueueWait time.Duration // SQS SentTimestamp -> ReceiveMessage returned
-	Dispatch  time.Duration // ReceiveMessage returned -> a worker picked it up
-	S3Fetch   time.Duration
-	Process   time.Duration // parse + hand-off to the writer + HTML/Postgres side effects
-	Delete    time.Duration
-	Total     time.Duration // SQS SentTimestamp -> delete finished
+	QueueWait  time.Duration // SQS SentTimestamp -> ReceiveMessage returned
+	Dispatch   time.Duration // ReceiveMessage returned -> a worker picked it up
+	S3Fetch    time.Duration
+	Process    time.Duration // parse + hand-off to the writer + HTML/Postgres side effects
+	InsertWait time.Duration // hand-off finished -> the message's last row inserted
+	Delete     time.Duration
+	Total      time.Duration // SQS SentTimestamp -> delete finished
 }
 
 func (mt messageTimings) stages() map[string]time.Duration {
 	return map[string]time.Duration{
-		"queue_wait": mt.QueueWait,
-		"dispatch":   mt.Dispatch,
-		"s3_fetch":   mt.S3Fetch,
-		"process":    mt.Process,
-		"delete":     mt.Delete,
-		"total":      mt.Total,
+		"queue_wait":  mt.QueueWait,
+		"dispatch":    mt.Dispatch,
+		"s3_fetch":    mt.S3Fetch,
+		"process":     mt.Process,
+		"insert_wait": mt.InsertWait,
+		"delete":      mt.Delete,
+		"total":       mt.Total,
 	}
 }
 
@@ -99,22 +101,46 @@ func (m *MetricsPublisher) SendMessageTimings(mt messageTimings) {
 
 // recordBuffer is the writer's in-memory batch for one table. It remembers
 // when its oldest record was buffered, so a flush can report how long rows
-// waited before the insert.
+// waited before the insert, and which SQS messages its rows came from.
 type recordBuffer struct {
 	records  []RecordsAttributesUnpack
 	oldestAt time.Time
+	acks     []ackRun
 }
 
-func (b *recordBuffer) add(record RecordsAttributesUnpack, bufferedAt time.Time) {
+// ackRun is a run of consecutive rows from one message. A worker hands off a
+// message's rows under a mutex, so they arrive contiguously.
+type ackRun struct {
+	ack  *messageAck
+	rows int64
+}
+
+func (b *recordBuffer) add(record RecordsAttributesUnpack, bufferedAt time.Time, ack *messageAck) {
 	if len(b.records) == 0 {
 		b.oldestAt = bufferedAt
 	}
 	b.records = append(b.records, record)
+	if ack == nil {
+		return
+	}
+	if last := len(b.acks) - 1; last >= 0 && b.acks[last].ack == ack {
+		b.acks[last].rows++
+	} else {
+		b.acks = append(b.acks, ackRun{ack: ack, rows: 1})
+	}
+}
+
+// releaseAcks tells each message how many of its rows were just inserted.
+func (b *recordBuffer) releaseAcks() {
+	for _, run := range b.acks {
+		run.ack.release(run.rows)
+	}
 }
 
 func (b *recordBuffer) reset() {
 	b.records = make([]RecordsAttributesUnpack, 0)
 	b.oldestAt = time.Time{}
+	b.acks = nil
 }
 
 type flushStats struct {
@@ -122,7 +148,8 @@ type flushStats struct {
 	Reason    string
 	Rows      int
 	BufferAge time.Duration // flush start - oldest record buffered
-	Duration  time.Duration // insert duration
+	Duration  time.Duration // insert duration, including retries
+	Attempts  int
 	Err       error
 }
 

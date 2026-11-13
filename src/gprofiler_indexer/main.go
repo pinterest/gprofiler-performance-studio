@@ -85,6 +85,7 @@ func main() {
 	frameReplacer = NewFrameReplacer()
 	frameReplacer.InitRegexps(args.FrameReplaceFileName)
 	callStackWriter := NewProfilesWriter(&channels)
+	deleter := newMessageDeleter(newSQSSession(args), MessageDeleters, MessageDeleterQueueSize)
 
 	reloader, watcherErr := NewFileReloader(args)
 	reloader.Start(ctx)
@@ -103,7 +104,7 @@ func main() {
 	// spawn workers
 	for idx := 0; idx < args.Concurrency; idx++ {
 		tasksWaitGroup.Add(1)
-		go Worker(idx, args, tasks, callStackWriter, &tasksWaitGroup)
+		go Worker(idx, args, tasks, callStackWriter, deleter, &tasksWaitGroup)
 	}
 
 	if args.InputFolder == "" {
@@ -133,6 +134,8 @@ func main() {
 	}()
 
 	buffWriterWaitGroup.Wait()
+	// The writer's final flush may have completed more messages.
+	deleter.close()
 	
 	// Cleanup metrics publisher
 	if metricsPublisher != nil {

@@ -68,8 +68,8 @@ func TestSinceOrZero(t *testing.T) {
 func TestRecordBufferTracksOldestRecord(t *testing.T) {
 	var buf recordBuffer
 	first := time.Now().Add(-10 * time.Second)
-	buf.add(MetricRecord{HostName: "a"}, first)
-	buf.add(MetricRecord{HostName: "b"}, first.Add(5*time.Second))
+	buf.add(MetricRecord{HostName: "a"}, first, nil)
+	buf.add(MetricRecord{HostName: "b"}, first.Add(5*time.Second), nil)
 	if len(buf.records) != 2 {
 		t.Fatalf("expected 2 records, got %d", len(buf.records))
 	}
@@ -82,7 +82,7 @@ func TestRecordBufferTracksOldestRecord(t *testing.T) {
 		t.Fatalf("reset should empty the buffer, got %d records, oldestAt %v", len(buf.records), buf.oldestAt)
 	}
 	second := time.Now()
-	buf.add(MetricRecord{HostName: "c"}, second)
+	buf.add(MetricRecord{HostName: "c"}, second, nil)
 	if !buf.oldestAt.Equal(second) {
 		t.Fatalf("oldestAt should restart after reset, got %v", buf.oldestAt)
 	}
@@ -187,15 +187,16 @@ func TestSendFlushStats(t *testing.T) {
 func TestSendMessageTimings(t *testing.T) {
 	publisher, lines := startMetricsListener(t)
 	publisher.SendMessageTimings(messageTimings{
-		QueueWait: 3 * time.Second,
-		Dispatch:  time.Millisecond,
-		S3Fetch:   40 * time.Millisecond,
-		Process:   700 * time.Millisecond,
-		Delete:    10 * time.Millisecond,
-		Total:     3751 * time.Millisecond,
+		QueueWait:  3 * time.Second,
+		Dispatch:   time.Millisecond,
+		S3Fetch:    40 * time.Millisecond,
+		Process:    700 * time.Millisecond,
+		InsertWait: 16 * time.Second,
+		Delete:     10 * time.Millisecond,
+		Total:      19751 * time.Millisecond,
 	})
 
-	received := receiveLines(t, lines, 6)
+	received := receiveLines(t, lines, 7)
 	byStage := map[string]string{}
 	for _, line := range received {
 		fields := strings.Fields(line)
@@ -205,7 +206,7 @@ func TestSendMessageTimings(t *testing.T) {
 		byStage[strings.TrimPrefix(fields[5], "stage=")] = fields[3]
 	}
 	expected := map[string]string{"queue_wait": "3000", "dispatch": "1", "s3_fetch": "40",
-		"process": "700", "delete": "10", "total": "3751"}
+		"process": "700", "insert_wait": "16000", "delete": "10", "total": "19751"}
 	for stage, value := range expected {
 		if byStage[stage] != value {
 			t.Fatalf("stage %s: got %q, want %q (all: %v)", stage, byStage[stage], value, byStage)

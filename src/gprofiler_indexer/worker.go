@@ -50,7 +50,8 @@ func deleteMessageWithMetrics(sess *session.Session, task SQSMessage) {
 	}
 }
 
-func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesWriter, wg *sync.WaitGroup) {
+func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesWriter,
+	deleter *messageDeleter, wg *sync.WaitGroup) {
 	var buf []byte
 	var err error
 	var temp string
@@ -119,6 +120,14 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 			timestamp = time.Now().UTC()
 		}
 
+		// The message is deleted once all its rows are in ClickHouse, not when
+		// the worker is done with it, so a failed insert leaves it in the queue.
+		var pending *pendingMessage
+		if useSQS {
+			pending = &pendingMessage{task: task}
+			task.ack = newMessageAck(func() { deleter.enqueue(pending) })
+		}
+
 		// Parse stack frame file and write to ClickHouse
 		processStart := time.Now()
 		err := pw.ParseStackFrameFile(sess, task, args.S3Bucket, args.S3PathPrefix, timestamp, buf)
@@ -139,35 +148,19 @@ func Worker(workerIdx int, args *CLIArgs, tasks <-chan SQSMessage, pw *ProfilesW
 					},
 				)
 
-				// Delete message from SQS after unsuccessful parse/write into column DB
+				// Delete message from SQS after unsuccessful parse/write into column DB.
+				// The worker's hold on the ack is never released, so it isn't deleted twice.
 				deleteMessageWithMetrics(sess, task)
 			}
 			continue
 		}
 
-		// Delete message from SQS after successful processing
+		// Release the worker's hold. The deleter logs the timings and the SLI
+		// success once the message's last row is inserted.
 		if useSQS {
-			deleteStart := time.Now()
-			deleteMessageWithMetrics(sess, task)
-			deletedAt := time.Now()
-			timings.Delete = deletedAt.Sub(deleteStart)
-			timings.Total = sinceOrZero(task.SentAt, deletedAt)
-
-			log.Infof("processed %s from service %s: queue_wait=%s dispatch=%s s3_fetch=%s process=%s delete=%s total=%s receive_count=%d",
-				task.Filename, serviceName, timings.QueueWait, timings.Dispatch, timings.S3Fetch,
-				timings.Process, timings.Delete, timings.Total, task.ReceiveCount)
-			GetMetricsPublisher().SendMessageTimings(timings)
-
-			// SLI Metric: Success! Event processed completely
-			// SendSLIMetric handles nil/enabled checks internally
-			GetMetricsPublisher().SendSLIMetric(
-				ResponseTypeSuccess,
-				"event_processing",
-				map[string]string{
-					"service":  serviceName,
-					"filename": task.Filename,
-				},
-			)
+			pending.timings = timings
+			pending.handedOffAt = time.Now()
+			task.ack.release(1)
 		}
 	}
 	log.Debugf("Worker %d finished", workerIdx)

@@ -38,6 +38,7 @@ type SQSMessage struct {
 	SentAt       time.Time
 	ReceivedAt   time.Time
 	ReceiveCount int
+	ack          *messageAck
 }
 
 func getQueueURL(sess *session.Session, queue string) (*sqs.GetQueueUrlOutput, error) {
@@ -53,8 +54,7 @@ func getQueueURL(sess *session.Session, queue string) (*sqs.GetQueueUrlOutput, e
 	return urlResult, nil
 }
 
-func ListenSqs(ctx context.Context, args *CLIArgs, ch chan<- SQSMessage, wg *sync.WaitGroup) {
-	defer wg.Done()
+func newSQSSession(args *CLIArgs) *session.Session {
 	sessionOptions := session.Options{
 		SharedConfigState: session.SharedConfigEnable,
 	}
@@ -64,7 +64,12 @@ func ListenSqs(ctx context.Context, args *CLIArgs, ch chan<- SQSMessage, wg *syn
 			Endpoint: aws.String(args.AWSEndpoint),
 		}
 	}
-	sess := session.Must(session.NewSessionWithOptions(sessionOptions))
+	return session.Must(session.NewSessionWithOptions(sessionOptions))
+}
+
+func ListenSqs(ctx context.Context, args *CLIArgs, ch chan<- SQSMessage, wg *sync.WaitGroup) {
+	defer wg.Done()
+	sess := newSQSSession(args)
 	svc := sqs.New(sess)
 	urlResult, err := getQueueURL(sess, args.SQSQueue)
 
@@ -94,6 +99,7 @@ func ListenSqs(ctx context.Context, args *CLIArgs, ch chan<- SQSMessage, wg *syn
 				QueueUrl:            urlResult.QueueUrl,
 				MaxNumberOfMessages: aws.Int64(1),
 				WaitTimeSeconds:     aws.Int64(10),
+				VisibilityTimeout:   aws.Int64(SQSVisibilityTimeoutSeconds),
 				MessageSystemAttributeNames: aws.StringSlice([]string{
 					sqs.MessageSystemAttributeNameSentTimestamp,
 					sqs.MessageSystemAttributeNameApproximateReceiveCount,

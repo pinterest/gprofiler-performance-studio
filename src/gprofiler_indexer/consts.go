@@ -26,4 +26,10 @@ const (
 	ConfPrefix                    = "conf/"
 	AppName                       = "gprofiler-indexer"
 	ISODateTimeFormat             = "2006-01-02T15:04:05"
+	ClickHouseInsertAttempts      = 3
+	// Covers the worst case from receive to insert: up to 30 s in the buffer
+	// plus every insert attempt, each bounded by max_execution_time (60 s).
+	SQSVisibilityTimeoutSeconds = 300
+	MessageDeleters             = 4
+	MessageDeleterQueueSize     = 10000
 )

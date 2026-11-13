@@ -39,6 +39,7 @@ type StackRecord struct {
 	Name               string
 	Parent             uint64
 	InsertionTimestamp time.Time
+	ack                *messageAck
 }
 
 type MetricRecord struct {
@@ -49,6 +50,7 @@ type MetricRecord struct {
 	CPUAverageUsedPercent    float64
 	MemoryAverageUsedPercent float64
 	HTMLPath                 string
+	ack                      *messageAck
 }
 
 type RecordsAttributesUnpack interface {
@@ -163,25 +165,55 @@ func (c *ClickHouseClient) clickHouseWrite(records []RecordsAttributesUnpack, ta
 	return nil
 }
 
-// flush writes the buffer to ClickHouse, reports how long its rows waited and
-// how long the insert took, and empties the buffer.
+var clickHouseInsertRetryBackoff = time.Second
+
+// insertWithRetry tries insert up to attempts times, doubling the backoff
+// between tries. It returns how many attempts it made.
+func insertWithRetry(insert func() error, attempts int, backoff time.Duration) (int, error) {
+	for attempt := 1; ; attempt++ {
+		err := insert()
+		if err == nil || attempt >= attempts {
+			return attempt, err
+		}
+		logger.Warnf("insert attempt %d of %d failed, retrying in %s: %v", attempt, attempts, backoff, err)
+		time.Sleep(backoff)
+		backoff *= 2
+	}
+}
+
 func (c *ClickHouseClient) flush(buf *recordBuffer, tableName string, reason string) {
+	flushBuffer(buf, tableName, reason, c.clickHouseWrite)
+}
+
+// flushBuffer writes the buffer to ClickHouse, reports how long its rows waited
+// and how long the insert took, lets its SQS messages be deleted if the insert
+// succeeded, and empties the buffer.
+func flushBuffer(buf *recordBuffer, tableName string, reason string,
+	write func([]RecordsAttributesUnpack, string) error) {
 	if len(buf.records) == 0 {
 		return
 	}
 	start := time.Now()
-	err := c.clickHouseWrite(buf.records, tableName)
+	attempts, err := insertWithRetry(func() error { return write(buf.records, tableName) },
+		ClickHouseInsertAttempts, clickHouseInsertRetryBackoff)
 	stats := flushStats{
 		Table:     tableName,
 		Reason:    reason,
 		Rows:      len(buf.records),
 		BufferAge: sinceOrZero(buf.oldestAt, start),
 		Duration:  time.Since(start),
+		Attempts:  attempts,
 		Err:       err,
 	}
-	logger.Infof("Flush %d records to %s: reason=%s result=%s buffer_age=%s duration=%s",
-		stats.Rows, stats.Table, stats.Reason, stats.result(), stats.BufferAge, stats.Duration)
+	logger.Infof("Flush %d records to %s: reason=%s result=%s buffer_age=%s duration=%s attempts=%d",
+		stats.Rows, stats.Table, stats.Reason, stats.result(), stats.BufferAge, stats.Duration, stats.Attempts)
 	GetMetricsPublisher().SendFlushStats(stats)
+	if err == nil {
+		buf.releaseAcks()
+	} else {
+		logger.Errorf("dropping %d records after %d failed inserts into %s; their SQS messages are not deleted and will be redelivered: %v",
+			stats.Rows, attempts, tableName, err)
+	}
 	buf.reset()
 }
 
@@ -210,7 +242,7 @@ func BufferedClickHouseWrite(args *CLIArgs, channels *RecordChannels, wg *sync.W
 			if ok {
 				// InsertionTimestamp is set just before the record enters the channel,
 				// so the buffer age includes any time spent waiting in the channel.
-				buffRecords.add(stackRecord, stackRecord.InsertionTimestamp)
+				buffRecords.add(stackRecord, stackRecord.InsertionTimestamp, stackRecord.ack)
 				if len(buffRecords.records) >= args.ClickHouseStacksBatchSize {
 					clickhouseClient.flush(&buffRecords, args.ClickHouseStacksTable, FlushReasonSize)
 					stacksTicker.Reset(time.Second * ClickHouseStacksFlushTimeout)
@@ -222,7 +254,7 @@ func BufferedClickHouseWrite(args *CLIArgs, channels *RecordChannels, wg *sync.W
 			clickhouseClient.flush(&buffRecords, args.ClickHouseStacksTable, FlushReasonTimer)
 		case metricRecords, ok := <-channels.MetricsRecords:
 			if ok {
-				buffMetricsRecords.add(metricRecords, time.Now())
+				buffMetricsRecords.add(metricRecords, time.Now(), metricRecords.ack)
 				if len(buffMetricsRecords.records) >= args.ClickHouseMetricsBatchSize {
 					clickhouseClient.flush(&buffMetricsRecords, args.ClickHouseMetricsTable, FlushReasonSize)
 					metricsTicker.Reset(time.Second * ClickHouseMetricsFlushTimeout)
