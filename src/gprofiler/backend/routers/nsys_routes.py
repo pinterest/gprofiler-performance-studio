@@ -20,7 +20,7 @@ from datetime import datetime
 from logging import getLogger
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
-from gprofiler_dev import get_s3_profile_dal
+from gprofiler_dev import config, get_s3_profile_dal
 from gprofiler_dev.api_key import get_service_by_api_key
 
 logger = getLogger(__name__)
@@ -35,10 +35,17 @@ NSYS_REP_S3_DIR = "nsys"
 
 def nsys_rep_s3_key(service_name: str, start_time: datetime, hostname: str) -> str:
     """S3 key for a raw .nsys-rep, pairable with its AdhocFlamegraphMetadata row
-    (which is keyed by the same profile start_time + hostname)."""
+    (which is keyed by the same profile start_time + hostname).
+
+    Uses the same base directory as S3ProfileDal, including S3_PATH_PREFIX: the
+    bucket policy may only allow writes under that prefix (e.g. retention-365days/).
+    """
     start_iso = start_time.replace(microsecond=0, tzinfo=None).isoformat()
     safe_hostname = re.sub(r"[^A-Za-z0-9._-]", "-", hostname)
-    return f"products/{service_name}/stacks/{NSYS_REP_S3_DIR}/{start_iso}_{safe_hostname}.nsys-rep"
+    base_directory = (
+        f"{config.S3_PATH_PREFIX}/{config.BASE_DIRECTORY}" if config.S3_PATH_PREFIX else config.BASE_DIRECTORY
+    )
+    return f"{base_directory}/{service_name}/stacks/{NSYS_REP_S3_DIR}/{start_iso}_{safe_hostname}.nsys-rep"
 
 
 @router.post("")
