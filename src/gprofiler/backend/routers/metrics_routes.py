@@ -47,7 +47,7 @@ from backend.models.metrics_models import (
     ProfilingResponse,
     SampleCount,
 )
-from backend.routers.nsys_routes import NSYS_REP_S3_DIR, nsys_rep_s3_key
+from backend.routers.nsys_routes import nsys_rep_s3_dir, nsys_rep_s3_key
 from backend.utils.dynamic_profiling_utils import validate_profiling_capacity, validate_pmu_events, validate_async_profiler_config
 from backend.utils.filters_utils import get_rql_first_eq_key, get_rql_only_for_one_key, get_rql_all_eq_values
 from backend.utils.notifications import SlackNotifier
@@ -1309,7 +1309,7 @@ def download_adhoc_nsys_rep(
     if "/" in filename or not filename.endswith(".nsys-rep"):
         raise HTTPException(status_code=400, detail="Invalid nsys rep filename")
 
-    s3_path = f"products/{service_name}/stacks/{NSYS_REP_S3_DIR}/{filename}"
+    s3_path = f"{nsys_rep_s3_dir(service_name)}/{filename}"
     s3_dal = S3ProfileDal(logger)
     try:
         body = s3_dal.open_stream(s3_path)

@@ -90,8 +90,9 @@ export const groupRowsByService = (selectedRows) =>
  * @param {number} config.duration
  * @param {number} config.profilingFrequency
  * @param {boolean} config.enablePerfSpect
- * @param {boolean} [config.enableNsys] - When true, agents with nsys run GPU capture
- *   (Adhoc mode is recommended by the UI; this builder does not force continuous=false).
+ * @param {boolean} [config.enableNsys] - When true, agents attach to the
+ *   client-created nsys session gprofiler-cuda-burn (nsys start / nsys stop).
+ *   Adhoc mode is recommended by the UI; this builder does not force continuous=false.
  * @param {boolean} [config.enableNsysTimeline] - With enableNsys, upload the CPU/GPU
  *   timeline view instead of the GPU flamegraph.
  * @param {boolean} [config.enableNsysTimelineStacks] - With the timeline, also record a
@@ -150,6 +151,7 @@ export const buildProfilingRequests = (action, selectedRows, config) => {
                 nsys_timeline: enableNsys && enableNsysTimeline,
                 nsys_timeline_stacks: enableNsys && enableNsysTimeline && enableNsysTimelineStacks,
                 nsys_upload_rep: enableNsys && enableNsysUploadRep,
+                nsys_capture_mode: 'launch',
                 profiler_configs: profilerConfigs,
                 max_processes: maxProcesses,
             },

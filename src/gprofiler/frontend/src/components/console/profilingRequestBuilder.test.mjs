@@ -248,6 +248,18 @@ describe('buildProfilingRequests — nsys timeline flags', () => {
         assert.equal(onRequests[0].additional_args.nsys_upload_rep, true);
     });
 
+    it('GPU capture attaches to the hardcoded nsys session and does not launch a workload', () => {
+        const { requests } = buildProfilingRequests('start', [makeRow()], {
+            ...baseConfig,
+            enableNsys: true,
+            enableNsysUploadRep: true,
+        });
+        assert.equal(requests[0].profiling_mode, 'cpu');
+        assert.equal(requests[0].additional_args.nsys_capture_mode, 'launch');
+        assert.equal(requests[0].additional_args.nsys_workload, undefined);
+        assert.equal(requests[0].additional_args.nsys_upload_rep, true);
+    });
+
     it('gates stacks on the timeline itself being enabled', () => {
         const { requests } = buildProfilingRequests('start', [makeRow()], {
             ...baseConfig,
@@ -352,6 +364,7 @@ describe('buildProfilingRequests — scope matrix (start)', () => {
             nsys_timeline: false,
             nsys_timeline_stacks: false,
             nsys_upload_rep: false,
+            nsys_capture_mode: 'launch',
             profiler_configs: profilerConfigs,
             max_processes: 25,
         });
