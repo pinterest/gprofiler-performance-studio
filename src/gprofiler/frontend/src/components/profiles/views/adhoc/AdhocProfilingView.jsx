@@ -107,7 +107,7 @@ const AdhocProfilingView = () => {
 
     const handleRepDownload = (file) => {
         const repFilename = file.nsys_rep_s3_path.split('/').pop();
-        const url = `${DATA_URLS.GET_ADHOC_NSYS_REP}?${stringify({
+        const url = `${DATA_URLS.GET_ADHOC_NSYS_REP}?${queryString.stringify({
             serviceName: selectedService,
             filename: repFilename,
         })}`;

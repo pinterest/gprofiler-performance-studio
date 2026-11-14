@@ -40,6 +40,26 @@ def test_key_includes_s3_path_prefix(monkeypatch):
     )
 
 
+def test_download_reads_from_prefixed_key(monkeypatch):
+    from backend.routers import metrics_routes
+
+    monkeypatch.setattr(config, "S3_PATH_PREFIX", "retention-365days")
+    uploaded_key = nsys_rep_s3_key("devapp", START, "devrestricted-lassis-1")
+    opened = []
+
+    class FakeDal:
+        def __init__(self, logger):
+            pass
+
+        def open_stream(self, s3_path):
+            opened.append(s3_path)
+            return type("Body", (), {"iter_chunks": lambda self, chunk_size: iter([b"rep"])})()
+
+    monkeypatch.setattr(metrics_routes, "S3ProfileDal", FakeDal)
+    metrics_routes.download_adhoc_nsys_rep(filename=uploaded_key.split("/")[-1], service_name="devapp")
+    assert opened == [uploaded_key]
+
+
 def test_key_without_prefix(monkeypatch):
     monkeypatch.setattr(config, "S3_PATH_PREFIX", "")
     assert (
