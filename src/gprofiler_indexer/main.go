@@ -118,6 +118,12 @@ func main() {
 	buffWriterWaitGroup.Add(1)
 	go BufferedClickHouseWrite(args, &channels, &buffWriterWaitGroup)
 
+	var traceReportsWaitGroup sync.WaitGroup
+	if args.TraceReportsConfig != "" && args.InputFolder == "" {
+		traceReportsWaitGroup.Add(1)
+		go NewTraceReporter(args).Run(ctx, &traceReportsWaitGroup)
+	}
+
 	signalChannel := make(chan os.Signal, 2)
 	signal.Notify(signalChannel, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -133,6 +139,7 @@ func main() {
 	}()
 
 	buffWriterWaitGroup.Wait()
+	traceReportsWaitGroup.Wait()
 	
 	// Cleanup metrics publisher
 	if metricsPublisher != nil {
