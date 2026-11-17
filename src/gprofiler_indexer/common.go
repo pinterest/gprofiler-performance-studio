@@ -27,6 +27,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Test struct {
@@ -87,6 +88,17 @@ func LookupEnvOrInt(key string, defaultVal int) int {
 		v, err := strconv.Atoi(val)
 		if err != nil {
 			logger.Fatalf("LookupEnvOrInt[%s]: %v", key, err)
+		}
+		return v
+	}
+	return defaultVal
+}
+
+func LookupEnvOrDuration(key string, defaultVal time.Duration) time.Duration {
+	if val, ok := os.LookupEnv(key); ok {
+		v, err := time.ParseDuration(val)
+		if err != nil {
+			logger.Fatalf("LookupEnvOrDuration[%s]: %v", key, err)
 		}
 		return v
 	}
