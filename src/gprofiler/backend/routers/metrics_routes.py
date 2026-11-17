@@ -49,6 +49,7 @@ from backend.models.metrics_models import (
 )
 from backend.routers.nsys_routes import nsys_rep_s3_dir, nsys_rep_s3_key
 from backend.utils.dynamic_profiling_utils import validate_profiling_capacity, validate_pmu_events, validate_async_profiler_config
+from backend.utils.nsys_sessions import aggregate_nsys_sessions
 from backend.utils.filters_utils import get_rql_first_eq_key, get_rql_only_for_one_key, get_rql_all_eq_values
 from backend.utils.notifications import SlackNotifier
 from backend.utils.request_utils import flamegraph_base_request_params, get_metrics_response, get_query_response
@@ -779,6 +780,36 @@ def _create_slack_blocks(profiling_request: ProfilingRequest, request_id: str) -
     return blocks
 
 
+@router.get("/nsys_sessions")
+def get_nsys_sessions(
+    service_name: Optional[List[str]] = Query(None, description="Exact services from the checked rows"),
+    hostname: Optional[List[str]] = Query(None, description="Exact hosts from the checked rows"),
+    namespace: Optional[List[str]] = Query(None, description="Exact namespaces from the checked rows"),
+    service_contains: Optional[str] = Query(None, description="Substring of the service filter"),
+    hostname_contains: Optional[str] = Query(None, description="Substring of the hostname filter"),
+    namespace_contains: Optional[str] = Query(None, description="Substring of the namespace filter"),
+    pod_contains: Optional[str] = Query(None, description="Substring of the pod filter"),
+    ip_contains: Optional[str] = Query(None, description="Substring of the IP filter"),
+):
+    """Sessions agents reported from `nsys sessions list`, grouped by session name.
+
+    The profiling page uses this for the GPU (nsys) session dropdown. Checked
+    rows pass exact service, namespace, or host. With nothing checked, the
+    filter-box substrings apply. Only hosts with a fresh heartbeat are included.
+    """
+    rows = DBManager().list_reported_nsys_sessions(
+        service_names=service_name,
+        hostnames=hostname,
+        namespaces=namespace,
+        service_contains=service_contains,
+        hostname_contains=hostname_contains,
+        namespace_contains=namespace_contains,
+        pod_contains=pod_contains,
+        ip_contains=ip_contains,
+    )
+    return {"sessions": aggregate_nsys_sessions(rows)}
+
+
 @router.post("/heartbeat", response_model=HeartbeatResponse)
 def receive_heartbeat(heartbeat: HeartbeatRequest):
     """
@@ -854,6 +885,7 @@ def receive_heartbeat(heartbeat: HeartbeatRequest):
                 status=heartbeat.status,
                 heartbeat_timestamp=heartbeat.timestamp,
                 supported_perf_events=heartbeat.perf_supported_events,  # Use agent field name
+                nsys_sessions=heartbeat.nsys_sessions,
             )
             if _dev_config.HEARTBEAT_ASYNC_WRITES:
                 get_heartbeat_writer(db_manager).submit(heartbeat_fields)

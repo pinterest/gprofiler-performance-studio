@@ -285,6 +285,9 @@ class HeartbeatRequest(BaseModel):
     status: str = "active"  # active, idle, error
     timestamp: Optional[datetime] = None
     perf_supported_events: Optional[List[str]] = None  # Changed to match agent format
+    # Sessions from `nsys sessions list`. None = this beat did not report (older agent,
+    # nsys absent, or the list command failed) and the stored value is kept.
+    nsys_sessions: Optional[List[Dict[str, Any]]] = None
 
 
 class HeartbeatResponse(BaseModel):
