@@ -79,6 +79,45 @@ export const groupRowsByService = (selectedRows) =>
         return groups;
     }, {});
 
+const appendDistinct = (params, key, values) => {
+    [...new Set((values || []).filter(Boolean))].sort().forEach((value) => params.append(key, value));
+};
+
+/**
+ * Query string for the nsys session dropdown.
+ *
+ * Checked rows win, and the scope decides which of their fields identify a
+ * session: a service has no single host (the row's host is only a representative),
+ * a namespace is the service plus namespace, and every finer scope runs on a host.
+ * With nothing checked, the applied filter parameters narrow the list the same
+ * way the table does. An empty result lists every fresh host.
+ *
+ * @param {string} scope
+ * @param {Array<object>} selectedRows
+ * @param {object} [appliedFilters]
+ * @returns {URLSearchParams}
+ */
+export const buildNsysSessionQuery = (scope, selectedRows = [], appliedFilters = {}) => {
+    const params = new URLSearchParams();
+    if (selectedRows.length > 0) {
+        if (scope === 'service') {
+            appendDistinct(params, 'service_name', selectedRows.map((row) => row.service));
+        } else if (scope === 'namespace') {
+            appendDistinct(params, 'service_name', selectedRows.map((row) => row.service));
+            appendDistinct(params, 'namespace', selectedRows.map((row) => row.namespace));
+        } else {
+            appendDistinct(params, 'hostname', selectedRows.map((row) => row.host));
+        }
+        return params;
+    }
+    if (appliedFilters.service) params.append('service_contains', appliedFilters.service);
+    if (appliedFilters.hostname) params.append('hostname_contains', appliedFilters.hostname);
+    if (appliedFilters.namespace) params.append('namespace_contains', appliedFilters.namespace);
+    if (appliedFilters.podName) params.append('pod_contains', appliedFilters.podName);
+    if (appliedFilters.ip) params.append('ip_contains', appliedFilters.ip);
+    return params;
+};
+
 /**
  * Build the per-service profiling requests for a bulk start/stop action.
  *
@@ -90,8 +129,11 @@ export const groupRowsByService = (selectedRows) =>
  * @param {number} config.duration
  * @param {number} config.profilingFrequency
  * @param {boolean} config.enablePerfSpect
- * @param {boolean} [config.enableNsys] - When true, agents with nsys run GPU capture
- *   (Adhoc mode is recommended by the UI; this builder does not force continuous=false).
+ * @param {boolean} [config.enableNsys] - When true, agents attach to the nsys
+ *   session named by nsysSession (nsys start / nsys stop). Adhoc mode is
+ *   recommended by the UI; this builder does not force continuous=false.
+ * @param {string} [config.nsysSession] - Session from `nsys sessions list`.
+ *   Omitted when GPU capture is off or nothing is selected.
  * @param {boolean} [config.enableNsysTimeline] - With enableNsys, upload the CPU/GPU
  *   timeline view instead of the GPU flamegraph.
  * @param {boolean} [config.enableNsysTimelineStacks] - With the timeline, also record a
@@ -113,6 +155,7 @@ export const buildProfilingRequests = (action, selectedRows, config) => {
         enableNsysTimeline = false,
         enableNsysTimelineStacks = false,
         enableNsysUploadRep = false,
+        nsysSession = '',
         profilerConfigs,
         maxProcesses,
     } = config;
@@ -150,6 +193,8 @@ export const buildProfilingRequests = (action, selectedRows, config) => {
                 nsys_timeline: enableNsys && enableNsysTimeline,
                 nsys_timeline_stacks: enableNsys && enableNsysTimeline && enableNsysTimelineStacks,
                 nsys_upload_rep: enableNsys && enableNsysUploadRep,
+                nsys_capture_mode: 'launch',
+                ...(enableNsys && nsysSession ? { nsys_session: nsysSession } : {}),
                 profiler_configs: profilerConfigs,
                 max_processes: maxProcesses,
             },

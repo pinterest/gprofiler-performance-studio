@@ -5,8 +5,12 @@ import {
     Box,
     Button,
     Checkbox,
+    FormControl,
     FormControlLabel,
+    InputLabel,
+    MenuItem,
     Paper,
+    Select,
     Radio,
     RadioGroup,
     TextField,
@@ -60,6 +64,9 @@ const ProfilingTopPanel = ({
     onNsysTimelineStacksChange,
     enableNsysUploadRep,
     onNsysUploadRepChange,
+    nsysSessions = [],
+    nsysSession = '',
+    onNsysSessionChange = () => {},
     profilingFrequency,
     onProfilingFrequencyChange,
     maxProcesses,
@@ -311,6 +318,44 @@ const ProfilingTopPanel = ({
                                         sx={{ m: 0 }}
                                     />
                                 </Tooltip>
+                            </Box>
+                        )}
+
+                        {enableNsys && (
+                            <Box sx={{ ml: 3, maxWidth: 420 }}>
+                                <FormControl size='small' fullWidth>
+                                    <InputLabel id='nsys-session-label'>nsys session</InputLabel>
+                                    <Select
+                                        labelId='nsys-session-label'
+                                        label='nsys session'
+                                        value={nsysSessions.some((session) => session.name === nsysSession) ? nsysSession : ''}
+                                        onChange={(e) => onNsysSessionChange(e.target.value)}
+                                    >
+                                        {nsysSessions.length === 0 && (
+                                            <MenuItem value='' disabled>
+                                                No sessions reported
+                                            </MenuItem>
+                                        )}
+                                        {nsysSessions.map((session) => {
+                                            const hostLabel = !session.hosts?.length
+                                                ? ''
+                                                : session.hosts.length <= 2
+                                                    ? session.hosts.join(', ')
+                                                    : `${session.hosts.length} hosts`;
+                                            const detail = [session.state, hostLabel].filter(Boolean).join(' · ');
+                                            return (
+                                                <MenuItem key={session.name} value={session.name}>
+                                                    {detail ? `${session.name} · ${detail}` : session.name}
+                                                </MenuItem>
+                                            );
+                                        })}
+                                    </Select>
+                                </FormControl>
+                                <Helper>
+                                    {selectionModel.length
+                                        ? 'Sessions on the workloads selected above. Start Profiling attaches to the one you pick.'
+                                        : 'Sessions matching the filters above. Select workloads to limit this to those services or hosts.'}
+                                </Helper>
                             </Box>
                         )}
 
