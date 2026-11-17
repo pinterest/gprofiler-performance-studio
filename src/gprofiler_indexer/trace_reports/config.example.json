@@ -1,0 +1,58 @@
+{
+  "_comment": "Example trace report config. Real values live with the deployment, not in this repo.",
+  "trace_store": {
+    "type": "zipkin_es",
+    "url": "https://zipkin-es.example.internal",
+    "index_pattern": "zipkin-span-{date}",
+    "username_env": "TRACE_STORE_USERNAME",
+    "password_env": "TRACE_STORE_PASSWORD",
+    "cluster_tag": "server_host_type",
+    "cluster_tag_fallbacks": ["client_host_type"],
+    "host_tag": "host"
+  },
+  "client": {
+    "services": ["web", "ios", "android"],
+    "root_prefix": "timing/"
+  },
+  "profile_source": {
+    "_comment": "first set wins: $url_env, url, then a random host from $hosts_file_env or hosts_file (port overrides)",
+    "url_env": "TRACE_REPORTS_PROFILE_API_URL",
+    "url": "http://localhost:8080",
+    "hosts_file_env": "TRACE_REPORTS_PROFILE_HOSTS_FILE",
+    "hosts_file": "/etc/webapp_hosts",
+    "port": 8080,
+    "timeout_seconds": 120
+  },
+  "studio_url": "https://gprofiler.example.com",
+  "frames": {
+    "app_prefixes": ["com/example/"],
+    "framework_prefixes": ["com/example/rpc/", "com/example/common/"],
+    "app_regexes": ["^(?P<meth>[\\w<>]+) \\((?P<cls>/srv/app/[^:)]+):\\d+\\)"]
+  },
+  "proxy_overrides": {
+    "checkout-prod": "checkout-canary"
+  },
+  "min_window_minutes": 3,
+  "advisor": {
+    "_comment": "rules: thresholds per finding rule (false disables one); llm: optional OpenAI-compatible chat completions endpoint that ranks the findings (url/model from env or here; the prompt is embedded in every report either way)",
+    "rules": {"fan_out": {"min_calls": 5, "min_total_ms": 50}, "cpu_hotspot": {"min_pct": 5}},
+    "llm": {
+      "url_env": "TRACE_REPORTS_LLM_URL",
+      "model_env": "TRACE_REPORTS_LLM_MODEL",
+      "api_key_env": "TRACE_REPORTS_LLM_API_KEY",
+      "headers": {},
+      "timeout_seconds": 120,
+      "max_calls_per_run": 30
+    }
+  },
+  "reports": [
+    {"id": "web-home-render", "label": "web: home render (end to end)", "root": "home_render",
+     "platform": "web", "agg": 10},
+    {"id": "web-home-render-phone", "label": "web: home render (phones)", "root": "home_render",
+     "platform": "web", "device": "phone", "tags": {"device.type": "phone"}, "agg": 10},
+    {"id": "web-home-render-p50", "label": "web: home render (typical)", "root": "home_render",
+     "platform": "web", "sample": "p50", "agg": 10},
+    {"id": "checkout-slowest", "label": "checkout: slowest request", "slowest": "checkout",
+     "cluster": "checkout-prod", "op": "placeorder"}
+  ]
+}
