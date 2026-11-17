@@ -386,6 +386,11 @@ const ProfilingTopPanel = ({
                                             </Tooltip>
                                         ))}
                                     </Box>
+                                    <Helper>
+                                        On hosts whose PMU doesn&apos;t expose these generic events (e.g. ARM), the
+                                        agent translates them to the equivalent architecture-specific events (e.g. CPU
+                                        Cycles → cpu_cycles). On ARM, cache events count L1 data cache activity.
+                                    </Helper>
                                 </Box>
                             )}
                         </Box>
