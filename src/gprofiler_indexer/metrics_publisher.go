@@ -19,6 +19,8 @@ package main
 import (
 	"fmt"
 	"net"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -163,6 +165,33 @@ func (m *MetricsPublisher) SendErrorMetric(metricName string, extraTags map[stri
 	log.Debugf("📊 Sending error metric: %s", metricLine)
 
 	return m.sendMetric(metricLine)
+}
+
+// SendGaugeMetric sends a metric with an explicit value (e.g. a duration or a row count)
+func (m *MetricsPublisher) SendGaugeMetric(metricName string, value float64, extraTags map[string]string) bool {
+	if m == nil || !m.enabled {
+		return false
+	}
+
+	return m.sendMetric(formatMetricLine(metricName, time.Now().Unix(), value, m.serviceName, extraTags))
+}
+
+// formatMetricLine builds: put metric_name timestamp value service=... tag1=value1 ...
+// Extra tags are sorted so the line is deterministic.
+func formatMetricLine(metricName string, timestamp int64, value float64, serviceName string,
+	extraTags map[string]string) string {
+	tags := []string{fmt.Sprintf("service=%s", serviceName)}
+	keys := make([]string, 0, len(extraTags))
+	for key := range extraTags {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		tags = append(tags, fmt.Sprintf("%s=%s", key, extraTags[key]))
+	}
+
+	return fmt.Sprintf("put %s %d %s %s", metricName, timestamp,
+		strconv.FormatFloat(value, 'f', -1, 64), strings.Join(tags, " "))
 }
 
 // sendMetric sends a metric line via TCP socket
