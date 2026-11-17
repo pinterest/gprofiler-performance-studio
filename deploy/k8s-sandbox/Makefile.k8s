@@ -10,6 +10,7 @@
 #   make -f Makefile.k8s k8s-test         # run AT-K1..K5 real-topology acceptance
 #   make -f Makefile.k8s spark-demo       # one Spark app + per-thread flamegraph
 #   make -f Makefile.k8s spark-multi-demo # several distinct Spark apps (relative weight)
+#   make -f Makefile.k8s gpu-demo         # host nsys GPU adhoc (Kind = Studio only)
 #   make -f Makefile.k8s k8s-down-all     # delete the whole cluster
 #
 # Granular targets are listed in `make -f Makefile.k8s help`.
@@ -97,8 +98,23 @@ k8s-load:
 	  fi; \
 	done
 
+## k8s-secrets     : generate local dev TLS certs + basic-auth file if missing
+# Fresh clones have neither (they are gitignored secrets); the sandbox only
+# needs self-signed certs and an admin/admin login, same as deploy/README.md.
+k8s-secrets:
+	@test -f ../.htpasswd || { \
+	  echo ">> generating deploy/.htpasswd (admin/admin)"; \
+	  printf 'admin:%s\n' "$$(openssl passwd -apr1 admin)" > ../.htpasswd; }
+	@test -f ../tls/cert.pem -a -f ../tls/ch_rest_cert.pem || { \
+	  echo ">> generating self-signed TLS certs under deploy/tls/"; \
+	  mkdir -p ../tls; \
+	  openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+	    -keyout ../tls/key.pem -out ../tls/cert.pem -subj "/CN=localhost"; \
+	  openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+	    -keyout ../tls/ch_rest_key.pem -out ../tls/ch_rest_cert.pem -subj "/CN=ch-rest-service"; }
+
 ## k8s-config      : create ConfigMaps/Secrets from the existing deploy/ files
-k8s-config:
+k8s-config: k8s-secrets
 	$(KUBECTL) apply -f manifests/00-namespaces.yaml
 	$(KUBECTL) apply -f manifests/01-config.yaml
 	@echo ">> schema + init ConfigMaps (single source of truth with compose)"
@@ -131,8 +147,10 @@ k8s-config:
 	  --dry-run=client -o yaml | $(KUBECTL) apply -f -
 
 ## k8s-deploy      : apply all manifests (core stack + workloads + agent)
+# Every resource declares its own namespace (perf-studio, team-a, team-b), so
+# apply without -n: forcing $(NS) makes kubectl reject the team-a/b workloads.
 k8s-deploy:
-	$(KUBECTL) apply -f manifests/
+	kubectl apply -f manifests/
 	@echo ">> waiting for the webapp to become ready..."
 	$(KUBECTL) rollout status deploy/webapp --timeout=300s
 
@@ -327,3 +345,77 @@ spark-clean:
 	-kubectl -n $(SPARK_NS) delete job spark-submit --ignore-not-found
 	-kubectl -n $(SPARK_NS) delete pod spark-cpu-driver --ignore-not-found
 	-kubectl delete -f $(SPARK_DIR)/00-rbac.yaml --ignore-not-found
+
+# --------------------------------------------------------------------------- #
+# GPU (nsys) host demo (gpu/): Kind = Studio control plane only. nsys + agent
+# that can see the NVIDIA GPU must run on the HOST (not the Kind DaemonSet).
+# See gpu/README.md and gpu/DESIGN.md.
+# --------------------------------------------------------------------------- #
+GPU_DIR            := gpu
+GPU_NSYS_SECONDS   ?= 10
+GPU_PROFILE_SECONDS ?= 30
+
+GPU_AGENT_IMAGE ?= gprofiler-e2e-agent:gpu
+GPU_AGENT_HOST  ?= gpu-nsys-host
+
+.PHONY: gpu-check gpu-build gpu-smoke gpu-agent-image gpu-agent-up gpu-agent-down gpu-demo
+
+## gpu-check       : verify nvidia-smi + nsys on the HOST
+gpu-check:
+	@command -v nvidia-smi >/dev/null || { echo "nvidia-smi not found on PATH"; exit 1; }
+	@command -v nsys >/dev/null || { echo "nsys not found on PATH (install NVIDIA Nsight Systems)"; exit 1; }
+	nvidia-smi -L
+	nsys --version
+
+## gpu-build       : compile gpu/cuda_burn with nvcc
+gpu-build:
+	$(MAKE) -C $(GPU_DIR)
+
+## gpu-smoke       : nsys profile cuda_burn + print cuda_gpu_kern_sum CSV head
+gpu-smoke: gpu-check gpu-build
+	@echo ">> nsys profile cuda_burn ($(GPU_NSYS_SECONDS)s worth of work)..."
+	cd $(GPU_DIR) && rm -f cuda_burn_smoke.nsys-rep cuda_burn_smoke_kern.csv && \
+	  nsys profile --stats=true -o cuda_burn_smoke --force-overwrite=true \
+	    ./cuda_burn $(GPU_NSYS_SECONDS)
+	@echo ">> kern sum (first lines):"
+	@cd $(GPU_DIR) && ( \
+	  nsys stats --report cuda_gpu_kern_sum --format csv \
+	    --force-export=true -o cuda_burn_smoke_kern cuda_burn_smoke.nsys-rep \
+	    >/dev/null 2>&1 || true; \
+	  if ls cuda_burn_smoke_kern*.csv >/dev/null 2>&1; then \
+	    head -n 20 cuda_burn_smoke_kern*.csv; \
+	  else \
+	    echo "(csv export unavailable; see nsys stats output above / .nsys-rep)"; \
+	  fi )
+
+## gpu-agent-image  : build the GPU agent image (newer glibc base than the e2e one)
+gpu-agent-image:
+	@echo ">> building agent executable from source (--fast, no staticx)"
+	cd $(AGENT_REPO) && scripts/build_$(AGENT_ARCH)_executable.sh --fast
+	@echo ">> wrapping exe in a 24.04 base -> $(GPU_AGENT_IMAGE)"
+	docker build -f ../e2e/agent-glibc.Dockerfile \
+	  --build-arg ARCH=$(AGENT_ARCH) --build-arg BASE=ubuntu:24.04 \
+	  -t $(GPU_AGENT_IMAGE) $(AGENT_REPO)
+
+## gpu-agent-up     : start the GPU-capable agent container + Studio port-forward
+gpu-agent-up:
+	@chmod +x $(GPU_DIR)/run_gpu_agent.sh
+	@AGENT_IMAGE=$(GPU_AGENT_IMAGE) AGENT_HOST=$(GPU_AGENT_HOST) SERVICE=$(SERVICE) \
+	  $(GPU_DIR)/run_gpu_agent.sh
+
+## gpu-agent-down   : stop the GPU agent container + port-forward
+gpu-agent-down:
+	@AGENT_IMAGE=$(GPU_AGENT_IMAGE) $(GPU_DIR)/run_gpu_agent.sh stop
+
+## gpu-demo        : one-shot GPU adhoc path (Studio in Kind + GPU agent + nsys)
+# The Kind DaemonSet cannot capture GPU (the node has no CUDA driver libs), so
+# this runs a separate GPU-capable agent container against the same Studio.
+gpu-demo: gpu-check gpu-build gpu-agent-up
+	@echo ">> submitting adhoc profile_request(enable_nsys) for $(GPU_AGENT_HOST)"
+	@chmod +x $(GPU_DIR)/run_host_agent_adhoc.sh
+	@HOSTNAME_OVERRIDE=$(GPU_AGENT_HOST) DURATION=$(GPU_PROFILE_SECONDS) SERVICE=$(SERVICE) \
+	  NSYS_WORKLOAD="/gpu/cuda_burn $(GPU_PROFILE_SECONDS)" \
+	  $(GPU_DIR)/run_host_agent_adhoc.sh
+	@echo ">> wait ~$(GPU_PROFILE_SECONDS)s + upload lag, then open Adhoc Profiling:"
+	@echo "     https://localhost:30443/profiles?service=$(SERVICE)&time=1h&view=adhoc"
+	@echo ">> teardown when done: make -f Makefile.k8s gpu-agent-down"

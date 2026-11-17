@@ -15,7 +15,7 @@
  */
 
 import { useContext, useEffect, useState } from 'react';
-import { Box, Typography, Select, MenuItem, FormControl, InputLabel, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Button, Chip, IconButton, Collapse } from '@mui/material';
+import { Box, Typography, Select, MenuItem, FormControl, InputLabel, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Button, Chip, IconButton, Collapse, Tooltip } from '@mui/material';
 import { SelectorsContext } from '@/states';
 import { FilterTagsContext } from '@/states/filters/FiltersTagsContext';
 import useFetchWithRequest from '@/api/useFetchWithRequest';
@@ -26,6 +26,18 @@ import Flexbox from '@/components/common/layout/Flexbox';
 import { formatDate, TIME_FORMATS } from '@/utils/datetimesUtils';
 import Icon from '@/components/common/icon/Icon';
 import { ICONS_NAMES } from '@/components/common/icon/iconsData';
+
+/** True when this adhoc artifact looks like an nsys / GPU flamegraph. */
+const isNsysGpuFile = (file) => {
+    const events = file?.perf_events || file?.perfEvents || file?.events || [];
+    const eventHit = Array.isArray(events) && events.some((ev) => {
+        const s = String(ev).toLowerCase();
+        return s === 'nsys' || s === 'nsys-cuda' || s.includes('nsys');
+    });
+    const name = String(file?.filename || '').toLowerCase();
+    const nameHit = name.includes('nsys') || name.includes('cuda') || name.includes('gpu');
+    return eventHit || nameHit;
+};
 
 const AdhocProfilingView = () => {
     const { selectedService, timeSelection, selectedHost } = useContext(SelectorsContext);
@@ -93,6 +105,20 @@ const AdhocProfilingView = () => {
         setSelectedFile(file);
     };
 
+    const handleRepDownload = (file) => {
+        const repFilename = file.nsys_rep_s3_path.split('/').pop();
+        const url = `${DATA_URLS.GET_ADHOC_NSYS_REP}?${stringify({
+            serviceName: selectedService,
+            filename: repFilename,
+        })}`;
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = repFilename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    };
+
     if (filesLoading) {
         return <Typography>Loading adhoc flamegraphs...</Typography>;
     }
@@ -155,7 +181,7 @@ const AdhocProfilingView = () => {
                                     <TableRow>
                                         <TableCell>Timestamp</TableCell>
                                         <TableCell>Hostname</TableCell>
-                                        <TableCell>PMU Events</TableCell>
+                                        <TableCell>Events</TableCell>
                                         <TableCell>Size</TableCell>
                                         <TableCell>Action</TableCell>
                                     </TableRow>
@@ -178,15 +204,33 @@ const AdhocProfilingView = () => {
                                                 <TableCell sx={removedCellSx}>{formatDate(new Date(file.timestamp), TIME_FORMATS.DATETIME_WITH_SECONDS)}</TableCell>
                                                 <TableCell sx={removedCellSx}>{file.hostname || 'N/A'}</TableCell>
                                                 <TableCell sx={removedCellSx}>
-                                                    {file.perf_events && file.perf_events.length > 0
-                                                        ? file.perf_events.join(', ')
-                                                        : 'N/A'}
+                                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                                                        {isNsysGpuFile(file) && (
+                                                            <Chip label="GPU / nsys" size="small" color="primary" variant="outlined" />
+                                                        )}
+                                                        <span>
+                                                            {file.perf_events && file.perf_events.length > 0
+                                                                ? file.perf_events.join(', ')
+                                                                : isNsysGpuFile(file) ? '' : 'N/A'}
+                                                        </span>
+                                                    </Box>
                                                 </TableCell>
                                                 <TableCell sx={removedCellSx}>{(file.size / 1024).toFixed(2)} KB</TableCell>
                                                 <TableCell>
                                                     {file.removed
                                                         ? <Chip label="Removed" size="small" color="error" variant="outlined" />
-                                                        : <Button size="small" onClick={(e) => { e.stopPropagation(); handleRowClick(file); }}>View</Button>
+                                                        : (
+                                                            <>
+                                                                <Button size="small" onClick={(e) => { e.stopPropagation(); handleRowClick(file); }}>View</Button>
+                                                                {file.nsys_rep_s3_path && (
+                                                                    <Tooltip title="Download the raw .nsys-rep capture (open in NVIDIA Nsight Systems)">
+                                                                        <Button size="small" onClick={(e) => { e.stopPropagation(); handleRepDownload(file); }}>
+                                                                            .nsys-rep
+                                                                        </Button>
+                                                                    </Tooltip>
+                                                                )}
+                                                            </>
+                                                        )
                                                     }
                                                 </TableCell>
                                             </TableRow>
@@ -229,7 +273,14 @@ const AdhocProfilingView = () => {
                     ) : null}
                 </Box>
             ) : (
-                <Typography>No adhoc flamegraphs found for the selected service and time range.</Typography>
+                <Box>
+                    <Typography>No adhoc flamegraphs found for the selected service and time range.</Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                        GPU (nsys) profiles appear here after an Adhoc Dynamic Profiling run with the
+                        GPU (nsys) checkbox enabled. The profiled host must have NVIDIA Nsight Systems
+                        (`nsys`) installed.
+                    </Typography>
+                </Box>
             )}
         </Flexbox>
     );
