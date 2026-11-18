@@ -482,12 +482,38 @@ active-host window applies to the status page, the precompute build, and target
 resolution, which keeps "what the UI offers" and "what a request can target"
 consistent.
 
-A host that stops reporting altogether keeps its last inventory rows, which no
-reader uses but the precompute build still scans. The periodic-tasks worker
-removes them with `prune_stale_host_inventory` once the host has gone
-`GPROFILER_INVENTORY_PRUNE_AFTER` without a beat, measured against the newest
-beat so an ingest outage prunes nothing. It also clears the host's stored
-digest, so a host that comes back re-sends its full inventory.
+A host that stops reporting altogether leaves rows behind that nothing else
+deletes, so every 10 minutes the periodic-tasks worker runs one cleanup job
+(`prune_stale_data.sh`). It calls one procedure per table, in this order, each
+with its own retention setting; setting one to `off` skips that step. Host and
+agent-process staleness is measured against the newest beat or upload, so an
+ingest outage prunes nothing.
+
+- `prune_stale_host_inventory` removes the inventory rows of a host that has
+  gone `GPROFILER_INVENTORY_PRUNE_AFTER` without a beat. No reader uses them,
+  but the precompute build still scans them. It also clears the host's stored
+  digest, so a host that comes back re-sends its full inventory.
+- `prune_stale_profiling_commands` removes a host's last profiling command once
+  the host has gone `GPROFILER_PROFILING_COMMANDS_PRUNE_AFTER` without a beat
+  and the command was not re-issued in that time. A host that comes back after
+  that is treated like a new host: it gets no command, or joins its service's
+  active service-wide subscription. An explicit per-host start or stop is
+  therefore lost after that long an absence, which is why the default is days
+  rather than hours.
+- `prune_stale_host_heartbeats` removes the `HostHeartbeats` row of a host that
+  has gone `GPROFILER_HOST_HEARTBEATS_PRUNE_AFTER` without a beat, unless the
+  host still has a profiling command: the row is the only record of when the
+  host was last seen, which the command prune relies on. A host that comes back
+  gets a new row. The total host count on the host status page counts these
+  rows, so it covers hosts seen within that window.
+- `prune_old_profiling_executions` removes executions that nothing has touched
+  for `GPROFILER_PROFILING_EXECUTIONS_PRUNE_AFTER`, except those of a host's
+  current command, which a completion report looks up.
+- `prune_stale_profiler_processes` removes agent processes not seen for
+  `GPROFILER_PROFILER_PROCESSES_PRUNE_AFTER`, and those that ran for under 2
+  minutes (crash loops, short-lived containers) once not seen for 7 days. The
+  nodes-and-cores graph reads them, so it shows nothing for older windows and
+  leaves the short-lived ones out of windows older than 7 days.
 
 The window is **15 minutes** by default, set by
 `GPROFILER_WORKLOAD_FRESH_INTERVAL` as a SQL interval string. Because the value
@@ -523,6 +549,10 @@ row is deleted.
 | `idle_session_timeout` (DB role) | — | Reaps idle per-thread connections server-side |
 | `GPROFILER_WORKLOAD_SNAPSHOT_REFRESH_MINUTES` (periodic worker) | `1` | Minutes between precompute builds (1–60); bounds the added staleness of unfiltered reads. Sized for the fleet, see below |
 | `GPROFILER_INVENTORY_PRUNE_AFTER` (periodic worker) | `1 hour` | Time without a beat before a host's inventory is pruned (every 10 minutes); keep well above the freshness window |
+| `GPROFILER_PROFILING_COMMANDS_PRUNE_AFTER` (periodic worker) | `7 days` | Time without a beat (and without a re-issue) before a host's profiling command is pruned (every 10 minutes); a host back after that loses explicit per-host commands |
+| `GPROFILER_HOST_HEARTBEATS_PRUNE_AFTER` (periodic worker) | `1 day` | Time without a beat before a host's `HostHeartbeats` row is pruned, once it has no profiling command (every 10 minutes); keep at or above `ACTIVE_HOST_HEARTBEAT_MAX_DELTA_HOURS` (24 hours) |
+| `GPROFILER_PROFILING_EXECUTIONS_PRUNE_AFTER` (periodic worker) | `30 days` | Time without an update before a profiling execution is pruned, unless it belongs to its host's current command (every 10 minutes) |
+| `GPROFILER_PROFILER_PROCESSES_PRUNE_AFTER` (periodic worker) | `90 days` | Time since last seen before an agent process row is pruned; processes that ran for under 2 minutes go after 7 days (every 10 minutes) |
 
 The default for `GPROFILER_POSTGRES_CONN_PER_THREAD` is `FALSE`, so a deployment
 that does not set it runs one connection per worker **process** and serializes

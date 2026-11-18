@@ -36,7 +36,7 @@
 --
 -- Work is done in batches of batch_hosts hosts, one transaction each, at most
 -- max_batches per call; a larger backlog drains over the following calls. Run by the
--- periodic-tasks worker (deploy/periodic_tasks/prune_stale_host_inventory.sh).
+-- periodic-tasks worker (deploy/periodic_tasks/prune_stale_data.sh).
 
 CREATE OR REPLACE PROCEDURE prune_stale_host_inventory(
     IN stale_after interval DEFAULT '1 hour',

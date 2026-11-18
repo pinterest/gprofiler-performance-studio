@@ -1352,3 +1352,238 @@ BEGIN
         n_hosts, n_containers, stale_after, clock_timestamp() - t0;
 END;
 $procedure$;
+
+-- Prune the profiling commands of hosts with no beat for stale_after (and not issued in
+-- that time), measured against the newest beat so an ingest outage prunes nothing; a
+-- returning host is treated like a new one. Run by the periodic-tasks worker.
+-- Rationale: migrations/add_prune_stale_data.sql.
+CREATE OR REPLACE PROCEDURE prune_stale_profiling_commands(
+    IN stale_after interval DEFAULT '7 days',
+    IN batch_rows integer DEFAULT 1000,
+    IN max_batches integer DEFAULT 50
+)
+    LANGUAGE plpgsql
+AS $procedure$
+DECLARE
+    cutoff     timestamp;
+    candidates bigint[];
+    n_rows     bigint;
+    n_commands bigint := 0;
+    t0         timestamptz := clock_timestamp();
+BEGIN
+    SELECT MAX(updated_at) - stale_after INTO cutoff FROM HostHeartbeats;
+
+    SELECT array_agg(id ORDER BY id) INTO candidates
+    FROM (
+        SELECT c.id
+        FROM ProfilingCommands c
+        WHERE c.created_at < cutoff
+          AND NOT EXISTS (
+              SELECT 1 FROM HostHeartbeats h
+              WHERE h.hostname = c.hostname
+                AND h.service_name = c.service_name
+                AND h.updated_at >= cutoff
+          )
+        ORDER BY c.id
+        LIMIT batch_rows * max_batches
+    ) s;
+
+    FOR i IN 0 .. coalesce(cardinality(candidates), 0) - 1 BY batch_rows LOOP
+        -- Re-checked under the row lock; SKIP LOCKED: a locked command is being re-issued
+        -- or updated right now.
+        WITH stale AS (
+            SELECT c.id
+            FROM ProfilingCommands c
+            WHERE c.id = ANY (candidates[i + 1 : i + batch_rows])
+              AND c.created_at < cutoff
+              AND NOT EXISTS (
+                  SELECT 1 FROM HostHeartbeats h
+                  WHERE h.hostname = c.hostname
+                    AND h.service_name = c.service_name
+                    AND h.updated_at >= cutoff
+              )
+            FOR UPDATE OF c SKIP LOCKED
+        )
+        DELETE FROM ProfilingCommands c USING stale WHERE c.id = stale.id;
+        GET DIAGNOSTICS n_rows = ROW_COUNT;
+        n_commands := n_commands + n_rows;
+        COMMIT;
+    END LOOP;
+
+    RAISE NOTICE 'prune_stale_profiling_commands: deleted % commands of hosts with no beat for %, in %',
+        n_commands, stale_after, clock_timestamp() - t0;
+END;
+$procedure$;
+
+-- Prune the HostHeartbeats rows of hosts with no beat for stale_after that have no profiling
+-- command left (the row is the host's only last-seen record, which the command prune needs),
+-- measured against the newest beat so an ingest outage prunes nothing. Run by the
+-- periodic-tasks worker. Rationale: migrations/add_prune_stale_data.sql.
+CREATE OR REPLACE PROCEDURE prune_stale_host_heartbeats(
+    IN stale_after interval DEFAULT '1 day',
+    IN batch_rows integer DEFAULT 1000,
+    IN max_batches integer DEFAULT 50
+)
+    LANGUAGE plpgsql
+AS $procedure$
+DECLARE
+    cutoff     timestamp;
+    candidates bigint[];
+    n_rows     bigint;
+    n_hosts    bigint := 0;
+    t0         timestamptz := clock_timestamp();
+BEGIN
+    SELECT MAX(updated_at) - stale_after INTO cutoff FROM HostHeartbeats;
+
+    SELECT array_agg(id ORDER BY id) INTO candidates
+    FROM (
+        SELECT h.id
+        FROM HostHeartbeats h
+        WHERE h.updated_at < cutoff
+          AND NOT EXISTS (
+              SELECT 1 FROM ProfilingCommands c
+              WHERE c.hostname = h.hostname
+                AND c.service_name = h.service_name
+          )
+        ORDER BY h.id
+        LIMIT batch_rows * max_batches
+    ) s;
+
+    FOR i IN 0 .. coalesce(cardinality(candidates), 0) - 1 BY batch_rows LOOP
+        -- Re-checked under the row lock; SKIP LOCKED: a locked host is beating right now.
+        WITH stale AS (
+            SELECT h.id
+            FROM HostHeartbeats h
+            WHERE h.id = ANY (candidates[i + 1 : i + batch_rows])
+              AND h.updated_at < cutoff
+              AND NOT EXISTS (
+                  SELECT 1 FROM ProfilingCommands c
+                  WHERE c.hostname = h.hostname
+                    AND c.service_name = h.service_name
+              )
+            FOR UPDATE OF h SKIP LOCKED
+        )
+        DELETE FROM HostHeartbeats h USING stale WHERE h.id = stale.id;
+        GET DIAGNOSTICS n_rows = ROW_COUNT;
+        n_hosts := n_hosts + n_rows;
+        COMMIT;
+    END LOOP;
+
+    RAISE NOTICE 'prune_stale_host_heartbeats: deleted % hosts with no beat for % and no profiling command, in %',
+        n_hosts, stale_after, clock_timestamp() - t0;
+END;
+$procedure$;
+
+-- Prune the profiling executions nothing has touched for older_than (wall clock), except
+-- those of their host's current command. Run by the periodic-tasks worker.
+-- Rationale: migrations/add_prune_stale_data.sql.
+CREATE OR REPLACE PROCEDURE prune_old_profiling_executions(
+    IN older_than interval DEFAULT '30 days',
+    IN batch_rows integer DEFAULT 1000,
+    IN max_batches integer DEFAULT 50
+)
+    LANGUAGE plpgsql
+AS $procedure$
+DECLARE
+    cutoff       timestamp := LOCALTIMESTAMP - older_than;
+    candidates   bigint[];
+    n_rows       bigint;
+    n_executions bigint := 0;
+    t0           timestamptz := clock_timestamp();
+BEGIN
+    SELECT array_agg(id ORDER BY id) INTO candidates
+    FROM (
+        SELECT e.id
+        FROM ProfilingExecutions e
+        WHERE GREATEST(e.created_at, e.started_at, e.completed_at) < cutoff
+          AND NOT EXISTS (
+              SELECT 1 FROM ProfilingCommands c
+              WHERE c.command_id = e.command_id
+                AND c.hostname = e.hostname
+          )
+        ORDER BY e.id
+        LIMIT batch_rows * max_batches
+    ) s;
+
+    FOR i IN 0 .. coalesce(cardinality(candidates), 0) - 1 BY batch_rows LOOP
+        -- Re-checked under the row lock; SKIP LOCKED: a locked execution is being updated
+        -- right now.
+        WITH old AS (
+            SELECT e.id
+            FROM ProfilingExecutions e
+            WHERE e.id = ANY (candidates[i + 1 : i + batch_rows])
+              AND GREATEST(e.created_at, e.started_at, e.completed_at) < cutoff
+              AND NOT EXISTS (
+                  SELECT 1 FROM ProfilingCommands c
+                  WHERE c.command_id = e.command_id
+                    AND c.hostname = e.hostname
+              )
+            FOR UPDATE OF e SKIP LOCKED
+        )
+        DELETE FROM ProfilingExecutions e USING old WHERE e.id = old.id;
+        GET DIAGNOSTICS n_rows = ROW_COUNT;
+        n_executions := n_executions + n_rows;
+        COMMIT;
+    END LOOP;
+
+    RAISE NOTICE 'prune_old_profiling_executions: deleted % executions untouched for %, in %',
+        n_executions, older_than, clock_timestamp() - t0;
+END;
+$procedure$;
+
+-- Prune the agent processes not seen for stale_after, or for 7 days if they ran for under
+-- 2 minutes, measured against the newest upload so an ingest outage prunes nothing. Run by
+-- the periodic-tasks worker. Rationale: migrations/add_prune_stale_data.sql.
+CREATE OR REPLACE PROCEDURE prune_stale_profiler_processes(
+    IN stale_after interval DEFAULT '90 days',
+    IN batch_rows integer DEFAULT 1000,
+    IN max_batches integer DEFAULT 50
+)
+    LANGUAGE plpgsql
+AS $procedure$
+DECLARE
+    short_lived       constant interval := '2 minutes';
+    short_lived_after constant interval := '7 days';
+    newest            timestamp;
+    cutoff            timestamp;
+    short_cutoff      timestamp;
+    candidates        bigint[];
+    n_rows            bigint;
+    n_processes       bigint := 0;
+    t0                timestamptz := clock_timestamp();
+BEGIN
+    SELECT MAX(last_seen) INTO newest FROM ProfilerProcesses;
+    cutoff := newest - stale_after;
+    short_cutoff := newest - short_lived_after;
+
+    SELECT array_agg(id ORDER BY id) INTO candidates
+    FROM (
+        SELECT p.id
+        FROM ProfilerProcesses p
+        -- The first bound is implied by the second; it lets the last_seen index serve both rules.
+        WHERE p.last_seen < GREATEST(cutoff, short_cutoff)
+          AND (p.last_seen < cutoff OR (p.last_seen < short_cutoff AND p.last_seen - p.ts < short_lived))
+        ORDER BY p.last_seen
+        LIMIT batch_rows * max_batches
+    ) s;
+
+    FOR i IN 0 .. coalesce(cardinality(candidates), 0) - 1 BY batch_rows LOOP
+        -- Re-checked under the row lock; SKIP LOCKED: a locked process is being updated by an
+        -- upload right now.
+        WITH stale AS (
+            SELECT p.id
+            FROM ProfilerProcesses p
+            WHERE p.id = ANY (candidates[i + 1 : i + batch_rows])
+              AND (p.last_seen < cutoff OR (p.last_seen < short_cutoff AND p.last_seen - p.ts < short_lived))
+            FOR UPDATE SKIP LOCKED
+        )
+        DELETE FROM ProfilerProcesses p USING stale WHERE p.id = stale.id;
+        GET DIAGNOSTICS n_rows = ROW_COUNT;
+        n_processes := n_processes + n_rows;
+        COMMIT;
+    END LOOP;
+
+    RAISE NOTICE 'prune_stale_profiler_processes: deleted % agent processes not seen for % (% if they ran under 2 minutes), in %',
+        n_processes, stale_after, short_lived_after, clock_timestamp() - t0;
+END;
+$procedure$;
