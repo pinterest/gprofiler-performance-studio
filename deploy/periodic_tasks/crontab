@@ -1,5 +1,4 @@
 10 * * * * /aggregations.sh >> /var/log/cron/cron.log 2>&1
 * * * * * flock -n /tmp/workload_snapshot.lock /refresh_workload_snapshot.sh >> /var/log/cron/cron.log 2>&1
-*/10 * * * * flock -n /tmp/inventory_prune.lock /prune_stale_host_inventory.sh >> /var/log/cron/cron.log 2>&1
-40 * * * * flock -n /tmp/commands_prune.lock /prune_stale_profiling_commands.sh >> /var/log/cron/cron.log 2>&1
+*/10 * * * * flock -n /tmp/prune_stale_data.lock /prune_stale_data.sh >> /var/log/cron/cron.log 2>&1
 */15 * * * * /usr/sbin/logrotate /etc/logrotate.conf

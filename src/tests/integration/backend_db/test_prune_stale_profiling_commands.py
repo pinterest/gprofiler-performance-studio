@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Integration tests for the ``prune_stale_profiling_commands`` procedure
-(scripts/setup/postgres/migrations/add_prune_stale_profiling_commands.sql).
+(scripts/setup/postgres/migrations/add_prune_stale_data.sql).
 
 The procedure measures staleness against the newest beat in ``HostHeartbeats``, so each
 test runs it against a private copy of ``HostHeartbeats`` and ``ProfilingCommands``, placed
