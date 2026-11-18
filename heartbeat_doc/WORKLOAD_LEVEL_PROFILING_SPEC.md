@@ -489,6 +489,15 @@ removes them with `prune_stale_host_inventory` once the host has gone
 beat so an ingest outage prunes nothing. It also clears the host's stored
 digest, so a host that comes back re-sends its full inventory.
 
+The same applies to a host's last profiling command, which nothing else ever
+deletes. Every hour the worker removes it with `prune_stale_profiling_commands`
+once the host has gone `GPROFILER_PROFILING_COMMANDS_PRUNE_AFTER` without a beat
+and the command was not re-issued in that time, again measured against the
+newest beat. A host that comes back after that is treated like a new host: it
+gets no command, or joins its service's active service-wide subscription. An
+explicit per-host start or stop is therefore lost after that long an absence,
+which is why the default is days rather than hours.
+
 The window is **15 minutes** by default, set by
 `GPROFILER_WORKLOAD_FRESH_INTERVAL` as a SQL interval string. Because the value
 is interpolated into SQL interval literals, it is validated against a strict
@@ -523,6 +532,7 @@ row is deleted.
 | `idle_session_timeout` (DB role) | — | Reaps idle per-thread connections server-side |
 | `GPROFILER_WORKLOAD_SNAPSHOT_REFRESH_MINUTES` (periodic worker) | `1` | Minutes between precompute builds (1–60); bounds the added staleness of unfiltered reads. Sized for the fleet, see below |
 | `GPROFILER_INVENTORY_PRUNE_AFTER` (periodic worker) | `1 hour` | Time without a beat before a host's inventory is pruned (every 10 minutes); keep well above the freshness window |
+| `GPROFILER_PROFILING_COMMANDS_PRUNE_AFTER` (periodic worker) | `7 days` | Time without a beat (and without a re-issue) before a host's profiling command is pruned (hourly); a host back after that loses explicit per-host commands |
 
 The default for `GPROFILER_POSTGRES_CONN_PER_THREAD` is `FALSE`, so a deployment
 that does not set it runs one connection per worker **process** and serializes

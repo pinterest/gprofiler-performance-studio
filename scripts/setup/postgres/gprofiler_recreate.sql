@@ -1352,3 +1352,65 @@ BEGIN
         n_hosts, n_containers, stale_after, clock_timestamp() - t0;
 END;
 $procedure$;
+
+-- Prune the profiling commands of hosts with no beat for stale_after (and not issued in
+-- that time), measured against the newest beat so an ingest outage prunes nothing; a
+-- returning host is treated like a new one. Run by the periodic-tasks worker.
+-- Rationale: migrations/add_prune_stale_profiling_commands.sql.
+CREATE OR REPLACE PROCEDURE prune_stale_profiling_commands(
+    IN stale_after interval DEFAULT '7 days',
+    IN batch_rows integer DEFAULT 1000,
+    IN max_batches integer DEFAULT 50
+)
+    LANGUAGE plpgsql
+AS $procedure$
+DECLARE
+    cutoff     timestamp;
+    candidates bigint[];
+    n_rows     bigint;
+    n_commands bigint := 0;
+    t0         timestamptz := clock_timestamp();
+BEGIN
+    SELECT MAX(updated_at) - stale_after INTO cutoff FROM HostHeartbeats;
+
+    SELECT array_agg(id ORDER BY id) INTO candidates
+    FROM (
+        SELECT c.id
+        FROM ProfilingCommands c
+        WHERE c.created_at < cutoff
+          AND NOT EXISTS (
+              SELECT 1 FROM HostHeartbeats h
+              WHERE h.hostname = c.hostname
+                AND h.service_name = c.service_name
+                AND h.updated_at >= cutoff
+          )
+        ORDER BY c.id
+        LIMIT batch_rows * max_batches
+    ) s;
+
+    FOR i IN 0 .. coalesce(cardinality(candidates), 0) - 1 BY batch_rows LOOP
+        -- Re-checked under the row lock; SKIP LOCKED: a locked command is being re-issued
+        -- or updated right now.
+        WITH stale AS (
+            SELECT c.id
+            FROM ProfilingCommands c
+            WHERE c.id = ANY (candidates[i + 1 : i + batch_rows])
+              AND c.created_at < cutoff
+              AND NOT EXISTS (
+                  SELECT 1 FROM HostHeartbeats h
+                  WHERE h.hostname = c.hostname
+                    AND h.service_name = c.service_name
+                    AND h.updated_at >= cutoff
+              )
+            FOR UPDATE OF c SKIP LOCKED
+        )
+        DELETE FROM ProfilingCommands c USING stale WHERE c.id = stale.id;
+        GET DIAGNOSTICS n_rows = ROW_COUNT;
+        n_commands := n_commands + n_rows;
+        COMMIT;
+    END LOOP;
+
+    RAISE NOTICE 'prune_stale_profiling_commands: deleted % commands of hosts with no beat for %, in %',
+        n_commands, stale_after, clock_timestamp() - t0;
+END;
+$procedure$;
