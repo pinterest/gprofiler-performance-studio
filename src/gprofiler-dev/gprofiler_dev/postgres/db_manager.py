@@ -2591,9 +2591,12 @@ class DBManager(metaclass=Singleton):
             WHERE fh.heartbeat_timestamp > NOW() - INTERVAL '{WORKLOAD_FRESH_INTERVAL}'
               AND {service_filter}
         ),
-        current_commands AS (
+        current_commands AS NOT MATERIALIZED (
             -- ProfilingCommands is UNIQUE (hostname, service_name), so it is already
             -- one row per host/service; no window/dedup needed.
+            -- NOT MATERIALIZED: queries that reference this CTE twice would otherwise get it
+            -- materialized, and the per-entity hydrate LATERAL would then re-scan every
+            -- command for each joined row instead of probing unique_profiling_command_per_host.
             SELECT hostname, service_name, command_type, status, combined_config
             FROM ProfilingCommands
         )"""
