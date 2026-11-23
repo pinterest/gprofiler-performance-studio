@@ -1293,7 +1293,7 @@ function copyPrompt(){
     return ''; };
   const L = ADVICE.llm;
   let h = `<details open><summary><b>Recommendations</b> ${L ? `<span class="tag join">LLM · ${esc(L.model)}</span>`
-          : `<span class="muted">rule-based findings only${ADVICE.llm_error ? ' (LLM: '+esc(ADVICE.llm_error)+')' : ''}</span>`}
+          : `<span class="muted">rule-based findings only</span>`}
           · <b>${ADVICE.findings.length}</b> findings · <button id="copyPrompt" title="the findings and trace context as an LLM prompt">Copy LLM prompt</button> <span id="copied" class="muted"></span></summary>`;
   if (L){
     if (L.summary) h += `<p>${esc(L.summary)}</p>`;
