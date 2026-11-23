@@ -293,6 +293,8 @@ CREATE TABLE HostHeartbeats (
     -- inventory hashes to this value does no inventory work. NULL = not yet synced under
     -- change detection. (Last column so a fresh install matches the migrated layout.)
     inventory_digest text NULL,
+    -- Sessions from `nsys sessions list` ({name, state} objects). NULL = not reported.
+    nsys_sessions jsonb NULL,
     CONSTRAINT "unique_host_heartbeat" UNIQUE (hostname, service_name)
 );
 

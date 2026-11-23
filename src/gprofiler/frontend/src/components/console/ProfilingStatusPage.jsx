@@ -24,7 +24,7 @@ import { ICONS_NAMES } from '../common/icon/iconsData';
 import MuiTable from '../common/dataDisplay/table/MuiTable';
 import ProfilingHeader from './header/ProfilingHeader';
 import ProfilingTopPanel from './header/ProfilingTopPanel';
-import { buildProfilingRequests } from './profilingRequestBuilder.mjs';
+import { buildNsysSessionQuery, buildProfilingRequests } from './profilingRequestBuilder.mjs';
 
 const DEFAULT_PROFILING_FREQUENCY = 11;
 const DEFAULT_MAX_PROCESSES = 10;
@@ -367,6 +367,8 @@ const ProfilingStatusPage = () => {
     const [enableNsysTimeline, setEnableNsysTimeline] = useState(false);
     const [enableNsysTimelineStacks, setEnableNsysTimelineStacks] = useState(false);
     const [enableNsysUploadRep, setEnableNsysUploadRep] = useState(false);
+    const [nsysSessions, setNsysSessions] = useState([]);
+    const [nsysSession, setNsysSession] = useState('');
     const [profilingFrequency, setProfilingFrequency] = useState(DEFAULT_PROFILING_FREQUENCY);
     const [maxProcesses, setMaxProcesses] = useState(DEFAULT_MAX_PROCESSES);
     const [profilingMode, setProfilingMode] = useState('continuous');
@@ -414,6 +416,7 @@ const ProfilingStatusPage = () => {
                 if (typeof saved.enableNsysTimelineStacks === 'boolean')
                     setEnableNsysTimelineStacks(saved.enableNsysTimelineStacks);
                 if (typeof saved.enableNsysUploadRep === 'boolean') setEnableNsysUploadRep(saved.enableNsysUploadRep);
+                if (typeof saved.nsysSession === 'string') setNsysSession(saved.nsysSession);
                 if (saved.profilingFrequency) setProfilingFrequency(saved.profilingFrequency);
                 if (saved.maxProcesses != null) setMaxProcesses(saved.maxProcesses);
                 if (saved.profilingMode) setProfilingMode(saved.profilingMode);
@@ -432,6 +435,7 @@ const ProfilingStatusPage = () => {
             enableNsysTimeline,
             enableNsysTimelineStacks,
             enableNsysUploadRep,
+            nsysSession,
             profilingFrequency,
             maxProcesses,
             profilingMode,
@@ -444,7 +448,7 @@ const ProfilingStatusPage = () => {
         } catch (error) {
             setSnackbar({ open: true, message: 'Failed to save configuration' });
         }
-    }, [duration, enableNsys, enableNsysTimeline, enableNsysTimelineStacks, enableNsysUploadRep, enablePerfSpect, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
+    }, [duration, enableNsys, enableNsysTimeline, enableNsysTimelineStacks, enableNsysUploadRep, enablePerfSpect, maxProcesses, nsysSession, profilerConfigs, profilingFrequency, profilingMode]);
 
     const fetchProfilingStatus = useCallback((filterParams, scope, opts = {}) => {
         const pageArg = opts.page ?? pageRef.current;
@@ -588,6 +592,39 @@ const ProfilingStatusPage = () => {
         };
     }, []);
 
+    const nsysSessionQuery = useMemo(() => {
+        const selectedRows = rows.filter((row) => selectionModel.includes(row.id));
+        return buildNsysSessionQuery(activeScope, selectedRows, appliedFilters).toString();
+    }, [activeScope, appliedFilters, rows, selectionModel]);
+
+    useEffect(() => {
+        if (!enableNsys) return undefined;
+        let cancelled = false;
+        const load = () => {
+            fetch(`${DATA_URLS.GET_NSYS_SESSIONS}${nsysSessionQuery ? `?${nsysSessionQuery}` : ''}`)
+                .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`status ${res.status}`))))
+                .then((data) => {
+                    if (!cancelled) setNsysSessions(Array.isArray(data.sessions) ? data.sessions : []);
+                })
+                .catch(() => {
+                    if (!cancelled) setNsysSessions([]);
+                });
+        };
+        load();
+        const timer = setInterval(load, 15000);
+        return () => {
+            cancelled = true;
+            clearInterval(timer);
+        };
+    }, [enableNsys, nsysSessionQuery]);
+
+    useEffect(() => {
+        if (!enableNsys || nsysSessions.length === 0) return;
+        if (nsysSessions.some((session) => session.name === nsysSession)) return;
+        const preferred = nsysSessions.find((session) => session.name === 'gprofiler-cuda-burn') || nsysSessions[0];
+        setNsysSession(preferred.name);
+    }, [enableNsys, nsysSession, nsysSessions]);
+
     const handleScopeChange = (_, nextScope) => {
         setActiveScope(nextScope);
         setSelectionModel([]);
@@ -633,9 +670,10 @@ const ProfilingStatusPage = () => {
         enableNsysTimeline,
         enableNsysTimelineStacks,
         enableNsysUploadRep,
+        nsysSession,
         profilerConfigs,
         maxProcesses,
-    }), [activeScope, duration, enableNsys, enableNsysTimeline, enableNsysTimelineStacks, enableNsysUploadRep, enablePerfSpect, maxProcesses, profilerConfigs, profilingFrequency, profilingMode]);
+    }), [activeScope, duration, enableNsys, enableNsysTimeline, enableNsysTimelineStacks, enableNsysUploadRep, enablePerfSpect, maxProcesses, nsysSession, profilerConfigs, profilingFrequency, profilingMode]);
 
     const executeDryRun = useCallback((action, selectedRows) => {
         const { requests } = buildRequests(action, selectedRows);
@@ -815,6 +853,9 @@ const ProfilingStatusPage = () => {
                     onNsysTimelineStacksChange={setEnableNsysTimelineStacks}
                     enableNsysUploadRep={enableNsysUploadRep}
                     onNsysUploadRepChange={setEnableNsysUploadRep}
+                    nsysSessions={nsysSessions}
+                    nsysSession={nsysSession}
+                    onNsysSessionChange={setNsysSession}
                     profilingFrequency={profilingFrequency}
                     onProfilingFrequencyChange={setProfilingFrequency}
                     maxProcesses={maxProcesses}
@@ -914,7 +955,7 @@ const ProfilingStatusPage = () => {
                                                 enableNsysTimeline
                                                     ? `Timeline${enableNsysTimelineStacks ? ' + stacks' : ''}`
                                                     : 'Flamegraph'
-                                            })`
+                                            }${nsysSession ? `, session ${nsysSession}` : ''})`
                                             : 'Disabled'
                                     }</Typography>
                                     <Typography variant="body2">• Profiling Mode: {profilingMode === 'adhoc' ? 'Ad Hoc' : 'Continuous'}</Typography>

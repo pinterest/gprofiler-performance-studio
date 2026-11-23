@@ -896,6 +896,7 @@ class DBManager(metaclass=Singleton):
         status: str = "active",
         heartbeat_timestamp: Optional[datetime] = None,
         supported_perf_events: Optional[List[str]] = None,
+        nsys_sessions: Optional[List[Dict[str, Any]]] = None,
         inventory_digest: Optional[str] = None,
     ) -> bool:
         """
@@ -930,14 +931,15 @@ class DBManager(metaclass=Singleton):
         INSERT INTO HostHeartbeats (
             hostname, ip_address, service_name, agent_version, run_mode, namespace, pod_name, last_command_id,
             received_command_ids, executed_command_ids,
-            status, heartbeat_timestamp, supported_perf_events, created_at, updated_at
+            status, heartbeat_timestamp, supported_perf_events, nsys_sessions, created_at, updated_at
         ) VALUES (
             %(hostname)s, %(ip_address)s::inet, %(service_name)s, %(agent_version)s, %(run_mode)s,
             %(namespace)s, %(pod_name)s,
             %(last_command_id)s::uuid, %(received_command_ids)s::uuid[],
             %(executed_command_ids)s::uuid[],
             %(status)s::HostStatus,
-            %(heartbeat_timestamp)s, %(supported_perf_events)s::text[], CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            %(heartbeat_timestamp)s, %(supported_perf_events)s::text[], %(nsys_sessions)s::jsonb,
+            CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         )
         ON CONFLICT (hostname, service_name)
         DO UPDATE SET
@@ -952,6 +954,7 @@ class DBManager(metaclass=Singleton):
             status = EXCLUDED.status,
             heartbeat_timestamp = EXCLUDED.heartbeat_timestamp,
             supported_perf_events = EXCLUDED.supported_perf_events,
+            nsys_sessions = COALESCE(EXCLUDED.nsys_sessions, HostHeartbeats.nsys_sessions),
             updated_at = CURRENT_TIMESTAMP
         RETURNING ID, inventory_digest
         """
@@ -970,6 +973,7 @@ class DBManager(metaclass=Singleton):
             "status": status,
             "heartbeat_timestamp": heartbeat_timestamp,
             "supported_perf_events": supported_perf_events,
+            "nsys_sessions": None if nsys_sessions is None else json.dumps(nsys_sessions),
         }
 
         # Host upsert and the normalized inventory sync share one transaction so a
@@ -1097,6 +1101,7 @@ class DBManager(metaclass=Singleton):
                 p.get("status", "active"),
                 p.get("heartbeat_timestamp") or now,
                 p.get("supported_perf_events"),
+                None if p.get("nsys_sessions") is None else json.dumps(p.get("nsys_sessions")),
             )
             for p in payloads
         ]
@@ -1104,7 +1109,7 @@ class DBManager(metaclass=Singleton):
             INSERT INTO HostHeartbeats (
                 hostname, ip_address, service_name, agent_version, run_mode, namespace, pod_name,
                 last_command_id, received_command_ids, executed_command_ids,
-                status, heartbeat_timestamp, supported_perf_events, created_at, updated_at
+                status, heartbeat_timestamp, supported_perf_events, nsys_sessions, created_at, updated_at
             ) VALUES %s
             ON CONFLICT (hostname, service_name) DO UPDATE SET
                 ip_address = EXCLUDED.ip_address,
@@ -1118,12 +1123,13 @@ class DBManager(metaclass=Singleton):
                 status = EXCLUDED.status,
                 heartbeat_timestamp = EXCLUDED.heartbeat_timestamp,
                 supported_perf_events = EXCLUDED.supported_perf_events,
+                nsys_sessions = COALESCE(EXCLUDED.nsys_sessions, HostHeartbeats.nsys_sessions),
                 updated_at = CURRENT_TIMESTAMP
             RETURNING id, hostname, service_name, inventory_digest
         """
         template = (
             "(%s, %s::inet, %s, %s, %s, %s, %s, %s::uuid, %s::uuid[], %s::uuid[], "
-            "%s::HostStatus, %s, %s::text[], CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            "%s::HostStatus, %s, %s::text[], %s::jsonb, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
         )
 
         # Transaction 1: parent upsert only, so the hot HostHeartbeats rows are locked briefly.
@@ -1778,6 +1784,58 @@ class DBManager(metaclass=Singleton):
             "unsupported_hosts": [],
             "error_message": None
         }
+
+    def list_reported_nsys_sessions(
+        self,
+        service_names: Optional[List[str]] = None,
+        hostnames: Optional[List[str]] = None,
+        namespaces: Optional[List[str]] = None,
+        service_contains: Optional[str] = None,
+        hostname_contains: Optional[str] = None,
+        namespace_contains: Optional[str] = None,
+        pod_contains: Optional[str] = None,
+        ip_contains: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Fresh hosts that have reported at least one nsys session.
+
+        Exact lists come from checked inventory rows. The ``*_contains`` arguments
+        mirror the profiling page's filter box (substring, case-insensitive) and
+        are used when nothing is checked.
+        """
+        query = f"""
+        SELECT hostname, service_name, nsys_sessions
+        FROM HostHeartbeats
+        WHERE heartbeat_timestamp >= NOW() - INTERVAL '{WORKLOAD_FRESH_INTERVAL}'
+          AND nsys_sessions IS NOT NULL
+          AND nsys_sessions <> '[]'::jsonb
+        """
+        values: Dict[str, Any] = {}
+        if service_names:
+            query += " AND service_name = ANY(%(service_names)s)"
+            values["service_names"] = service_names
+        if hostnames:
+            query += " AND hostname = ANY(%(hostnames)s)"
+            values["hostnames"] = hostnames
+        if namespaces:
+            query += " AND namespace = ANY(%(namespaces)s)"
+            values["namespaces"] = namespaces
+
+        def add_contains(column: str, raw: Optional[str], key: str) -> None:
+            nonlocal query
+            if not raw:
+                return
+            escaped = raw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            query += f" AND {column} ILIKE %({key})s ESCAPE '\\'"
+            values[key] = f"%{escaped}%"
+
+        add_contains("service_name", service_contains, "service_contains")
+        add_contains("hostname", hostname_contains, "hostname_contains")
+        add_contains("namespace", namespace_contains, "namespace_contains")
+        add_contains("pod_name", pod_contains, "pod_contains")
+        add_contains("ip_address::text", ip_contains, "ip_contains")
+        query += " ORDER BY hostname"
+        rows = self.db.execute(query, values, one_value=False, return_dict=True, fetch_all=True)
+        return rows or []
 
     def get_actively_profiling_hosts_count(self, service_name: Optional[str] = None, host_exclusion_list: Optional[List[str]] = None, host_inclusion_list: Optional[List[str]] = None) -> int:
         """

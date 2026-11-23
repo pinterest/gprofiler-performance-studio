@@ -18,6 +18,7 @@ import { describe, it } from 'node:test';
 
 import {
     HOST_LEVEL_SCOPES,
+    buildNsysSessionQuery,
     buildProfilingRequests,
     buildTargetEntity,
     groupRowsByService,
@@ -248,6 +249,45 @@ describe('buildProfilingRequests — nsys timeline flags', () => {
         assert.equal(onRequests[0].additional_args.nsys_upload_rep, true);
     });
 
+    it('passes the selected nsys session and does not launch a workload', () => {
+        const { requests } = buildProfilingRequests('start', [makeRow()], {
+            ...baseConfig,
+            enableNsys: true,
+            nsysSession: 'cuda-burn-2',
+        });
+        assert.equal(requests[0].additional_args.nsys_session, 'cuda-burn-2');
+        assert.equal(requests[0].additional_args.nsys_capture_mode, 'launch');
+        assert.equal(requests[0].additional_args.nsys_workload, undefined);
+    });
+
+    it('omits nsys_session when GPU capture is off or nothing is selected', () => {
+        const off = buildProfilingRequests('start', [makeRow()], {
+            ...baseConfig,
+            enableNsys: false,
+            nsysSession: 'cuda-burn-2',
+        });
+        assert.equal(off.requests[0].additional_args.nsys_session, undefined);
+
+        const empty = buildProfilingRequests('start', [makeRow()], {
+            ...baseConfig,
+            enableNsys: true,
+            nsysSession: '',
+        });
+        assert.equal(empty.requests[0].additional_args.nsys_session, undefined);
+    });
+
+    it('GPU capture does not launch a workload', () => {
+        const { requests } = buildProfilingRequests('start', [makeRow()], {
+            ...baseConfig,
+            enableNsys: true,
+            enableNsysUploadRep: true,
+        });
+        assert.equal(requests[0].profiling_mode, 'cpu');
+        assert.equal(requests[0].additional_args.nsys_capture_mode, 'launch');
+        assert.equal(requests[0].additional_args.nsys_workload, undefined);
+        assert.equal(requests[0].additional_args.nsys_upload_rep, true);
+    });
+
     it('gates stacks on the timeline itself being enabled', () => {
         const { requests } = buildProfilingRequests('start', [makeRow()], {
             ...baseConfig,
@@ -352,6 +392,7 @@ describe('buildProfilingRequests — scope matrix (start)', () => {
             nsys_timeline: false,
             nsys_timeline_stacks: false,
             nsys_upload_rep: false,
+            nsys_capture_mode: 'launch',
             profiler_configs: profilerConfigs,
             max_processes: 25,
         });
@@ -368,5 +409,50 @@ describe('buildProfilingRequests — scope matrix (start)', () => {
         // Builder leaves mode to the operator (UI recommends Adhoc via tooltip only).
         assert.equal(requests[0].continuous, true);
         assert.equal(requests[0].duration, 60);
+    });
+});
+
+describe('buildNsysSessionQuery', () => {
+    it('uses the selected service, not the representative host on a service row', () => {
+        const params = buildNsysSessionQuery('service', [makeRow({ service: 'svc-a', host: 'host-a' })]);
+        assert.equal(params.get('service_name'), 'svc-a');
+        assert.equal(params.get('hostname'), null);
+    });
+
+    it('uses service and namespace for a namespace selection', () => {
+        const params = buildNsysSessionQuery('namespace', [
+            makeRow({ service: 'svc-a', namespace: 'ns-a', host: 'host-a' }),
+        ]);
+        assert.equal(params.get('service_name'), 'svc-a');
+        assert.equal(params.get('namespace'), 'ns-a');
+        assert.equal(params.get('hostname'), null);
+    });
+
+    it('uses the host for host, pod, container, and process selections', () => {
+        for (const scope of ['host', 'pod', 'container', 'process']) {
+            const params = buildNsysSessionQuery(scope, [makeRow({ host: 'host-a', service: 'svc-a' })]);
+            assert.equal(params.get('hostname'), 'host-a', scope);
+            assert.equal(params.get('service_name'), null, scope);
+        }
+    });
+
+    it('follows the filter parameters when nothing is checked', () => {
+        const params = buildNsysSessionQuery('service', [], {
+            service: 'gpu',
+            hostname: 'dev',
+            namespace: 'obs',
+            podName: 'burn',
+            ip: '10.0',
+        });
+        assert.equal(params.get('service_contains'), 'gpu');
+        assert.equal(params.get('hostname_contains'), 'dev');
+        assert.equal(params.get('namespace_contains'), 'obs');
+        assert.equal(params.get('pod_contains'), 'burn');
+        assert.equal(params.get('ip_contains'), '10.0');
+    });
+
+    it('lists every session when nothing is selected and no filters are set', () => {
+        const params = buildNsysSessionQuery('host', [], {});
+        assert.equal(params.toString(), '');
     });
 });
