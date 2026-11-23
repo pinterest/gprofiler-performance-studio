@@ -1,0 +1,6 @@
+# Built artifacts (do not commit)
+cuda_burn
+*.nsys-rep
+*.sqlite
+*.csv
+*.qdstrm
