@@ -15,13 +15,14 @@
     "root_prefix": "timing/"
   },
   "profile_source": {
-    "_comment": "first set wins: $url_env, url, then a random host from $hosts_file_env or hosts_file (port overrides)",
+    "_comment": "first set wins: $url_env, url, then a random host from $hosts_file_env or hosts_file (port overrides); workers = concurrent profile fetches per report",
     "url_env": "TRACE_REPORTS_PROFILE_API_URL",
     "url": "http://localhost:8080",
     "hosts_file_env": "TRACE_REPORTS_PROFILE_HOSTS_FILE",
     "hosts_file": "/etc/webapp_hosts",
     "port": 8080,
-    "timeout_seconds": 120
+    "timeout_seconds": 120,
+    "workers": 4
   },
   "studio_url": "https://gprofiler.example.com",
   "frames": {
