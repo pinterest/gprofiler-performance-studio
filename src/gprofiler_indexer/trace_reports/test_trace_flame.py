@@ -67,10 +67,13 @@ PROFILE = {
 
 
 class FakeES:
+    def __init__(self, spans=SPANS):
+        self.spans = spans
+
     def trace(self, trace_id, date):
         if trace_id != "abc123":
             raise LookupError(trace_id)
-        return [dict(s) for s in SPANS]
+        return [dict(s) for s in self.spans]
 
 
 class SearchES(tf.ZipkinES):
@@ -97,12 +100,13 @@ class SearchES(tf.ZipkinES):
 
 
 class FakeStudio:
-    def __init__(self):
+    def __init__(self, with_data=("items-prod",)):
         self.calls = []
+        self.with_data = with_data
 
     def flamegraph(self, service, s, e):
         self.calls.append(service)
-        return PROFILE if service == "items-prod" else None
+        return PROFILE if service in self.with_data else None
 
 
 class TraceFlameTest(unittest.TestCase):
@@ -140,6 +144,39 @@ class TraceFlameTest(unittest.TestCase):
         self.assertNotIn(EVIL, page)
         self.assertEqual(len(re.findall(r"</script>", page, re.I)), len(re.findall(r"<script\b", page, re.I)))
         self.assertIn("ItemStore", page)
+
+    def test_every_profiled_cluster_gets_its_profile_and_shared_services_name_their_cluster(self):
+        # Eight profiled clusters, two of them serving the same "items" service; items-b has no samples
+        # and falls back to its sibling. Under a top-6 cut, s6 and s7 would get no profile.
+        clusters = [("items", "items-a"), ("items", "items-b")] + [(f"s{i}", f"s{i}-prod") for i in range(2, 8)]
+        spans = [span("a", None, "SERVER", "frontend", "/api", 0, 200, server_host_type="frontend-prod")]
+        for i, (svc, cl) in enumerate(clusters):
+            sid = f"c{i}"
+            spans += [
+                span(sid, "a", "CLIENT", "frontend", "getitems", 10 + 20 * i, 19 - i),
+                span(sid, "a", "SERVER", svc, "getitems", 11 + 20 * i, 17 - i, server_host_type=cl),
+            ]
+        profiled = [cl for _, cl in clusters]
+        with_data = [cl for cl in profiled if cl != "items-b"]
+        out = os.path.join(self.tmp.name, "r.html")
+        args = self.ap.parse_args(["--config", self.config, "--trace-id", "abc123", "--out", out, "--quiet"])
+        src = FakeStudio(with_data)
+        meta = tf.render(self.cfg, FakeES(spans), src, profiled, args)
+
+        self.assertEqual(meta["embedded_profiles"], sorted(with_data))
+        self.assertEqual(sorted(src.calls), sorted(profiled))  # items-a fetched once for both items clusters
+        with open(out) as f:
+            page = f.read()
+        cl_js = json.loads(re.search(r"const CL = (.*?);", page).group(1))
+        self.assertEqual((cl_js["items-b"]["proxy"], cl_js["items-b"]["no_samples"]), ("items-a", True))
+
+        def shown(d):
+            yield d.get("n", d["name"])
+            for k in d["children"]:
+                yield from shown(k)
+
+        flame = json.loads(re.search(r"const data = (.*);", page).group(1))
+        self.assertTrue({"items [a]: getitems", "items [b]: getitems", "s7: getitems"} <= set(shown(flame)))
 
     def test_batch_writes_manifest_and_isolates_failures(self):
         out_dir = os.path.join(self.tmp.name, "out")

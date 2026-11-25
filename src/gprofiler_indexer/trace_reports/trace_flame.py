@@ -54,6 +54,7 @@ import sys
 import urllib.error
 import urllib.request
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlencode
 
@@ -107,6 +108,7 @@ class Config:
             or hosts_file_url(hosts_file, ps.get("port"))
         ).rstrip("/")
         self.profile_timeout_s: int = int(ps.get("timeout_seconds", 120))
+        self.profile_workers: int = max(1, int(ps.get("workers", 4)))  # concurrent profile fetches per report
         self.studio_url: str = c["studio_url"].rstrip("/")
         self.reports: List[Dict[str, Any]] = c.get("reports", [])
         fr = c.get("frames", {})
@@ -980,8 +982,24 @@ def owning_cluster(n: Node, parents: Dict[int, Node]) -> Optional[str]:
 # --------------------------------------------------------------------------- flame graph JSON
 
 
-def to_flame(n: Node, info: Dict[str, Dict[str, Any]], parents: Dict[int, Node], cfg: Config) -> Dict[str, Any]:
-    kids = sorted((to_flame(c, info, parents, cfg) for c in n.children), key=lambda k: -k["total"])
+def cluster_labels(nodes: List[Node]) -> Dict[int, str]:
+    """Bar text naming the serving cluster, for services that served from more than one cluster in
+    this trace: their same-named spans join to different profiles. The clusters' shared leading
+    dash-separated words are dropped (galaxysignalservice-core-tier1 -> core-tier1)."""
+    clusters: Dict[str, Set[str]] = defaultdict(set)
+    for n in nodes:
+        if n.cluster:
+            clusters[n.service].add(n.cluster)
+    cut = {svc: os.path.commonprefix(sorted(cls)).rfind("-") + 1 for svc, cls in clusters.items() if len(cls) > 1}
+    return {
+        id(n): f"{n.service} [{n.cluster[cut[n.service]:]}]: {n.name}" for n in nodes if n.service in cut and n.cluster
+    }
+
+
+def to_flame(
+    n: Node, info: Dict[str, Dict[str, Any]], parents: Dict[int, Node], cfg: Config, names: Dict[int, str]
+) -> Dict[str, Any]:
+    kids = sorted((to_flame(c, info, parents, cfg, names) for c in n.children), key=lambda k: -k["total"])
     # value = SELF time, so widths are additive and a frame's width is its subtree's total work.
     d: Dict[str, Any] = {
         "name": n.label(),
@@ -994,6 +1012,8 @@ def to_flame(n: Node, info: Dict[str, Dict[str, Any]], parents: Dict[int, Node],
         "self_ms": round(n.self_us / 1000, 2),
         "start": iso(us_to_dt(n.start)) if n.start else "",
     }
+    if id(n) in names:
+        d["n"] = names[id(n)]  # d3-flamegraph draws `n` over `name`; search and findings keep matching `name`
     if n.kind == "LOCAL":
         del d["kind"]
     if d["self_ms"] == d["ms"]:
@@ -1145,9 +1165,9 @@ let totalWork = 0; (function sum(n){ totalWork += n.value; (n.children||[]).forE
 const fg = flamegraph().width(Math.max(document.getElementById('chart').clientWidth-16, 900)).cellHeight(17)
   .inverted(true).sort(false).selfValue(true).minFrameSize(1).transitionDuration(250)
   .setColorMapper((d, orig) => d.highlight ? '#e6c200' : palette(d.data.svc))
-  .label(d => `${d.data.name} — total work ${(d.value/1000).toFixed(1)} ms (${(100*d.value/totalWork).toFixed(2)}%%), wall ${d.data.ms} ms, self ${d.data.self_ms ?? d.data.ms} ms`)
+  .label(d => `${d.data.n || d.data.name} — total work ${(d.value/1000).toFixed(1)} ms (${(100*d.value/totalWork).toFixed(2)}%%), wall ${d.data.ms} ms, self ${d.data.self_ms ?? d.data.ms} ms`)
   .setSearchMatch((d, term) => { if (term.startsWith('cluster=')) return d.data.cluster === term.slice(8);
-                                 try { return new RegExp(term,'i').test(d.data.name); } catch(e){ return false; } })
+                                 try { const rx = new RegExp(term,'i'); return rx.test(d.data.name) || (!!d.data.n && rx.test(d.data.n)); } catch(e){ return false; } })
   .onClick(d => show(d.data, d.value));
 d3.select('#chart').datum(data).call(fg);
 window.addEventListener('load', () => { const ci = data.cluster && CL[data.cluster]; if (ci && prof[ci.proxy||data.cluster]) renderProfile(ci.proxy||data.cluster, null, null); });
@@ -1216,7 +1236,7 @@ function show(d, total){
   const ci = d.cluster ? (CL[d.cluster] || {}) : {};
   d = Object.assign({}, d, {profiled: ci.profiled, proxy: ci.proxy, self_ms: d.self_ms ?? d.ms, kind: d.kind || 'LOCAL',
                             link: ci.window ? studioLink(ci.proxy || d.cluster, ci.window, d.search || null) : null});
-  let h = `<h3>${esc(d.name)}</h3><div>kind <b>${esc(d.kind)}</b> · wall <b>${d.ms} ms</b>${d.clipped_ms!==undefined?` <span class="muted">(${d.clipped_ms} ms inside parent)</span>`:''} · self <b>${d.self_ms} ms</b> · subtree work <b>${(total/1000).toFixed(0)} ms</b> (${(100*total/totalWork).toFixed(1)}%% of trace work) · start ${esc(d.start)}</div>`;
+  let h = `<h3>${esc(d.n || d.name)}</h3><div>kind <b>${esc(d.kind)}</b> · wall <b>${d.ms} ms</b>${d.clipped_ms!==undefined?` <span class="muted">(${d.clipped_ms} ms inside parent)</span>`:''} · self <b>${d.self_ms} ms</b> · subtree work <b>${(total/1000).toFixed(0)} ms</b> (${(100*total/totalWork).toFixed(1)}%% of trace work) · start ${esc(d.start)}</div>`;
   if (d.group_n) h += `<div class="muted">${d.group_n} parallel client spans of the same name folded into one bar; value = time at least one was in flight.</div>`;
   if (d.folded) h += `<div class="muted">${d.folded} tiny child spans folded into this bar's self time (below --span-min-pct of the root's work).</div>`;
   if (d.skew_ms) h += `<div class="muted">clock skew: this span's subtree shifted by ${d.skew_ms} ms to fit inside its caller (Zipkin rule).</div>`;
@@ -1475,10 +1495,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--embed-hotspots",
         type=int,
-        default=6,
+        default=None,
         metavar="K",
-        help="embed profiles for the top K clusters by exclusive time (clusters with node-span "
-        "classes are always included; 0 = links only)",
+        help="embed profiles for only the top K clusters by exclusive time (default: every cluster "
+        "with a profile or proxy; clusters with node-span classes are always included; 0 = links only)",
     )
     ap.add_argument(
         "--span-min-pct",
@@ -1622,59 +1642,74 @@ def render(
         }
 
     prof: Dict[str, Any] = {}
-    if src and args.embed_hotspots:
-
-        def fetch_into(target: str, s: dt.datetime, e: dt.datetime, classes: Set[str], op_keys: Set[str]) -> bool:
-            """Fetch target's profile for the window into prof[target]; True if it has samples."""
-            if target in prof:
-                return prof[target].get("outcome") == "ok"
-            print(
-                f"  profile: {target} {iso(s)}..{iso(e)} (join {len(classes)} span classes, {len(op_keys)} op names)",
-                file=sys.stderr,
-            )
-            try:
-                outcome, tree, note = fetch_profile(src, target, s, e)
-                if tree is not None:
-                    prof[target] = {
-                        "outcome": "ok",
-                        "note": note,
-                        "cluster": target,
-                        "window": [iso(s), iso(e)],
-                        "link": deep_link(cfg, target, s, e),
-                        "min_pct": args.profile_min_pct,
-                        "tree": prune_tree(tree, args.profile_min_pct / 100),
-                        **profile_summary(tree, cfg, classes, op_keys),
-                    }
-                    return True
-                prof[target] = {"outcome": outcome, "detail": note}
-            except Exception as ex:  # noqa: BLE001
-                prof[target] = {"outcome": "error", "detail": str(ex)[:200]}
-            return False
-
-        # Clusters with class-named spans are what the symbol join is for: always try them.
+    if src and args.embed_hotspots != 0:
+        # Clusters with class-named spans are what the symbol join is for: always try them. By default
+        # every cluster is tried: under a cut, same-named spans of one service served by two clusters
+        # show a profile or not depending on which cluster ranked inside it.
         order = sorted(ranked, key=lambda a: (0 if a["classes"] else 1, ranked.index(a)))
-        done = 0
-        for a in order:
-            if done >= args.embed_hotspots and not a["classes"]:
-                break
-            c = info[a["cluster"]]
-            s, e = c["window"]
+        if args.embed_hotspots is not None:
+            order = order[: max(args.embed_hotspots, sum(1 for a in order if a["classes"]))]
+
+        def candidates(cl: str) -> List[str]:
+            c = info[cl]
             # Being in the profiled list only means an agent is registered; a cluster can have no
             # samples in the window (agent registered but not shipping). Fall through to a proxy.
-            cands = ([a["cluster"]] if c["profiled"] else []) + ([c["proxy"]] if c["proxy"] else [])
+            cands = ([cl] if c["profiled"] else []) + ([c["proxy"]] if c["proxy"] else [])
             if c["profiled"] and not c["proxy"]:
-                alt = proxy_cluster(cfg, a["cluster"], [p for p in profiled if p != a["cluster"]])
+                alt = proxy_cluster(cfg, cl, [p for p in profiled if p != cl])
                 if alt:
                     cands.append(alt)
-            for t in cands:
-                if fetch_into(t, s, e, info_classes(info, t) | c["classes"], info_ops(info, t) | c["op_keys"]):
-                    if t != a["cluster"]:
-                        if c["profiled"]:
-                            c["no_samples"] = True  # listed as profiled, but empty in this window
-                        c["proxy"] = t
-                        c["link"] = deep_link(cfg, t, s, e)
-                    done += 1
-                    break
+            return cands
+
+        def fetch(target: str, s: dt.datetime, e: dt.datetime) -> Tuple[str, Optional[Dict[str, Any]], Optional[str]]:
+            try:
+                return fetch_profile(src, target, s, e)
+            except Exception as ex:  # noqa: BLE001
+                return "error", None, str(ex)[:200]
+
+        pending = {a["cluster"]: cs for a in order if (cs := candidates(a["cluster"]))}
+        fetched: Dict[str, Tuple[str, Optional[Dict[str, Any]], Optional[str], Tuple[dt.datetime, dt.datetime]]] = {}
+        resolved: Dict[str, str] = {}
+        with ThreadPoolExecutor(max_workers=cfg.profile_workers) as pool:
+            while pending:
+                # Each round fetches every unresolved cluster's next candidate; a target shared by
+                # several clusters is fetched once, over the window of the highest-ranked of them.
+                want: Dict[str, Tuple[dt.datetime, dt.datetime]] = {}
+                for cl, cs in pending.items():
+                    if cs[0] not in fetched:
+                        want.setdefault(cs[0], info[cl]["window"])
+                for t, (s, e) in want.items():
+                    print(f"  profile: {t} {iso(s)}..{iso(e)}", file=sys.stderr)
+                for t, w, r in pool.map(lambda tw: (tw[0], tw[1], fetch(tw[0], *tw[1])), want.items()):
+                    fetched[t] = (*r, w)
+                nxt = {}
+                for cl, cs in pending.items():
+                    if fetched[cs[0]][0] == "ok":
+                        resolved[cl] = cs[0]
+                    elif len(cs) > 1:
+                        nxt[cl] = cs[1:]
+                pending = nxt
+        for cl, t in resolved.items():
+            if t != cl:
+                c = info[cl]
+                if c["profiled"]:
+                    c["no_samples"] = True  # listed as profiled, but empty in this window
+                c["proxy"] = t
+                c["link"] = deep_link(cfg, t, *c["window"])
+        for t, (outcome, tree, note, (s, e)) in fetched.items():
+            if tree is None:
+                prof[t] = {"outcome": outcome, "detail": note}
+                continue
+            prof[t] = {
+                "outcome": "ok",
+                "note": note,
+                "cluster": t,
+                "window": [iso(s), iso(e)],
+                "link": deep_link(cfg, t, s, e),
+                "min_pct": args.profile_min_pct,
+                "tree": prune_tree(tree, args.profile_min_pct / 100),
+                **profile_summary(tree, cfg, info_classes(info, t), info_ops(info, t)),
+            }
 
     flame_root = root
     if focus:
@@ -1684,7 +1719,7 @@ def render(
             raise LookupError(f"--focus {focus!r} matched no span")
         flame_root = max(hits, key=lambda n: n.dur)
 
-    flame = to_flame(flame_root, info, parents, cfg)
+    flame = to_flame(flame_root, info, parents, cfg, cluster_labels(nodes))
     if args.span_min_pct > 0:
         folded = prune_flame(flame, flame["total"] * args.span_min_pct / 100)
         if folded:
